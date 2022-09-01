@@ -129,7 +129,7 @@ dmypy.json
 /scripts/inlets*
 /notebooks/MODEL_*
 /notebooks/inlets*
-/notebooks/plots/
+/notebooks/plots*
 
 
 
