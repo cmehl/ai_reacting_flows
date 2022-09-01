@@ -1,0 +1,749 @@
+#%%
+import os
+from re import S
+from sqlite3 import enable_callback_tracebacks
+import sys
+
+import matplotlib.pyplot as plt
+
+import shelve
+import shutil
+
+import numpy as np
+import pandas as pd
+import seaborn as sns
+sns.set_style("dark")
+
+from sklearn.preprocessing import StandardScaler
+
+import joblib
+
+import tensorflow as tf
+import tensorflow.keras.backend as K
+from tensorflow.keras import models
+from tensorflow.keras import layers
+from tensorflow.keras import optimizers
+from tensorflow.keras import losses
+from tensorflow.keras import metrics
+#from tensorflow.keras import callbacks
+from tensorflow.keras import regularizers
+from tensorflow.keras import initializers
+from tensorflow.keras.utils import plot_model
+
+from ai_reacting_flows.ann_model_generation.tensorflow_custom import sum_species_metric
+from ai_reacting_flows.ann_model_generation.tensorflow_custom import AtomicConservation
+from ai_reacting_flows.ann_model_generation.tensorflow_custom import AtomicConservation_RR
+from ai_reacting_flows.ann_model_generation.tensorflow_custom import AtomicConservation_RR_lsq
+from ai_reacting_flows.ann_model_generation.tensorflow_custom import GetN2Layer, ZerosLayer, GetLeftPartLayer, GetRightPartLayer
+
+import ai_reacting_flows.tools.utilities as utils
+
+import cantera as ct
+
+# Using float64
+tf.keras.backend.set_floatx('float64')
+
+
+class MLPModel(object):
+
+    def __init__(self, training_parameters):
+        
+        # Model folder name
+        self.model_name = "MODEL_" + training_parameters["model_name_suffix"]
+        
+        # Dataset folder name
+        self.dataset_path = training_parameters["dataset_path"]
+        
+        # Simulation time-step
+        self.dt_simu = training_parameters["dt_simu"]
+
+        # Fuel
+        self.fuel = training_parameters["fuel"]
+        self.mechanism = training_parameters["mechanism"]
+
+        # Remove N2
+        self.remove_N2 = training_parameters["remove_N2"]
+
+        # Network shapes
+        self.nb_units_in_layers_list = training_parameters["nb_units_in_layers_list"]
+        self.layers_activation_list = training_parameters["layers_activation_list"]
+    
+        # Optimization parameters
+        self.batch_size = training_parameters["batch_size"]
+        self.initial_learning_rate = training_parameters["initial_learning_rate"]
+        # Parameters of the exponential decay schedule ( learning rate decay)
+        self.decay_steps = training_parameters["decay_steps"]
+        self.decay_rate = training_parameters["decay_rate"]
+        self.staircase = training_parameters["staircase"]
+
+        # L2 regularization coefficient
+        self.alpha_reg = training_parameters["alpha_reg"] 
+        
+        # epochs number
+        self.epochs_list = training_parameters["epochs_list"]
+
+        # Enforcing hard contraints
+        # 0: no hard constraints; 1: atomic masses
+        self.hard_constraints_model = training_parameters["hard_constraints_model"]
+
+        # Box-Cox parameter (set by default to 0.1)
+        self.lambda_bct = 0.1
+
+
+        # Load databased-linked parameter using shelve file
+        shelfFile = shelve.open(self.dataset_path + "/dtb_params")
+        self.threshold = shelfFile["threshold"]
+        self.log_transform = shelfFile["log_transform"]
+        self.output_omegas = shelfFile["output_omegas"]
+        self.clustering_type = shelfFile["clusterization_method"]
+        shelfFile.close()
+
+
+        # Get the number of clusters
+        self.nb_clusters = len(next(os.walk(self.dataset_path))[1])
+        print(f">> Number of clusters is: {self.nb_clusters}")
+
+        # Model's path
+        self.directory = "./" + self.model_name
+        
+        if os.path.exists(self.directory):
+            shutil.rmtree(self.directory, ignore_errors=True)
+        # Create folder
+        os.makedirs(self.directory)
+        
+        # Create __init__.py for later use of python files
+        with open(self.directory + "/__init__.py", 'w'): pass
+
+        # Training stats
+        shutil.rmtree(self.directory + "/training", ignore_errors=True)
+        os.mkdir(self.directory + "/training")
+        os.mkdir(self.directory + "/training/training_curves")
+        os.mkdir(self.directory + "/evaluation" )
+
+        # Adding copies of clustering parameters for later use in inference
+        if self.clustering_type=="progvar":
+            shutil.copy(self.dataset_path + "/c_bounds.pkl", self.directory)
+        elif self.clustering_type=="kmeans":
+            shutil.copy(self.dataset_path + "/kmeans_model.pkl", self.directory)
+            shutil.copy(self.dataset_path + "/Xscaler_kmeans.pkl", self.directory)
+
+
+        # Saving parameters using shelve file for later use in testing
+        shelfFile = shelve.open(self.directory + f'/model_params')
+        #
+        shelfFile["threshold"] = self.threshold
+        shelfFile["log_transform"] = self.log_transform
+        shelfFile["output_omegas"] = self.output_omegas
+        shelfFile["hard_constraints_model"] = self.hard_constraints_model
+        shelfFile["remove_N2"] = self.remove_N2
+        #
+        shelfFile.close()
+    
+
+    def get_data(self, i_cluster):
+        
+        X_train = pd.read_csv(filepath_or_buffer= self.dataset_path + f"/cluster{i_cluster}/X_train.csv")
+        Y_train = pd.read_csv(filepath_or_buffer= self.dataset_path + f"/cluster{i_cluster}/Y_train.csv")
+            
+        X_val = pd.read_csv(filepath_or_buffer= self.dataset_path + f"/cluster{i_cluster}/X_val.csv")
+        Y_val = pd.read_csv(filepath_or_buffer= self.dataset_path + f"/cluster{i_cluster}/Y_val.csv")
+
+        return X_train, X_val, Y_train, Y_val
+
+
+    def train_models(self):
+
+        # Using mechanism set as input to get species name and number of species
+        # /!\ We assume that this is consistent with database /!\
+        gas = ct.Solution(self.mechanism)
+        spec_names = gas.species_names
+        nb_spec = gas.n_species
+
+        # In the case where we want to completely remove N2 from inputs and outputs
+        if self.remove_N2:
+            spec_names.remove("N2")
+            nb_spec = nb_spec - 1
+
+        else:
+            # N2 index
+            self._n2_index = spec_names.index("N2")
+
+            # Number of species on left and right of N2 in list
+            self._left_n2 = len(spec_names[:self._n2_index])
+            self._right_n2 = len(spec_names[self._n2_index+1:])
+
+
+        if self.hard_constraints_model>0:
+            self.build_conservation_matrix()
+ 
+        # Attributes to be saved in object
+        self.models_list = []
+
+        # ===================================================================================================================
+        #                                             LOOP ON CLUSTERS TO BUILD MODELS
+        # ===================================================================================================================
+        for i_cluster in range(self.nb_clusters):
+
+            print(50*"-")
+            print(50*"-")
+            print(f"                BUILDING MODEL FOR CLUSTER {i_cluster}")
+            print(50*"-")
+            print(50*"-"+"\n")
+
+            # ===============================================================================================================
+            #                                             CLUSTER SPECIFIC PARAMETERS
+            # ===============================================================================================================
+            
+            # Network shapes
+            nb_units_in_layers = self.nb_units_in_layers_list[i_cluster]
+            layers_activation = self.layers_activation_list[i_cluster]
+            
+            # Number of epochs
+            epochs = self.epochs_list[i_cluster]
+            
+
+            # ===============================================================================================================
+            #                                             GETTING DATA
+            # ===============================================================================================================
+
+            # Getting data
+            X_train, X_val, Y_train, Y_val = self.get_data(i_cluster)
+
+            if self.remove_N2:
+                X_train = X_train.drop("N2_X", axis=1)
+                X_val = X_val.drop("N2_X", axis=1)
+                Y_train = Y_train.drop("N2_Y", axis=1)
+                Y_val = Y_val.drop("N2_Y", axis=1)
+            
+            Y_cols = Y_train.columns
+            X_cols = X_train.columns
+
+            
+            # Verifying species names conformity
+            nb_spec = len(Y_cols)
+            spec_names_dtb = []
+            for k in range(nb_spec):
+                spec_names_dtb.append(Y_cols[k].split('_')[0])
+
+            try:
+                spec_names==spec_names_dtb
+            except:
+                sys.exit("Error: mechanism species names do not correspond to species in database !")
+                
+            
+            # Define model's targets
+            targets = spec_names.copy()
+            
+            print(f" >> Number of training samples: {X_train.shape[0]}")    
+            print(f" >> Number of validation samples: {X_val.shape[0]} \n")       
+            
+            # ================================================================================================================
+            #                                         NORMALIZING INPUT/OUTPUT
+            # ===============================================================================================================
+
+            # QUESTION: SHOULD WE USE SAME SCALER FOR Y THAN FOR X ?  -> TO TEST
+
+            # NORMALIZING X
+            Xscaler = StandardScaler()
+            # Fit scaler
+            Xscaler.fit(X_train)
+            # Transform data (remark: automatically transform to numpy array)
+            X_train = Xscaler.transform(X_train)
+            
+            X_val = Xscaler.transform(X_val)
+            # X Scaling parameters 
+            self._param1_X, self._param2_X = self.get_scaler_params(Xscaler)
+
+            
+            # NORMALIZING Y
+            # Choose scaler
+            Yscaler = StandardScaler()
+
+            # Fit scaler
+            Yscaler.fit(Y_train)
+        
+            # Transform data (remark: automatically transform to numpy array)
+            Y_train = Yscaler.transform(Y_train)
+            Y_val = Yscaler.transform(Y_val)
+                    
+            #TODO: CHECK THAT THIS IS DONE IN DATABASE GENERATION
+            # Is this necessary ??
+            # if self.output_omegas==True and self.log_transform==True:
+            #     Y_train[:,spec_names.index("N2")] = 0.0
+            #     Y_val[:,spec_names.index("N2")] = 0.0
+
+            
+            # Y Scaling parameters
+            self._param1_Y, self._param2_Y = self.get_scaler_params(Yscaler)
+            
+                
+            # Converting numpy arrays into keras tensors for use in custom losses & metrics
+            param1_Y_tensor = K.variable(self._param1_Y, dtype="float64")
+            param2_Y_tensor = K.variable(self._param2_Y, dtype="float64")
+            
+            # Saving scalers
+            joblib.dump(Xscaler, self.directory + f'/Xscaler_cluster{i_cluster}.pkl')
+            joblib.dump(Yscaler, self.directory + f'/Yscaler_cluster{i_cluster}.pkl')
+                
+            # Saving mean and variance in matrix form to be read by CONVERGE
+            np.savetxt(self.directory + f'/norm_param_X_cluster{i_cluster}.dat', np.vstack([Xscaler.mean_, Xscaler.var_]).T)
+            np.savetxt(self.directory + f'/norm_param_Y_cluster{i_cluster}.dat', np.vstack([Yscaler.mean_, Yscaler.var_]).T)
+            
+
+
+            # If reaction rates as outputs, we have to deal with non reacting species
+            # To do that, we define other parameyers for unscaling (to avoid "(0-0)/0")
+            if self.output_omegas==True:
+                self._param2_Y_scale = np.copy(self._param2_Y)
+                for i in range(self._param2_Y.shape[0]):
+                    
+                    if self._param2_Y[i]==0.0:
+                        self._param2_Y_scale[i] = np.infty
+        
+
+            # =================================================================================================================
+            #                                               ANN LEARNING
+            # =================================================================================================================
+            
+            print(50*"-")
+            print("                MODEL TRAINING")
+            print(50*"-"+"\n")
+            
+            
+            # Using float64
+            tf.keras.backend.set_floatx('float64')
+        
+            # Model generation
+            if self.remove_N2:
+                model = self.generate_nn_model_no_N2(X_train.shape[1], Y_train.shape[1], nb_units_in_layers, layers_activation)
+            else:
+                model = self.generate_nn_model_N2_cte(X_train.shape[1], Y_train.shape[1], nb_units_in_layers, layers_activation)
+                    
+
+            #========================================== defining the optimizer ======================================
+            #======================================================================================================== 
+            
+            # Build the learning rate schedule 
+            lr_schedule = optimizers.schedules.ExponentialDecay(
+                                        initial_learning_rate=self.initial_learning_rate,
+                                        decay_steps=self.decay_steps,
+                                        decay_rate=self.decay_rate,
+                                        staircase=self.staircase)
+        
+            # Build the optimizer
+            optimizer = optimizers.Adam()
+    
+            # empty list for keras callbacks
+            callbacks_list=[] 
+            
+            callbacks_list.append([tf.keras.callbacks.LearningRateScheduler(lr_schedule, verbose=1)])
+
+            
+            # Metrics
+            metrics_list=[metrics.mape,metrics.mae,metrics.mse]
+            metrics_list.append(sum_species_metric(param1_Y_tensor, param2_Y_tensor, self.log_transform))            
+            
+            # define the loss function   
+            loss=losses.mean_squared_error
+            # loss=losses.mean_absolute_error
+                
+                
+                
+            # compile the model
+            model.compile(optimizer=optimizer,
+                        loss=loss,
+                        metrics=metrics_list)
+                
+            # fit the model
+            with tf.device('CPU:0'):
+                history = model.fit(X_train,
+                                Y_train,
+                                validation_data=(X_val,Y_val),
+                                epochs=epochs,
+                                batch_size=self.batch_size,
+                                validation_freq=1,
+                                callbacks=callbacks_list,
+                                verbose=1)
+            
+            
+            # Save the weights
+            model.save_weights(self.directory +  f'/model_weights_cluster{i_cluster}.h5')
+            
+            # Save the model architecture
+            with open(self.directory + f'/model_architecture_cluster{i_cluster}.json', 'w') as f:
+                f.write(model.to_json())
+                
+            # Also save the model in SavedModel format for use in Converge 
+            model.save(self.directory + f'/my_model_cluster{i_cluster}')
+            
+            # Saving a representation of the model
+            plot_model(model, to_file=self.directory+ f'/model_plot{i_cluster}.png', show_shapes=True, show_layer_names=True)
+
+
+            self.models_list.append(model)
+                
+            #%%
+            # =====================================================================================================================
+            #                                               PLOTTING
+            # ====================================================================================================================
+            
+            self.history_dict = history.history
+            
+            # defining the metrics to plot 
+            targets = spec_names.copy()
+            targets[targets=='Temperature']='T'
+            
+            targets.remove('T')
+            
+            conservation_metrics = ['sum_species']
+            
+            # ====================== plot loss curves ===========
+            
+            fig,ax=plt.subplots()
+            ax.set_yscale('log')
+            plt.xlabel('epoch')
+            plt.ylabel('loss')
+            plt.title(f"Cluster {i_cluster}", fontsize=15)
+            plt.plot(self.history_dict['loss'])
+            plt.plot(self.history_dict['val_loss'])
+            plt.legend(['train','validation'])
+            plt.savefig( self.directory + f"/training/training_curves/loss_cluster{i_cluster}.png") 
+            plt.show()
+            
+
+            #TODO: ONLY SUM_PECIES
+            for metric in conservation_metrics:
+                
+                fig,ax=plt.subplots()
+                ax.set_yscale('log')
+                
+                plt.xlabel('epoch')
+                plt.ylabel(metric)
+                plt.title(f"Cluster {i_cluster}", fontsize=15)
+                plt.plot(self.history_dict[metric])
+                plt.plot(self.history_dict['val_'+metric])
+                plt.legend(['train','validation'])
+                plt.savefig(self.directory  + "/training/training_curves/" + metric + f'_cluster{i_cluster}.png')        
+                plt.show()
+            
+            # =====================================================================================================================
+            #                                      ERROR ANALYSIS
+            # ====================================================================================================================
+            
+            # ============== save global model errors on train/validation datasets
+            
+            evaluation_metrics = [ metric for metric in self.history_dict.keys() if ('val' not in metric ) and (metric!='lr') ]
+            columns = ['dataset'] + evaluation_metrics
+            model_results = pd.DataFrame(index=range(3), columns=columns)
+            model_results.iloc[0] = ['train'] + model.evaluate(X_train,Y_train)
+            model_results.iloc[1] = ['valid'] + model.evaluate(X_val,Y_val)
+            
+            
+            model_results.to_csv( self.directory  + f"/evaluation/errors_cluster{i_cluster}.csv" ,sep=';',index=False)
+            
+            # save history 
+            pd.DataFrame(self.history_dict).to_csv(self.directory + f"/training/training_curves/history_cluster{i_cluster}.csv" ,sep=';',index=False)
+            
+            # ============== in depth error analysis
+            
+            # ----Validation data
+            if self.log_transform>0:
+                log_Y_val_pred = model.predict(X_val)
+                #
+                Y_val_unscaled = Yscaler.inverse_transform(Y_val)
+    
+                if self.output_omegas==True:
+                    Y_val_unscaled = -np.sign(Y_val_unscaled) * np.exp(-np.abs(Y_val_unscaled))
+                else:
+                    if self.log_transform_Y==1: # LOG
+                        Y_val_unscaled = np.exp(Y_val_unscaled)
+                    elif self.log_transform_Y==2: # BCT
+                        Y_val_unscaled = (self.lambda_bct*Y_val_unscaled+1.0)**(1./self.lambda_bct)
+                    
+                #
+                Y_val_pred_unscaled = Yscaler.inverse_transform(log_Y_val_pred)
+
+                
+                if self.output_omegas==True:
+                    Y_val_pred_unscaled = -np.sign(Y_val_pred_unscaled) * np.exp(-np.abs(Y_val_pred_unscaled))
+                else:
+                    if self.log_transform==1: # LOG
+                        Y_val_pred_unscaled = np.exp(Y_val_pred_unscaled)
+                    if self.log_transform==2: # BCT
+                        Y_val_pred_unscaled = (self.lambda_bct*Y_val_pred_unscaled+1.0)**(1./self.lambda_bct)
+                    
+            else:
+                Y_val_pred = model.predict(X_val)
+                #
+                Y_val_unscaled = Yscaler.inverse_transform(Y_val)
+                #
+                Y_val_pred_unscaled = Yscaler.inverse_transform(Y_val_pred)
+
+            #
+            if self.log_transform==1: # LOG
+                X_val_unscaled = Xscaler.inverse_transform(X_val)
+                X_val_unscaled[:,1:] = np.exp(X_val_unscaled[:,1:])
+            elif self.log_transform==2: # BCT
+                X_val_unscaled = Xscaler.inverse_transform(X_val)
+                X_val_unscaled[:,1:] = (self.lambda_bct*X_val_unscaled[:,1:]+1.0)**(1./self.lambda_bct) 
+            else:
+                X_val_unscaled = Xscaler.inverse_transform(X_val)
+                
+            # Prediction error (in %)
+            # errors_pred_val = 100.0*np.divide(np.absolute(Y_val_pred_unscaled - Y_val_unscaled), Y_val_unscaled)
+            errors_pred_val = np.absolute(Y_val_pred_unscaled - Y_val_unscaled)
+                
+            # Storing in csv
+            data_array = np.concatenate((X_val_unscaled, Y_val_unscaled, Y_val_pred_unscaled, errors_pred_val), axis=1)
+            error_cols = [str(col) + '_err' for col in Y_cols]
+            Y_pred_cols = [str(col) + '_pred' for col in Y_cols]
+            columns = list(X_cols) + list(Y_cols) + Y_pred_cols + error_cols
+            dtb_val = pd.DataFrame(data_array, columns = columns)
+            dtb_val.to_csv( self.directory  + f"/evaluation/validation_predictions_cluster{i_cluster}.csv" ,sep=';',index=False)
+                
+
+            # Plot function template (scatter plots)
+            # sns.relplot(x="CH4_X", y="CH4_Y_err", data=dtb_val)
+
+
+
+    def generate_nn_model_N2_cte(self, n_X, n_Y, nb_units_in_layers, layers_activation):
+
+        layers_dict = {}
+        
+        layers_dict["input_layer"] = layers.Input(shape=(n_X,), name="input_layer")
+
+        # We dissociate N2 from other species. 
+        # We assume that we deal with air combustion and no N2 reactions. 
+        # /!\ If this is not the case, this part of the code must be change /!\
+        n2_layer = GetN2Layer(1, self._n2_index+1, kernel_initializer=initializers.GlorotUniform())(layers_dict["input_layer"])
+
+        # We need a tensor always equal to zero for N2 reaction rate output
+        if self.output_omegas==True:
+            zero_layer = ZerosLayer(1, kernel_initializer=initializers.GlorotUniform())(n2_layer)
+
+        # Getting split part of inputs vector (part on left and right of N2)
+        yk_layer_1 = GetLeftPartLayer(self._left_n2, self._n2_index+1, kernel_initializer=initializers.GlorotUniform())(layers_dict["input_layer"])
+        yk_layer_2 = GetRightPartLayer(self._right_n2, self._n2_index+2, kernel_initializer=initializers.GlorotUniform())(layers_dict["input_layer"])
+        yk_layer = layers.Concatenate(axis=1)([yk_layer_1, yk_layer_2])
+
+            
+        layers_dict["dense_layer_1"] = layers.Dense(units=nb_units_in_layers[0]-1,kernel_regularizer=regularizers.l2(self.alpha_reg),
+                                        activation=layers_activation[0], kernel_initializer=initializers.GlorotUniform(), name="dense_layer_1")(yk_layer)
+
+            
+        for i in range(2, len(nb_units_in_layers)+1):
+            layers_dict[f"dense_layer_{i}"] = layers.Dense(units=nb_units_in_layers[i-1],kernel_regularizer=regularizers.l2(self.alpha_reg),
+                                                            activation=layers_activation[i-1] ,kernel_initializer=initializers.GlorotUniform(), name=f"dense_layer_{i}")(layers_dict[f"dense_layer_{i-1}"])
+
+            
+            #=========================== model's output definition ( constrained or not )=====================================
+            
+        if self.hard_constraints_model==0:
+
+            # layers_dict['output_layer'] = layers.Dense(units=Y_train.shape[1], kernel_regularizer=regularizers.l2(alpha_reg), kernel_initializer=initializers.GlorotUniform(),name='output_layer')(layers_dict[f"activation_layer_{len(nb_units_in_layers)}"])
+            output_layer = layers.Dense(units=n_Y-1, kernel_regularizer=regularizers.l2(self.alpha_reg), kernel_initializer=initializers.GlorotUniform(),name='output_layer')(layers_dict[f"dense_layer_{len(nb_units_in_layers)}"]) 
+
+            # We recreate whole vector with correct ordering 
+            output_layer_1 = GetLeftPartLayer(self._left_n2, self._n2_index, kernel_initializer=initializers.GlorotUniform())(output_layer)
+            output_layer_2 = GetRightPartLayer(self._right_n2, self._n2_index, kernel_initializer=initializers.GlorotUniform())(output_layer)
+            if self.output_omegas==True: 
+                layers_dict['output_layer'] = layers.Concatenate(axis=1)([output_layer_1, zero_layer,output_layer_2])
+            else:
+                layers_dict['output_layer'] = layers.Concatenate(axis=1)([output_layer_1, n2_layer, output_layer_2])
+
+        elif self.hard_constraints_model>0:
+                
+            # Intermediate dense layer
+            # layers_dict["output_layer_interm"] = layers.Dense(units=Y_train.shape[1],kernel_regularizer=regularizers.l2(alpha_reg),kernel_initializer=initializers.GlorotUniform(), name="output_layer_interm")(layers_dict[f"activation_layer_{len(nb_units_in_layers)}"])
+                
+            output_layer_interm = layers.Dense(units=n_Y-1, kernel_regularizer=regularizers.l2(self.alpha_reg), kernel_initializer=initializers.GlorotUniform(),name='output_layer_interm')(layers_dict[f"activation_layer_{len(nb_units_in_layers)}"]) 
+
+
+            output_layer_1 = GetLeftPartLayer(self._left_n2, self._n2_index, kernel_initializer=initializers.GlorotUniform())(output_layer_interm)
+            output_layer_2 = GetRightPartLayer(self._right_n2, self._n2_index, kernel_initializer=initializers.GlorotUniform())(output_layer_interm)
+                
+            if self.output_omegas==True: 
+                layers_dict['output_layer_interm'] = layers.Concatenate(axis=1)([output_layer_1, zero_layer, output_layer_2])
+            else:
+                layers_dict['output_layer_interm'] = layers.Concatenate(axis=1)([output_layer_1, n2_layer, output_layer_2])
+                
+
+            if self.hard_constraints_model==1:
+                # Layer enforcing physical constraint
+                # Atomic conservation
+                if self.output_omegas==True:
+                    layers_dict["output_layer"] = AtomicConservation_RR(n_Y, self._param1_Y, self._param2_Y, self._param2_Y_scale, 
+                                                                            self.A_atomic_t, self.A_inv_final_t,kernel_initializer=initializers.GlorotUniform())(layers_dict["output_layer_interm"])
+                else:
+                    layers_dict["output_layer"] = AtomicConservation(n_Y, self._param1_X, self._param2_X, self._param1_Y, 
+                                                            self._param2_Y, self.log_transform, self.threshold, self.A_atomic_t, self.A_inv_final_t,kernel_initializer=initializers.GlorotUniform())([layers_dict["output_layer_interm"],layers_dict["input_layer"]])
+                                
+            elif self.hard_constraints_model==2:
+
+                # Layer enforcing physical constraint
+                # Atomic conservation
+                if self.output_omegas==True:
+                    layers_dict["output_layer"] = AtomicConservation_RR_lsq(n_Y, self._param1_Y, self._param2_Y, self._param2_Y_scale, 
+                                                                            self.L, kernel_initializer=initializers.GlorotUniform())(layers_dict["output_layer_interm"])
+                else:
+                    sys.exit("hard_constraints_model=2 not written for output_omegas=False")
+        
+        # ================                Define model   ==========================================================
+        
+        model = models.Model(layers_dict["input_layer"], outputs=layers_dict["output_layer"], name="main_model")
+
+        return model
+
+
+
+
+    def generate_nn_model_no_N2(self, n_X, n_Y, nb_units_in_layers, layers_activation):
+
+        layers_dict = {}
+        
+        layers_dict["input_layer"] = layers.Input(shape=(n_X,), name="input_layer")
+
+        layers_dict["dense_layer_1"] = layers.Dense(units=nb_units_in_layers[0]-1,kernel_regularizer=regularizers.l2(self.alpha_reg),
+                                        activation=layers_activation[0], kernel_initializer=initializers.GlorotUniform(), name="dense_layer_1")(layers_dict["input_layer"])
+
+            
+        for i in range(2, len(nb_units_in_layers)+1):
+            layers_dict[f"dense_layer_{i}"] = layers.Dense(units=nb_units_in_layers[i-1],kernel_regularizer=regularizers.l2(self.alpha_reg),
+                                                            activation=layers_activation[i-1] ,kernel_initializer=initializers.GlorotUniform(), name=f"dense_layer_{i}")(layers_dict[f"dense_layer_{i-1}"])
+
+            
+        #=========================== model's output definition ( constrained or not )=====================================
+            
+        if self.hard_constraints_model==0:
+            layers_dict['output_layer'] = layers.Dense(units=n_Y, kernel_regularizer=regularizers.l2(self.alpha_reg), kernel_initializer=initializers.GlorotUniform(),name='output_layer')(layers_dict[f"dense_layer_{len(nb_units_in_layers)}"]) 
+
+        elif self.hard_constraints_model>0:
+                
+            # Intermediate dense layer   
+            layers_dict['output_layer_interm'] = layers.Dense(units=n_Y, kernel_regularizer=regularizers.l2(self.alpha_reg), kernel_initializer=initializers.GlorotUniform(),name='output_layer_interm')(layers_dict[f"activation_layer_{len(nb_units_in_layers)}"])
+
+            if self.hard_constraints_model==1:
+                # Layer enforcing physical constraint
+                # Atomic conservation
+                if self.output_omegas==True:
+                    layers_dict["output_layer"] = AtomicConservation_RR(n_Y, self._param1_Y, self._param2_Y, self._param2_Y_scale, 
+                                                                            self.A_atomic_t, self.A_inv_final_t,kernel_initializer=initializers.GlorotUniform())(layers_dict["output_layer_interm"])
+                else:
+                    layers_dict["output_layer"] = AtomicConservation(n_Y, self._param1_X, self._param2_X, self._param1_Y, 
+                                                            self._param2_Y, self.log_transform, self.threshold, self.A_atomic_t, self.A_inv_final_t,kernel_initializer=initializers.GlorotUniform())([layers_dict["output_layer_interm"],layers_dict["input_layer"]])
+                                
+            elif self.hard_constraints_model==2:
+
+                # Layer enforcing physical constraint
+                # Atomic conservation
+                if self.output_omegas==True:
+                    layers_dict["output_layer"] = AtomicConservation_RR_lsq(n_Y, self._param1_Y, self._param2_Y, self._param2_Y_scale, 
+                                                                            self.L, kernel_initializer=initializers.GlorotUniform())(layers_dict["output_layer_interm"])
+                else:
+                    sys.exit("hard_constraints_model=2 not written for output_omegas=False")
+        
+        # ================                Define model   ==========================================================
+        
+        model = models.Model(layers_dict["input_layer"], outputs=layers_dict["output_layer"], name="main_model")
+
+        return model
+
+
+
+    def build_conservation_matrix(self):
+
+        # Using mechanism set as input to get species name and number of species
+        # /!\ We assume that this is consistent with database /!\
+        gas = ct.Solution(self.mechanism)
+        spec_names = gas.species_names
+        nb_spec = gas.n_species
+
+        # Matrix with number of each atom in species (order of rows: C, H, O, N)
+        atomic_array = utils.parse_species_names(spec_names)
+        
+        # Atomic mass per elements (dictionary)
+        #mass_per_atom = {"C": 12.011, "H": 1.008, "O": 15.999, "N": 14.007}
+        mass_per_atom_array = np.array([12.011, 1.008, 15.999, 14.007])  # Having the array is also convenient
+        
+        # Atomic mass per species (numpy array)
+        mol_weights = utils.get_molecular_weights(spec_names)
+        #mol_weights_tensor = K.variable(mol_weights, dtype="float64")
+        
+        # Matrix for computing atomic conservation
+        A_atomic = np.copy(atomic_array)
+        for j in range(4):
+            A_atomic[j,:] *=  mass_per_atom_array[j]
+        for k in range(nb_spec):
+            A_atomic[:,k] /=  mol_weights[k]
+        # We will need the transpose
+        self.A_atomic_t = np.transpose(A_atomic)
+        # If hydrogen we discard carbon, so that the writing in keras custom layer is more simple
+        if self.fuel=="H2":
+            self.A_atomic_t = self.A_atomic_t[:,1:]
+            
+        
+        # For atomic conservation, we need to build the inverse of the following matrix
+        # A=(ajk) where ajk = (Mj/Mk)*nkj
+        # Where it is done for a subset of species used to balance conservation
+        if self.hard_constraints_model==1:
+            
+            # Exception to tackle: H2 fuel does not have carbon
+            if self.fuel=="H2":
+                balancing_species = ["H2O", "O2", "N2"]
+                mass_per_atom_array = np.array([1.008, 15.999, 14.007])
+                balancing_species_W = np.array([18.015, 31.998, 28.014])  
+                atoms_indices = [1,2,3]
+            else:
+                balancing_species = ["CO2", "H2O", "O2", "N2"]
+                mass_per_atom_array = np.array([12.011, 1.008, 15.999])
+                balancing_species_W = np.array([44.009, 18.015, 31.998]) 
+                atoms_indices = [0,1,2,3]
+                
+            # We take atomic_array and just keep desired species
+            A_reduced = A_atomic[:,[spec_names.index(spec) for spec in balancing_species]]
+            A_reduced = A_reduced[atoms_indices,:]
+                    
+            # Inverting matrix
+            try:
+                A_reduced_inv = np.linalg.inv(A_reduced)
+            except np.linalg.LinAlgError:
+                sys.exit("Error: the matrix of atomic constraints balancing species is not invertible !")
+                
+            # After inversion we add lines of zeros at adequate places
+            A_inv_final = np.zeros((nb_spec, len(balancing_species)))
+            for i, spec in enumerate(balancing_species):
+                A_inv_final[spec_names.index(spec),:] = A_reduced_inv[i,:]
+                
+            # We will need the transpose
+            self.A_inv_final_t = np.transpose(A_inv_final)
+        
+            # Indices of constrained species used in keras (remark: correct order is kept)
+            #cst_spec_indices = [spec_names.index(spec) for spec in balancing_species]
+        
+        
+        # More natural method : orthogonal projection
+        if self.hard_constraints_model==2:
+            
+            # We need to restric A_atomic
+            if self.fuel=="H2":
+                A_atomic = A_atomic[1:,:]
+            
+            # We need to form matrix L
+            M = A_atomic
+            MMt = np.dot(M, np.transpose(M))
+            MMt_inv = np.linalg.inv(MMt)
+            MMt_inv_M = np.dot(MMt_inv, M)
+            N = np.dot(np.transpose(M),MMt_inv_M)
+            self.L = np.eye(N.shape[0]) - N
+
+
+
+    def get_scaler_params(self, scaler):
+    
+        param1 = scaler.mean_
+        param2 = scaler.var_
+            
+        return param1, param2
+
+        
