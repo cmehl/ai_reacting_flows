@@ -272,7 +272,6 @@ class ParticlesCloud(object):
         if self.rank==0:
             self._apply_diffusion()
 
-        self.comm.barrier()
         self.comm.bcast(self.particles_list, root=0)
         
         t3 = perf_counter()
