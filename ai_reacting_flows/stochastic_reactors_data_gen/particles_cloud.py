@@ -16,7 +16,7 @@ from ai_reacting_flows.stochastic_reactors_data_gen.particle import Particle
 import ai_reacting_flows.tools.utilities as utils
 from ai_reacting_flows.tools.utilities import PRINT
 
-import ai_reacting_flows.stochastic_reactors_data_gen.EMST.emst_mixing as emst_mixing
+# import ai_reacting_flows.stochastic_reactors_data_gen.EMST.emst_mixing as emst_mixing
 
 from ai_reacting_flows.stochastic_reactors_data_gen.ann_model import ModelANN
 
@@ -60,9 +60,6 @@ class ParticlesCloud(object):
         
         # Statistics convergence status
         self.stats_converged = False
-
-        # Paralellization: number of procs
-        self.nb_procs = data_gen_parameters["nb_procs"]
 
         # Mechanism file
         self.mech_file  = data_gen_parameters["mech_file"]
@@ -148,9 +145,9 @@ class ParticlesCloud(object):
                 self.diffusion_freq = 1
             
             
-        # Initializing particles age in EMST model
-        if data_gen_parameters["mixing_model"]=="EMST":
-            self._init_EMST()
+        # # Initializing particles age in EMST model
+        # if data_gen_parameters["mixing_model"]=="EMST":
+        #     self._init_EMST()
             
         
         # =====================================================================
@@ -271,7 +268,13 @@ class ParticlesCloud(object):
             self._update_dtb_states("Y")
         
         # Advance molecular diffusion
-        self._apply_diffusion()
+        # Diffusion is applied by rank 0 and then redistributed to make sure every processor has the same states
+        if self.rank==0:
+            self._apply_diffusion()
+
+        self.comm.barrier()
+        self.comm.bcast(self.particles_list, root=0)
+        
         t3 = perf_counter()
         
         # Updating particle associated post-processing variables
@@ -328,9 +331,7 @@ class ParticlesCloud(object):
     def _apply_reactions(self, dt):
 
         # We divide the list of particles into chunks to be treated by each processor
-        # The +1 is because we want to have exactly self.size chunks, so we need to take one unity above the quotient
-        chunk_size = (self.nb_parts_tot // self.size) + 1
-        lists_particles = [self.particles_list[i:i+chunk_size] for i in range(0, len(self.particles_list), chunk_size)]
+        lists_particles = np.array_split(np.array(self.particles_list), self.size)
 
         # We verify size of list to avoid errors
         assert len(lists_particles) == self.size
@@ -355,11 +356,11 @@ class ParticlesCloud(object):
     # Apply diffusion to particles
     def _apply_diffusion(self):
         
-        if self.mixing_model=="CURL" or self.mixing_model=="CURL_MODIFIED":
-            if self.iteration%self.diffusion_freq==0:
-                self._mix_curl()
-        elif self.mixing_model=="EMST":
-            self._mix_EMST()
+        #if self.mixing_model=="CURL" or self.mixing_model=="CURL_MODIFIED":
+        if self.iteration%self.diffusion_freq==0:
+            self._mix_curl()
+        # elif self.mixing_model=="EMST":
+        #     self._mix_EMST()
 
 
 # =============================================================================
@@ -368,7 +369,7 @@ class ParticlesCloud(object):
     
     # CURL model
     def _mix_curl(self):
-        
+
         # Randomly select mixing pairs
         pairs = utils.sample_comb2((self.nb_parts_tot,self.nb_parts_tot), self.Npairs_curl)
         
@@ -417,95 +418,95 @@ class ParticlesCloud(object):
                 
                 
                 
-    # EMST model: initialization
-    def _init_EMST(self):
+    # # EMST model: initialization
+    # def _init_EMST(self):
         
-        nparts = len(self.particles_list)
-        ncompo = len(self.particles_list[0].state) - 1  # particle 0 arbitrary (pressure not considered)
+    #     nparts = len(self.particles_list)
+    #     ncompo = len(self.particles_list[0].state) - 1  # particle 0 arbitrary (pressure not considered)
         
-        state = np.zeros(nparts, order='F', dtype='float32')
-        wt = np.empty(nparts, order='F', dtype='float32')
-        fscale = np.empty(ncompo, order='F', dtype='float32')
-        f = np.empty((nparts, ncompo), order='F', dtype='float32')
-        for part in self.particles_list:
-            i = part.num_part
-            wt[i] = 1.0/nparts
-            state_part = np.append([part.hs], part.Y)
-            f[i, :] = state_part
+    #     state = np.zeros(nparts, order='F', dtype='float32')
+    #     wt = np.empty(nparts, order='F', dtype='float32')
+    #     fscale = np.empty(ncompo, order='F', dtype='float32')
+    #     f = np.empty((nparts, ncompo), order='F', dtype='float32')
+    #     for part in self.particles_list:
+    #         i = part.num_part
+    #         wt[i] = 1.0/nparts
+    #         state_part = np.append([part.hs], part.Y)
+    #         f[i, :] = state_part
             
         
-        # Scaling factor (to be defined better)
-        fscale[0] = 1.0e16
-        fscale[1:] = 0.1
+    #     # Scaling factor (to be defined better)
+    #     fscale[0] = 1.0e16
+    #     fscale[1:] = 0.1
         
-        # control vars for expert users
-        cvars = np.zeros(6, order='F', dtype='float32')
+    #     # control vars for expert users
+    #     cvars = np.zeros(6, order='F', dtype='float32')
         
-        # Normalized time scale
-        C_phi = 2.0  # model constant
-        omdt = self.dt / (C_phi*self.mixing_time)
+    #     # Normalized time scale
+    #     C_phi = 2.0  # model constant
+    #     omdt = self.dt / (C_phi*self.mixing_time)
         
-        # Using EMST routine to initialize age of particles
-        status = emst_mixing.emst(mode=1,f=f,state=state,wt=wt,omdt=omdt,fscale=fscale,cvars=cvars,np=nparts,nc=ncompo)
+    #     # Using EMST routine to initialize age of particles
+    #     status = emst_mixing.emst(mode=1,f=f,state=state,wt=wt,omdt=omdt,fscale=fscale,cvars=cvars,np=nparts,nc=ncompo)
         
-        # Checking EMST error status
-        assert status == 0, "EMST mixing failure"
+    #     # Checking EMST error status
+    #     assert status == 0, "EMST mixing failure"
         
-        # Dispatching age of particles
-        for part in self.particles_list:
-            i = part.num_part
-            part.age = state[i]
+    #     # Dispatching age of particles
+    #     for part in self.particles_list:
+    #         i = part.num_part
+    #         part.age = state[i]
         
         
         
-    # EMST model: mixing
-    def _mix_EMST(self):
+    # # EMST model: mixing
+    # def _mix_EMST(self):
         
-        nparts = len(self.particles_list)
-        ncompo = len(self.particles_list[0].state) - 1  # particle 0 arbitrary (pressure not considered)
+    #     nparts = len(self.particles_list)
+    #     ncompo = len(self.particles_list[0].state) - 1  # particle 0 arbitrary (pressure not considered)
         
-        state = np.empty(nparts, order='F', dtype='float32')
-        wt = np.empty(nparts, order='F', dtype='float32')
-        fscale = np.empty(ncompo, order='F', dtype='float32')
-        f = np.empty((nparts, ncompo), order='F', dtype='float32')
-        for part in self.particles_list:
-            i = part.num_part
-            state[i] = part.age
-            wt[i] = 1.0/nparts
-            state_part = np.append([part.hs], part.Y)
-            f[i, :] = state_part
+    #     state = np.empty(nparts, order='F', dtype='float32')
+    #     wt = np.empty(nparts, order='F', dtype='float32')
+    #     fscale = np.empty(ncompo, order='F', dtype='float32')
+    #     f = np.empty((nparts, ncompo), order='F', dtype='float32')
+    #     for part in self.particles_list:
+    #         i = part.num_part
+    #         state[i] = part.age
+    #         wt[i] = 1.0/nparts
+    #         state_part = np.append([part.hs], part.Y)
+    #         f[i, :] = state_part
             
         
-        # Scaling factor (to be defined better)
-        fscale[0] = 1.0e16
-        fscale[1:] = 0.1
+    #     # Scaling factor (to be defined better)
+    #     fscale[0] = 1.0e16
+    #     fscale[1:] = 0.1
         
-        # control vars for expert users
-        cvars = np.zeros(6, order='F', dtype='float32')
+    #     # control vars for expert users
+    #     cvars = np.zeros(6, order='F', dtype='float32')
         
-        # Normalized time scale
-        C_phi = 2.0  # model constant
-        omdt = self.dt / (C_phi*self.mixing_time)
+    #     # Normalized time scale
+    #     C_phi = 2.0  # model constant
+    #     omdt = self.dt / (C_phi*self.mixing_time)
         
-        # Using EMST routine to initialize age of particles
-        status = emst_mixing.emst(mode=2,f=f,state=state,wt=wt,omdt=omdt,fscale=fscale,cvars=cvars,np=nparts,nc=ncompo)
+    #     # Using EMST routine to initialize age of particles
+    #     status = emst_mixing.emst(mode=2,f=f,state=state,wt=wt,omdt=omdt,fscale=fscale,cvars=cvars,np=nparts,nc=ncompo)
         
-        # Checking EMST error status
-        assert status == 0, "EMST mixing failure" 
+    #     # Checking EMST error status
+    #     assert status == 0, "EMST mixing failure" 
         
-        # Updating particle associated variables
-        for part in self.particles_list:
+    #     # Updating particle associated variables
+    #     for part in self.particles_list:
             
-            # Main characteristics
-            i = part.num_part
-            part.age = state[i]
-            part.hs = f[i, 0]
-            part.Y = f[i, 1:]
-            part.state[0] = part.hs
-            part.state[2:] = part.Y
+    #         # Main characteristics
+    #         i = part.num_part
+    #         part.age = state[i]
+    #         part.hs = f[i, 0]
+    #         part.Y = f[i, 1:]
+    #         part.state[0] = part.hs
+    #         part.state[2:] = part.Y
             
-            # Temperature
-            part.compute_T_from_hs()
+    #         # Temperature
+    #         part.compute_T_from_hs()
 
 
 # =============================================================================
@@ -518,9 +519,7 @@ class ParticlesCloud(object):
         # We parallelize as the progress variable computation is expensive (indeed, it relies on an "equil" computation)
 
         # We divide the list of particles into chunks to be treated by each processor
-        # The +1 is because we want to have exactly self.size chunks, so we need to take one unity above the quotient
-        chunk_size = (self.nb_parts_tot // self.size) + 1
-        lists_particles = [self.particles_list[i:i+chunk_size] for i in range(0, len(self.particles_list), chunk_size)]
+        lists_particles = np.array_split(np.array(self.particles_list), self.size)
 
         # We scatter the chunks on each processors. Remark: rank=root also takes a chunk.
         lists_particles = self.comm.scatter(lists_particles, root=0)
