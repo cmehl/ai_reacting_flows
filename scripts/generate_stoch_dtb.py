@@ -15,8 +15,7 @@ data_gen_parameters["inlets_file"] = "inlets_file.xlsx"
 data_gen_parameters["results_folder_suffix"] = "hotspot_H2_DEV"
 data_gen_parameters["build_ml_dtb"] = True
 data_gen_parameters["time_step"] = 0.5e-6
-data_gen_parameters["time_max"] = 1e-6
-data_gen_parameters["nb_procs"] = 2
+data_gen_parameters["time_max"] = 4e-6
 
 # Modeling parameters
 data_gen_parameters["mixing_model"] = "CURL_MODIFIED"
