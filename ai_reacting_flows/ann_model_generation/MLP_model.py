@@ -528,7 +528,7 @@ class MLPModel(object):
         yk_layer = layers.Concatenate(axis=1)([yk_layer_1, yk_layer_2])
 
             
-        layers_dict["dense_layer_1"] = layers.Dense(units=nb_units_in_layers[0]-1,kernel_regularizer=regularizers.l2(self.alpha_reg),
+        layers_dict["dense_layer_1"] = layers.Dense(units=nb_units_in_layers[0],kernel_regularizer=regularizers.l2(self.alpha_reg),
                                         activation=layers_activation[0], kernel_initializer=initializers.GlorotUniform(), name="dense_layer_1")(yk_layer)
 
             
@@ -604,7 +604,7 @@ class MLPModel(object):
         
         layers_dict["input_layer"] = layers.Input(shape=(n_X,), name="input_layer")
 
-        layers_dict["dense_layer_1"] = layers.Dense(units=nb_units_in_layers[0]-1,kernel_regularizer=regularizers.l2(self.alpha_reg),
+        layers_dict["dense_layer_1"] = layers.Dense(units=nb_units_in_layers[0],kernel_regularizer=regularizers.l2(self.alpha_reg),
                                         activation=layers_activation[0], kernel_initializer=initializers.GlorotUniform(), name="dense_layer_1")(layers_dict["input_layer"])
 
             
