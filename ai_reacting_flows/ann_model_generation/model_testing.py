@@ -388,6 +388,7 @@ class ModelTesting(object):
             gas.TPY = Tt[i_reac], pressure, Yt[:,i_reac]
 
             # Computing current progress variable
+            state = np.append(Tt[i_reac], Yt[:,i_reac])
             progvar = self.compute_progvar(state, pressure)
 
             # Attribute cluster
