@@ -1,10 +1,33 @@
 AI FOR REACTING FLOWS
 =====================
 
+The project *ai_for_reacting_flows* is a tool enabling to replace complex chemical kinetics calculations in a CFD code by a machine learning model. The idea is that typical exact solvers used to resolve such problems (such as [CVODE](https://computing.llnl.gov/projects/sundials/cvode)) are very expensive. Using fitted models, such as Artificial Neural Networks (ANN), enables to speed-up calculations by a significant factor. 
+
+This package features the following functionalities:
+
++ A module to build database based on the idea of stochastic reactors
+
++ A module to generate machine learning models to advance the chemical state of a mixture
+
+
 # Package installation
 
-Installing the package locally: python -m pip install -e .
-Explanations: https://realpython.com/python-import/#create-and-install-a-local-package
+In the current version of the code, Python 3.9.5 is used. The installation of the Python libraries necessary for this project can be performed using pip and the *requirements.txt* file:
+
+```
+pip install -r requirements.txt
+```
+
+The project itself must be installed as a package, which can be done by going in the root folder and using the following command:
+
+```
+python -m pip install -e .
+```
+
+Additional details on how to install a home-made package can be found [here](https://realpython.com/python-import/#create-and-install-a-local-package).
+
+In order to run the database generation, an MPI distribution is also necessary. In the current version of the code, the preconized version is OpenMPI/4.1.1.
+
 
 # Database generation
 
@@ -29,7 +52,9 @@ Additionaly, a module for post-processing and analyzing the stochastic particles
 
 # ANN model generation
 
-The *ai_reacting_flows* package considers the use of ANN as surrogates for chemistry computation. In particular, the final aim is to find best ANN parameters $p$ such that $Y_k(t+dt)=ANN_p(Y_k(t))$. 
+The *ai_reacting_flows* package considers the use of ANN as surrogates for chemistry computation. In particular, the final aim is to find best ANN parameters $p$ such that $Y_k(t+dt)=ANN_p(Y_k(t))$. However, alternative techniques such as random forest could be easily integrated in the code if needed.
+
+An example of model generation may be found in the notebook *ann_model_learning.ipynb*. 
 
 
 # Simple model testing
@@ -38,5 +63,7 @@ Some functions have been implemented to give the ability to the user to perform 
 
 + Combustion: 0-D homogeneous mixture ignition
 + Combustion: 1-D premixed flame reaction rate
+
+An example on how to read a model and test it on these simple setups is provided in notebook *ann_model_testing.ipynb*.
 
 
