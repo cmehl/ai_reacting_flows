@@ -1,5 +1,4 @@
 absl-py==1.2.0
--e git+https://github.com/cmehl/ai_reacting_flows.git@3c7544663f1ad7d058de082cfe4ccb91e99a2247#egg=ai_reacting_flows_mehlc
 asttokens==2.0.8
 astunparse==1.6.3
 backcall==0.2.0
