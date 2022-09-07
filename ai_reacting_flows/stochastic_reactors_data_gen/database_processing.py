@@ -2,6 +2,7 @@ import os
 import shutil
 import pickle
 import shelve
+import random
 
 import joblib
 import pandas as pd
@@ -151,6 +152,26 @@ class LearningDatabase(object):
 
 
 
+
+    def undersample_cluster(self, i_cluster, ratio_to_keep):
+        
+        # Here it is better to work with the ratio of data to delete
+        ratio_to_delete = 1.0 - ratio_to_keep
+        
+        # Indices of the given cluster
+        indices_cluster = self.X[self.X["cluster"]==i_cluster].index
+
+        # Sampling random rows to delete
+        random.seed(a=42)
+        rows = random.sample(indices_cluster.tolist(),int(ratio_to_delete*len(indices_cluster)))
+
+        # Delete the rows in X and Y dataframes
+        self.X.drop(rows, axis=0, inplace=True)
+        self.Y.drop(rows, axis=0, inplace=True)
+
+
+
+
     def process_database(self):
 
         self.is_processed = True
@@ -242,5 +263,18 @@ class LearningDatabase(object):
             Y_val.to_csv(self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/Y_val.csv", index=False)
 
         
+
+    def print_data_size(self):
+
+        # Printing number of elements for each class
+        size_total = 0
+        for i in range(self.nb_clusters):
+
+            size_cluster_i = self.X[self.X["cluster"]==i].shape[0]
+            size_total += size_cluster_i
+
+            print(f">> There are {size_cluster_i} points in cluster{i}")
+
+        print(f"\n => There are {size_total} points overall")
 
 
