@@ -315,7 +315,7 @@ class MLPModel(object):
         
             # Model generation
             if self.remove_N2:
-                model = self.generate_nn_model_no_N2(X_train.shape[1], Y_train.shape[1], nb_units_in_layers, layers_activation)
+                model = self.generate_nn_model(X_train.shape[1], Y_train.shape[1], nb_units_in_layers, layers_activation)
             else:
                 model = self.generate_nn_model_N2_cte(X_train.shape[1], Y_train.shape[1], nb_units_in_layers, layers_activation)
                     
@@ -598,7 +598,7 @@ class MLPModel(object):
 
 
 
-    def generate_nn_model_no_N2(self, n_X, n_Y, nb_units_in_layers, layers_activation):
+    def generate_nn_model(self, n_X, n_Y, nb_units_in_layers, layers_activation):
 
         layers_dict = {}
         
