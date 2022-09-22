@@ -96,6 +96,7 @@ class MLPModel(object):
         self.log_transform = shelfFile["log_transform"]
         self.output_omegas = shelfFile["output_omegas"]
         self.clustering_type = shelfFile["clusterization_method"]
+        self.with_N_chemistry = shelfFile["with_N_chemistry"]
         shelfFile.close()
 
 
@@ -174,18 +175,19 @@ class MLPModel(object):
         spec_names = gas.species_names
         nb_spec = gas.n_species
 
-        # In the case where we want to completely remove N2 from inputs and outputs
-        if self.remove_N2:
-            spec_names.remove("N2")
-            nb_spec = nb_spec - 1
+        # If we do not have the N chemistry (i.e. N2 is constant), we can either remove N2 or force it constant
+        if self.with_N_chemistry is False:
+            if self.remove_N2:
+                spec_names.remove("N2")
+                nb_spec = nb_spec - 1
 
-        else:
-            # N2 index
-            self._n2_index = spec_names.index("N2")
+            else:
+                # N2 index
+                self._n2_index = spec_names.index("N2")
 
-            # Number of species on left and right of N2 in list
-            self._left_n2 = len(spec_names[:self._n2_index])
-            self._right_n2 = len(spec_names[self._n2_index+1:])
+                # Number of species on left and right of N2 in list
+                self._left_n2 = len(spec_names[:self._n2_index])
+                self._right_n2 = len(spec_names[self._n2_index+1:])
 
 
         if self.hard_constraints_model>0:
@@ -329,11 +331,13 @@ class MLPModel(object):
             tf.keras.backend.set_floatx('float64')
         
             # Model generation
-            if self.remove_N2:
+            if self.with_N_chemistry:
                 model = self.generate_nn_model(X_train.shape[1], Y_train.shape[1], nb_units_in_layers, layers_activation)
             else:
-                model = self.generate_nn_model_N2_cte(X_train.shape[1], Y_train.shape[1], nb_units_in_layers, layers_activation)
-                    
+                if self.remove_N2:
+                    model = self.generate_nn_model(X_train.shape[1], Y_train.shape[1], nb_units_in_layers, layers_activation)
+                else:
+                    model = self.generate_nn_model_N2_cte(X_train.shape[1], Y_train.shape[1], nb_units_in_layers, layers_activation)    
 
             #========================================== defining the optimizer ======================================
             #======================================================================================================== 

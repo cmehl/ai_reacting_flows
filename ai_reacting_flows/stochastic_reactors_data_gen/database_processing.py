@@ -56,6 +56,7 @@ class LearningDatabase(object):
         shelfFile["threshold"] = self.threshold
         shelfFile["log_transform"] = self.log_transform
         shelfFile["output_omegas"] = self.output_omegas
+        shelfFile["with_N_chemistry"] = self.with_N_chemistry
         #
         shelfFile.close()
 
