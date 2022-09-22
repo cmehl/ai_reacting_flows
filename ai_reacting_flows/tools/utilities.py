@@ -11,6 +11,8 @@ import sys
 import numpy as np
 import pandas as pd
 import cantera as ct
+import oyaml as yaml
+import copy
 
 #==============================================================================
 # COMBUSTION RELATED FUNCTIONS
@@ -136,6 +138,10 @@ def Phi_from_Yk_HC(fuel, phi):
 #TODO: update this function which is false for two-digits atom numbers (cf cvg_generator)
 # Function to parse a species name in order to get its atomic composition
 def parse_species(species):
+
+    # Checking if species is a fictive species, in which case we remove the "_F" suffix
+    if species.endswith("_F"):
+        species = species[:-2]
     
     i_char = 0
     n_C = 0
@@ -208,6 +214,11 @@ def parse_species_names(species_list):
     i_spec = 0
     for i_spec in range(nb_species):
         species = species_list[i_spec]
+
+        # Checking if species is a fictive species, in which case we remove the "_F" suffix
+        if species.endswith("_F"):
+            species = species[:-2]
+
         i_char = 0
         n_C = 0
         n_H = 0
@@ -252,6 +263,32 @@ def parse_species_names(species_list):
         
     return atomic_array
 
+
+# Function to get matrix (Wj/Wk)*n_k^j   (Remark: order of atoms is C, H, O, N)
+def get_molar_mass_atomic_matrix(species, fuel, with_N2_chemistry):
+
+    nb_species = len(species)
+
+    atomic_array = parse_species_names(species)
+    #
+    mol_weights = get_molecular_weights(species)
+    #
+    mass_per_atom = np.array([12.011, 1.008, 15.999, 14.007])
+    #
+    A_atomic = np.copy(atomic_array)
+    for j in range(4):
+        A_atomic[j,:] *=  mass_per_atom[j]
+    for k in range(nb_species):
+        A_atomic[:,k] /=  mol_weights[k]
+
+    # Carbon not considered if fuel -> To make more general (get which atoms are in the list of species)
+    if fuel=="H2":
+        A_atomic = A_atomic[1:,:]
+
+    if with_N2_chemistry is False:
+        A_atomic = A_atomic[:-1,:]
+
+    return A_atomic
 
 
 #==============================================================================
@@ -387,3 +424,80 @@ def sample_comb2(dims, nsamp):
 def PRINT(*args):
     sys.stdout.write(" ".join(["%s"%arg for arg in args])+"\n")
     sys.stdout.flush()
+
+
+
+#==============================================================================
+# CANTERA RELATED FUNCTIONS
+# =============================================================================
+
+# Class to manipulate CANTERA YAML files
+class cantera_yaml(object):
+
+    def __init__(self, yaml_file):
+
+        # read yaml file
+        with open(yaml_file) as f:       
+            self.data = yaml.load(f,Loader=yaml.FullLoader)
+
+
+    # When playing with CANTERA mechanism species, it may be useful to remove all reactions
+    def remove_reactions(self):
+        self.data["reactions"] = []
+
+
+    # Keep only a given set of species in mechanism
+    def reduce_mechanism_species(self, species_to_keep):
+        
+        data_save = copy.deepcopy(self.data)
+        for i in range(len(data_save["species"])):
+
+            spec_entry = copy.deepcopy(data_save["species"][i])
+            spec = spec_entry['name']
+            # 
+            if spec not in species_to_keep:
+                self.data["phases"][0]['species'].remove(spec)
+                self.data["species"].remove(spec_entry)
+
+
+    # Add copies of species; may be useful to add fictive species with real species characteristics
+    def add_species_copies(self, fictive_species, suffix="_F"):
+
+        for i in range(len(self.data["species"])):
+
+            spec_entry = copy.deepcopy(self.data["species"][i])
+            spec = spec_entry['name']
+            # 
+            if spec in fictive_species:
+                spec_to_add = copy.deepcopy(self.data["species"][i])
+                spec_to_add["name"] = spec + suffix
+                self.data["species"].append(spec_to_add)
+
+                self.data["phases"][0]['species'].append(spec + suffix)
+
+
+    # Function to add species and reduce mechanism in the same time: necessary if fictive species are not in reduced mechanism
+    def reduce_mechanism_and_add_fictive_species(self, species_to_keep, fictive_species, suffix="_F"):
+        
+        data_save = copy.deepcopy(self.data)
+        for i in range(len(self.data["species"])):
+
+            spec_entry = copy.deepcopy(data_save["species"][i])
+            spec = spec_entry['name']
+            # 
+            if spec in fictive_species:
+                spec_to_add = copy.deepcopy(data_save["species"][i])
+                spec_to_add["name"] = spec + suffix
+                self.data["species"].append(spec_to_add)
+
+                self.data["phases"][0]['species'].append(spec + suffix)
+
+            if spec not in species_to_keep:
+                self.data["phases"][0]['species'].remove(spec)
+                self.data["species"].remove(spec_entry)
+
+
+    # Function to write modified mechanism in a new file
+    def export_to_yaml(self, yaml_file):
+        with open(yaml_file, "w") as f:
+            yaml.dump(self.data, f)

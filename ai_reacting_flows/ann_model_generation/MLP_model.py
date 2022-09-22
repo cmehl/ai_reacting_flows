@@ -59,7 +59,7 @@ class MLPModel(object):
 
         # Fuel
         self.fuel = training_parameters["fuel"]
-        self.mechanism = training_parameters["mechanism"]
+        self.mechanism_type = training_parameters["mechanism_type"]
 
         # Remove N2
         self.remove_N2 = training_parameters["remove_N2"]
@@ -71,7 +71,7 @@ class MLPModel(object):
         # Optimization parameters
         self.batch_size = training_parameters["batch_size"]
         self.initial_learning_rate = training_parameters["initial_learning_rate"]
-        # Parameters of the exponential decay schedule ( learning rate decay)
+        # Parameters of the exponential decay schedule (learning rate decay)
         self.decay_steps = training_parameters["decay_steps"]
         self.decay_rate = training_parameters["decay_rate"]
         self.staircase = training_parameters["staircase"]
@@ -128,6 +128,20 @@ class MLPModel(object):
             shutil.copy(self.dataset_path + "/Xscaler_kmeans.pkl", self.directory)
 
 
+        # Defining mechanism file (either detailed or reduced)
+        if self.mechanism_type=="detailed":
+            self.mechanism = self.dataset_path + "/mech_detailed.yaml"
+        elif self.mechanism_type=="reduced":
+            self.mechanism = self.dataset_path + "/mech_reduced.yaml"
+        else:
+            sys.exit('ERROR: mechanism_type should be either "detailed" or "reduced"')
+
+        # We copy the mechanism files in order to use them for testing
+        shutil.copy(self.dataset_path + "/mech_detailed.yaml", self.directory)
+        if self.mechanism_type=="reduced":
+           shutil.copy(self.dataset_path + "/mech_reduced.yaml", self.directory)
+
+
         # Saving parameters using shelve file for later use in testing
         shelfFile = shelve.open(self.directory + f'/model_params')
         #
@@ -136,6 +150,7 @@ class MLPModel(object):
         shelfFile["output_omegas"] = self.output_omegas
         shelfFile["hard_constraints_model"] = self.hard_constraints_model
         shelfFile["remove_N2"] = self.remove_N2
+        shelfFile["mechanism_type"] = self.mechanism_type
         #
         shelfFile.close()
     

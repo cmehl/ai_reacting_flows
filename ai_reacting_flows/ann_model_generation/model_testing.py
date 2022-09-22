@@ -33,7 +33,7 @@ class ModelTesting(object):
 
         # Chemistry (maybe an information to get from model folder ?)
         self.fuel = testing_parameters["fuel"]
-        self.mech = testing_parameters["mechanism"]
+        self.with_N_chemistry = testing_parameters["with_N_chemistry"]
 
         self.spec_to_plot = testing_parameters["spec_to_plot"]
 
@@ -44,16 +44,32 @@ class ModelTesting(object):
         self.threshold = shelfFile["threshold"]
         self.remove_N2 = shelfFile["remove_N2"]
         self.hard_constraints_model = shelfFile["hard_constraints_model"]
+        self.mechanism_type = shelfFile["mechanism_type"]
         shelfFile.close()
 
-        # cantera solution object needed to access species indices
-        gas = ct.Solution(self.mech) 
-        self.spec_list = gas.species_names
-        self.nb_species = len(self.spec_list)
-        if self.remove_N2:
-            self.nb_species_NN = self.nb_species - 1
+        # Chemical mechanisms
+        self.mech = self.models_folder + "/mech_detailed.yaml"
+        if self.mechanism_type=="reduced":
+            self.reduced_mechanism = self.models_folder + "/mech_reduced.yaml"
+
+        # CANTERA solution object needed to access species indices
+        gas = ct.Solution(self.mech)
+        self.spec_list_ref = gas.species_names
+        self.nb_species_ref = len(self.spec_list_ref)
+
+        # Getting species and number of species
+        if self.mechanism_type=="reduced":
+            gas_reduced = ct.Solution(self.reduced_mechanism)
+            self.spec_list_red = gas_reduced.species_names
+            self.nb_species_red = len(self.spec_list_red)
+            self.nb_species_ANN = self.nb_species_red
+            if self.remove_N2:
+                self.nb_species_ANN = self.nb_species_red - 1
         else:
-            self.nb_species_NN = self.nb_species
+            self.nb_species_ANN = self.nb_species_ref
+            if self.remove_N2:
+                self.nb_species_ANN = self.nb_species_ref - 1
+
 
 
         # Find number of clusters -> equal for instance to number of json files in model folder
@@ -92,6 +108,15 @@ class ModelTesting(object):
             self.pv_ind.append(gas.species_index(self.pv_species[i])) 
 
 
+        # Getting fictive species names
+        if self.mechanism_type=="reduced":
+            self.fictive_species = []
+            for spec in gas_reduced.species_names:
+                if spec.endswith("_F"):
+                    self.fictive_species.append(spec)
+
+            self.nb_spec_fictive = len(self.fictive_species)
+
 
 #-----------------------------------------------------------------------
 #   MAIN TESTING FUNCTIONS
@@ -127,8 +152,7 @@ class ModelTesting(object):
         W_atoms = np.array([12.011, 1.008, 15.999, 14.007])
         
         # Matrix with number of each atom in species (order of rows: C, H, O, N)
-        atomic_array = utils.parse_species_names(self.spec_list)
-
+        atomic_array = utils.parse_species_names(self.spec_list_red)
 
         #-------------------- CVODE COMPUTATION---------------------------
         # Remark: we don't use the method we wrote below
@@ -144,24 +168,35 @@ class ModelTesting(object):
         # Convert in a big array (m,NS+1) for later normalization
         state_ref = states.T.reshape(nb_ite+1, 1)
         
-        for spec in self.spec_list:
+        for spec in self.spec_list_ref:
             Y = states.Y[:,gas.species_index(spec)].reshape(nb_ite+1, 1)
             state_ref = np.concatenate((state_ref, Y), axis=-1)
 
 
         #-------------------- ANN SOLVER ---------------------------
-        
-        Y_k_ann = Y_ini
-        T_ann = T_ini
+
+        # Initial solution
+        if self.mechanism_type=="reduced":
+            gas_reduced = ct.Solution(self.reduced_mechanism)
+            gas_reduced.TPX = T0, pressure, compo
+            #
+            T_ann = gas_reduced.T
+            Y_k_ann = gas_reduced.Y
+        else:
+            Y_k_ann = Y_ini
+            T_ann = T_ini
 
         # Vectors to store time data
-        state_save = np.append(T_ini, Y_ini)
+        state_save = np.append(T_ann, Y_k_ann)
         sumYs = [1.0]
         progvar_vect = [0.0]
 
         # atomic composition of species
-        molecular_weights = utils.get_molecular_weights(gas.species_names)
-        atomic_cons = np.dot(atomic_array,np.reshape(Y_ini,-1)/molecular_weights)
+        if self.mechanism_type=="reduced":
+            molecular_weights = utils.get_molecular_weights(gas_reduced.species_names)
+        else:
+            molecular_weights = utils.get_molecular_weights(gas.species_names)
+        atomic_cons = np.dot(atomic_array,np.reshape(Y_k_ann,-1)/molecular_weights)
         atomic_cons = np.multiply(W_atoms, atomic_cons)
 
         # NEURAL NETWORK COMPUTATION
@@ -175,7 +210,7 @@ class ModelTesting(object):
             Y_old = state[1:]
 
             # Computing current progress variable
-            progvar = self.compute_progvar(state, pressure)
+            progvar = self.compute_progvar(state, pressure, self.mechanism_type)
 
             # Attribute cluster
             self.attribute_cluster(state, progvar)
@@ -196,7 +231,7 @@ class ModelTesting(object):
 
             
             # atomic composition of species  WHAT IS SELF.NO_SPECIES_NN ?
-            atomic_cons_current = np.dot(atomic_array,Y_new.reshape(self.nb_species)/molecular_weights)
+            atomic_cons_current = np.dot(atomic_array,Y_new.reshape(self.nb_species_red)/molecular_weights)
             atomic_cons_current = np.multiply(W_atoms, atomic_cons_current)
             atomic_cons = np.vstack([atomic_cons,atomic_cons_current])
             
@@ -238,7 +273,7 @@ class ModelTesting(object):
         for spec in self.spec_to_plot:
             fig, ax = plt.subplots(1, 1)
             ax.plot(states.t, states.Y[:,gas.species_index(spec)], ls="--", color = "k", lw=2, label="CVODE")
-            ax.plot(states.t, state_save[:,self.spec_list.index(spec)+1], ls="-", color = "b", lw=2, marker='x', label="NN")
+            ax.plot(states.t, state_save[:,self.spec_list_red.index(spec)+1], ls="-", color = "b", lw=2, marker='x', label="NN")
             ax.set_xlabel('$t$ $[ms]$', fontsize=ftsize)
             ax.set_ylabel(f'{spec} mass fraction $[-]$', fontsize=ftsize)
             if spec=="N2": #because N2 is often constant
@@ -346,14 +381,18 @@ class ModelTesting(object):
         nb_pnts_total = len(f.grid)
         for i in range(nb_pnts_total):
             state = np.append(Tt[i], Yt[:,i])
-            c[i] = self.compute_progvar(state, pressure)
+            c[i] = self.compute_progvar(state, pressure, "detailed")
 
         # x axis
         X_grid = f.grid
 
         # Initializing Y at t+dt
         Yt_dt_exact = np.zeros(Yt.shape)
-        Yt_dt_ann = np.zeros(Yt.shape)
+        if self.mechanism_type=="reduced":
+            gas_reduced = ct.Solution(self.reduced_mechanism)
+            Yt_dt_ann = np.zeros((gas_reduced.n_species, Yt.shape[1]))
+        else:
+            Yt_dt_ann = np.zeros((gas.n_species, Yt.shape[1]))
 
 
         #-------------------- EXACT REACTION RATES --------------------------- 
@@ -381,15 +420,26 @@ class ModelTesting(object):
         Omega_exact = (Yt_dt_exact-Yt)/dt
 
 
-        #-------------------- ANN REACTION RATES --------------------------- 
+        #-------------------- ANN REACTION RATES ---------------------------
+
+        # Initial solution (depends on the use of reduced mechanism)
+        if self.mechanism_type=="reduced":
+            Yt_ann = np.zeros((gas_reduced.n_species, Yt.shape[1]))
+            # Real species
+            for i, spec in enumerate(gas_reduced.species_names):
+                if spec in gas.species_names:
+                    Yt_ann[i,:] = Yt[gas.species_index(spec),:]
+
+            # Close conservation using fictive species present in mechanism
+            Yt_ann = self.close_fictive_species(Yt, Yt_ann)
+        else:
+            Yt_ann = Yt
 
         for i_reac in range(nb_0_reactors):
-                
-            gas.TPY = Tt[i_reac], pressure, Yt[:,i_reac]
 
             # Computing current progress variable
-            state = np.append(Tt[i_reac], Yt[:,i_reac])
-            progvar = self.compute_progvar(state, pressure)
+            state = np.append(Tt[i_reac], Yt_ann[:,i_reac])
+            progvar = self.compute_progvar(state, pressure, self.mechanism_type)
 
             # Attribute cluster
             self.attribute_cluster(state, progvar)
@@ -399,15 +449,15 @@ class ModelTesting(object):
             
             # advance to t + dt
             if Tt[i_reac] >= T_threshold:
-                T_new, Y_new = self.advance_state_NN(Tt[i_reac], Yt[:,i_reac], pressure, dt)
+                T_new, Y_new = self.advance_state_NN(Tt[i_reac], Yt_ann[:,i_reac], pressure, dt)
             else:
                 T_new = Tt[i_reac]
-                Y_new = Yt[:,i_reac]
+                Y_new = Yt_ann[:,i_reac]
             
             Yt_dt_ann[:,i_reac] = np.reshape(Y_new,-1)
 
         # Reaction rates
-        Omega_ann = (Yt_dt_ann-Yt)/dt
+        Omega_ann = (Yt_dt_ann-Yt_ann)/dt
 
 
         #-------------------- PLOTTING --------------------------- 
@@ -431,7 +481,6 @@ class ModelTesting(object):
             fig.savefig(folder + f"/Y{spec}.png", dpi=700)
 
             plt.show()
-
 
 
 #-----------------------------------------------------------------------
@@ -564,7 +613,10 @@ class ModelTesting(object):
     def advance_state_NN(self, T_old, Y_old, pressure, dt):
 
         # CANTERA gas object
-        gas = ct.Solution(self.mech)
+        if self.mechanism_type=="reduced":
+            gas = ct.Solution(self.reduced_mechanism)
+        else:
+            gas = ct.Solution(self.mech)
                 
         # Gas object modification
         gas.TPY= T_old, pressure, Y_old
@@ -574,7 +626,7 @@ class ModelTesting(object):
 
         # If N2 is not considered, it needs to be removed from the state_vector
         if self.remove_N2:
-            n2_index = self.spec_list.index("N2")
+            n2_index = self.spec_list_red.index("N2")
             n2_value = state_vector[n2_index+1]
             state_vector = np.delete(state_vector, n2_index+1)
 
@@ -585,7 +637,7 @@ class ModelTesting(object):
         elif self.log_transform==2:
             state_vector[state_vector<0.0] = 0.0
             
-        log_state = np.zeros(self.nb_species_NN+1)
+        log_state = np.zeros(self.nb_species_ANN+1)
         log_state[0] = state_vector[0]
         if self.log_transform==1:
             log_state[1:] = np.log(state_vector[1:])
@@ -637,7 +689,7 @@ class ModelTesting(object):
         T_new = state_vector[0] - (1/gas.cp)*np.sum(gas.partial_molar_enthalpies/gas.molecular_weights*(Y_new-Y_old))
         
         # Reshaping mass fraction vector
-        Y_new = Y_new.reshape(self.nb_species,1)
+        Y_new = Y_new.reshape(Y_new.shape[0],1)
 
 
         return T_new, Y_new
@@ -648,10 +700,13 @@ class ModelTesting(object):
 #-----------------------------------------------------------------------
 
     # TO CLEAN
-    def compute_progvar(self, state, pressure):
+    def compute_progvar(self, state, pressure, mechanism_type):
 
         # Equilibrium state in present conditions
-        gas = ct.Solution(self.mech)
+        if mechanism_type=="reduced":
+            gas = ct.Solution(self.reduced_mechanism)
+        else:
+            gas = ct.Solution(self.mech)
         gas.TPY = state[0], pressure, state[1:]
         gas.equilibrate('HP')
 
@@ -669,6 +724,57 @@ class ModelTesting(object):
         return progvar
         
 
+
+    # Closure model for fictive species
+    def close_fictive_species(self, Y_ref, Y_reduced):
+
+        # Transposing to have a shape nb_points,nb_species, which is more convenient
+        Y_ref = Y_ref.transpose()
+        Y_reduced = Y_reduced.transpose()
+
+        gas = ct.Solution(self.mech)
+        gas_reduced = ct.Solution(self.reduced_mechanism)
+
+        # Adding fictive species by conservation of properties
+        A_atomic = utils.get_molar_mass_atomic_matrix(gas.species_names, self.fuel, self.with_N_chemistry)
+        Ya = np.dot(A_atomic, Y_ref.transpose()).transpose()
+        h = np.sum(gas.partial_molar_enthalpies/gas.molecular_weights*Y_ref, axis=1)
+        #
+        A_atomic_reduced = utils.get_molar_mass_atomic_matrix(gas_reduced.species_names, self.fuel, self.with_N_chemistry)
+        Ya_reduced = np.dot(A_atomic_reduced, Y_reduced.transpose()).transpose()
+        h_reduced = np.sum(gas_reduced.partial_molar_enthalpies/gas_reduced.molecular_weights*Y_reduced, axis=1)
+        #
+        Delta_Ya = Ya - Ya_reduced
+        Delta_h = h - h_reduced
+        #
+        Delta = np.concatenate([Delta_Ya, Delta_h.reshape(-1,1)], axis=1)
+        #
+        A_atomic_fictive = utils.get_molar_mass_atomic_matrix(self.fictive_species, self.fuel, self.with_N_chemistry)
+        partial_molar_enthalpies_fictive = np.empty(self.nb_spec_fictive)
+        molecular_weights_fictive = np.empty(self.nb_spec_fictive)
+        for i, spec in enumerate(self.fictive_species):
+            partial_molar_enthalpies_fictive[i] = gas_reduced.partial_molar_enthalpies[gas_reduced.species_index(spec)]
+            molecular_weights_fictive[i] = gas_reduced.molecular_weights[gas_reduced.species_index(spec)]
+        #
+        delta_h_f = partial_molar_enthalpies_fictive/molecular_weights_fictive
+        #
+        matrix_linear_system = np.concatenate([A_atomic_fictive, delta_h_f.reshape(1,-1)])
+        #
+        matrix_inv = np.linalg.inv(matrix_linear_system)
+
+        # Getting mass fractions of fictive species
+        Yk_fictive = np.dot(matrix_inv, Delta.transpose()).transpose()
+        #
+        j = 0
+        for i, spec in enumerate(gas_reduced.species_names):
+            if spec in self.fictive_species:
+                Y_reduced[:,i] = Yk_fictive[:,j]
+                j+=1
+
+        # Transposing back
+        Y_reduced = Y_reduced.transpose()
+
+        return Y_reduced
 
 
 

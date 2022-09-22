@@ -13,7 +13,7 @@ training_parameters["dataset_path"] = "/work/mehlc/2_IA_KINETICS/ai_reacting_flo
 training_parameters["dt_simu"] = 5.0e-07     # Time step of the prediction
     
 training_parameters["fuel"] = "H2"           # Fuel
-training_parameters["mechanism"] = "/work/mehlc/2_IA_KINETICS/ai_reacting_flows/data/chemical_mechanisms/mech_H2.cti"    # CANTERA chemical mechanism file path
+training_parameters["mechanism_type"] = "reduced"    # Mechanism type for ANN chemistry: detailed or reduced
 
 training_parameters["remove_N2"] = True    # if True, N2 is removed from the neural network prediction
 

@@ -1,4 +1,4 @@
-import os
+import os, sys
 import shutil
 import pickle
 import shelve
@@ -7,10 +7,13 @@ import random
 import joblib
 import pandas as pd
 import numpy as np
+import cantera as ct
 import matplotlib.pyplot as plt
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
+
+import ai_reacting_flows.tools.utilities as utils
 
 
 class LearningDatabase(object):
@@ -23,6 +26,14 @@ class LearningDatabase(object):
         self.log_transform  = dtb_processing_parameters["log_transform"]
         self.threshold  = dtb_processing_parameters["threshold"]
         self.output_omegas  = dtb_processing_parameters["output_omegas"]
+        self.detailed_mechanism  = dtb_processing_parameters["detailed_mechanism"]
+        self.fuel  = dtb_processing_parameters["fuel"]
+        self.with_N_chemistry = dtb_processing_parameters["with_N_chemistry"]
+
+        # Check if mechanism is in YAML format
+        if self.detailed_mechanism.endswith("yaml") is False:
+            sys.exit("ERROR: chemical mechanism should be in yaml format !")
+
 
         # Load database
         self.X = pd.read_csv(self.dtb_folder + "/X_dtb.csv", delimiter=";")
@@ -60,8 +71,16 @@ class LearningDatabase(object):
         # Default BCT parameter
         self.lambda_bct = 0.1
 
+        # Saving detailed mechanism in database folder
+        shutil.copy(self.detailed_mechanism, self.dtb_folder + "/" + self.database_name + "/mech_detailed.yaml")
+
+        self.is_reduced = False
+
 
     def apply_temperature_threshold(self, T_threshold):
+
+        if self.clusterized_dataset:
+            sys.exit("ERROR: Temperature threshold should be performed before clustering")
 
         # Mask
         is_above_temp = self.X["Temperature"]>T_threshold
@@ -169,6 +188,144 @@ class LearningDatabase(object):
         self.X.drop(rows, axis=0, inplace=True)
         self.Y.drop(rows, axis=0, inplace=True)
 
+
+
+    # Function to reduce the species in the database. A closure based on fictive species is here selected
+    def reduce_species_set(self, species_subset, fictive_species):
+
+        # Checking if database has not already been reduced
+        if self.is_reduced:
+            sys.exit("ERROR: database is already reduced !")
+        self.is_reduced = True
+
+        # Number of species in each species set
+        nb_spec_red = len(species_subset)
+        nb_spec_fictive = len(fictive_species)
+
+        # Cantera for full mechanism
+        gas = ct.Solution(self.detailed_mechanism)
+        species_detailed = gas.species_names
+
+        # Getting matrix (Wj/Wk)*n_k^j   (Remark: order of atoms is C, H, O, N)
+        A_atomic_detailed = utils.get_molar_mass_atomic_matrix(species_detailed, self.fuel, self.with_N_chemistry)
+        
+        # Getting atomic mass fractions before reduction
+        Yk_in = self.X[gas.species_names].values
+        Yk_out = self.Y[gas.species_names].values
+        #
+        Ya_in = np.dot(A_atomic_detailed, Yk_in.transpose()).transpose()
+        Ya_out = np.dot(A_atomic_detailed, Yk_out.transpose()).transpose()
+
+        # Getting enthalpies
+        h_in = np.sum(gas.partial_molar_enthalpies/gas.molecular_weights*Yk_in, axis=1)
+        h_out = np.sum(gas.partial_molar_enthalpies/gas.molecular_weights*Yk_out, axis=1)
+
+
+        # Removing unwanted species
+        to_keep = ["Temperature", "Pressure"] + species_subset + ["Prog_var", "cluster"]
+        self.X = self.X[to_keep]
+        to_keep = ["Temperature", "Pressure"] + species_subset + ["Prog_var"]
+        self.Y = self.Y[to_keep]
+
+
+        # Getting atomic mass fractions of the reduced set of mass fractions
+        A_atomic_reduced = utils.get_molar_mass_atomic_matrix(species_subset, self.fuel, self.with_N_chemistry)
+        #
+        Yk_red_in = self.X[species_subset].values
+        Yk_red_out = self.Y[species_subset].values
+        #
+        Ya_red_in = np.dot(A_atomic_reduced, Yk_red_in.transpose()).transpose()
+        Ya_red_out = np.dot(A_atomic_reduced, Yk_red_out.transpose()).transpose()
+        # 
+        # We need reduced enthalpy and molecular weights vectors
+        partial_molar_enthalpies_red = np.empty(nb_spec_red)
+        molecular_weights_red = np.empty(nb_spec_red)
+        for i, spec in enumerate(species_subset):
+            partial_molar_enthalpies_red[i] = gas.partial_molar_enthalpies[gas.species_index(spec)]
+            molecular_weights_red[i] = gas.molecular_weights[gas.species_index(spec)]
+        #
+        h_red_in = np.sum(partial_molar_enthalpies_red/molecular_weights_red*Yk_red_in, axis=1)
+        h_red_out = np.sum(partial_molar_enthalpies_red/molecular_weights_red*Yk_red_out, axis=1)
+
+        # Missing atomic mass and enthalpy
+        Delta_Ya_in = Ya_in - Ya_red_in
+        Delta_Ya_out = Ya_out - Ya_red_out
+        #
+        Delta_h_in = h_in - h_red_in
+        Delta_h_out = h_out - h_red_out
+
+        # Creating delta vector
+        Delta_in = np.concatenate([Delta_Ya_in, Delta_h_in.reshape(-1,1)], axis=1)
+        Delta_out = np.concatenate([Delta_Ya_out, Delta_h_out.reshape(-1,1)], axis=1)
+
+        # Creating matrix
+        A_atomic_fictive = utils.get_molar_mass_atomic_matrix(fictive_species, self.fuel, self.with_N_chemistry)
+        # We need reduced enthalpy and molecular weights vectors for fictive species
+        partial_molar_enthalpies_fictive = np.empty(nb_spec_fictive)
+        molecular_weights_fictive = np.empty(nb_spec_fictive)
+        for i, spec in enumerate(fictive_species):
+            partial_molar_enthalpies_fictive[i] = gas.partial_molar_enthalpies[gas.species_index(spec)]
+            molecular_weights_fictive[i] = gas.molecular_weights[gas.species_index(spec)]
+        #
+        delta_h_f = partial_molar_enthalpies_fictive/molecular_weights_fictive
+        #
+        matrix_linear_system = np.concatenate([A_atomic_fictive, delta_h_f.reshape(1,-1)])
+
+        # Inverting matrix and solving system
+        matrix_inv = np.linalg.inv(matrix_linear_system)
+
+        # Getting mass fractions of fictive species
+        Yk_in_fictive = np.dot(matrix_inv, Delta_in.transpose()).transpose()
+        Yk_out_fictive = np.dot(matrix_inv, Delta_out.transpose()).transpose()
+
+        # Filling database with new fictive species
+        for i, spec in enumerate(fictive_species):
+            self.X[spec + "_F"] = Yk_in_fictive[:,i]
+            self.Y[spec + "_F"] = Yk_out_fictive[:,i]
+
+        # Moving progress variable and cluster at the end
+        self.X = self.X[[c for c in self.X if c not in ['Prog_var', 'cluster']] + ['Prog_var', 'cluster']]
+        self.Y = self.Y[[c for c in self.Y if c not in ['Prog_var',]] + ['Prog_var']]
+
+        # Modification of the CANTERA mechanism
+        mechanism = utils.cantera_yaml(self.detailed_mechanism)
+        mechanism.remove_reactions()
+        mechanism.reduce_mechanism_and_add_fictive_species(species_subset, fictive_species, "_F")
+        mechanism.export_to_yaml(self.dtb_folder + "/" + self.database_name + "/mech_reduced.yaml")
+
+
+        # Updating species names for later consistency
+        self.species_names = self.X.columns[2:-2]
+        self.nb_species = len(self.species_names)
+
+        #-----------------VERIFICATION---------------------------------
+        # Gas with retained species and fictive species
+        gas_red_mech = ct.Solution(self.dtb_folder + "/" + self.database_name + "/mech_reduced.yaml")
+
+        # Getting atomic mass fractions
+        A_atomic_new = utils.get_molar_mass_atomic_matrix(gas_red_mech.species_names, self.fuel, self.with_N_chemistry)
+        #
+        Yk_new_in = self.X[gas_red_mech.species_names].values
+        Yk_new_out = self.Y[gas_red_mech.species_names].values
+        #
+        Ya_new_in = np.dot(A_atomic_new, Yk_new_in.transpose()).transpose()
+        Ya_new_out = np.dot(A_atomic_new, Yk_new_out.transpose()).transpose()
+
+        # Enthalpies
+        h_new_in = np.sum(gas_red_mech.partial_molar_enthalpies/gas_red_mech.molecular_weights*Yk_new_in, axis=1)
+        h_new_out = np.sum(gas_red_mech.partial_molar_enthalpies/gas_red_mech.molecular_weights*Yk_new_out, axis=1)
+
+        # Residuals
+        res_Ya_in = Ya_in - Ya_new_in
+        res_Ya_out = Ya_out - Ya_new_out
+        res_h_in = h_in - h_new_in
+        res_h_out = h_out - h_new_out
+
+        # Checking that residuals are all small
+        assert res_Ya_in.max() < 1.0e-10
+        assert res_Ya_out.max() < 1.0e-10
+        assert res_h_in.max() < 1.0e-10
+        assert res_h_out.max() < 1.0e-10
 
 
 
