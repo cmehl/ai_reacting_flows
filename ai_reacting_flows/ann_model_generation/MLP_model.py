@@ -576,7 +576,7 @@ class MLPModel(object):
             # Intermediate dense layer
             # layers_dict["output_layer_interm"] = layers.Dense(units=Y_train.shape[1],kernel_regularizer=regularizers.l2(alpha_reg),kernel_initializer=initializers.GlorotUniform(), name="output_layer_interm")(layers_dict[f"activation_layer_{len(nb_units_in_layers)}"])
                 
-            output_layer_interm = layers.Dense(units=n_Y-1, kernel_regularizer=regularizers.l2(self.alpha_reg), kernel_initializer=initializers.GlorotUniform(),name='output_layer_interm')(layers_dict[f"activation_layer_{len(nb_units_in_layers)}"]) 
+            output_layer_interm = layers.Dense(units=n_Y-1, kernel_regularizer=regularizers.l2(self.alpha_reg), kernel_initializer=initializers.GlorotUniform(),name='output_layer_interm')(layers_dict[f"dense_layer_{len(nb_units_in_layers)}"]) 
 
 
             output_layer_1 = GetLeftPartLayer(self._left_n2, self._n2_index, kernel_initializer=initializers.GlorotUniform())(output_layer_interm)
@@ -640,7 +640,7 @@ class MLPModel(object):
         elif self.hard_constraints_model>0:
                 
             # Intermediate dense layer   
-            layers_dict['output_layer_interm'] = layers.Dense(units=n_Y, kernel_regularizer=regularizers.l2(self.alpha_reg), kernel_initializer=initializers.GlorotUniform(),name='output_layer_interm')(layers_dict[f"activation_layer_{len(nb_units_in_layers)}"])
+            layers_dict['output_layer_interm'] = layers.Dense(units=n_Y, kernel_regularizer=regularizers.l2(self.alpha_reg), kernel_initializer=initializers.GlorotUniform(),name='output_layer_interm')(layers_dict[f"dense_layer_{len(nb_units_in_layers)}"])
 
             if self.hard_constraints_model==1:
                 # Layer enforcing physical constraint
@@ -676,7 +676,12 @@ class MLPModel(object):
         # /!\ We assume that this is consistent with database /!\
         gas = ct.Solution(self.mechanism)
         spec_names = gas.species_names
-        nb_spec = gas.n_species
+
+        # If N2 not considered we remove it
+        if self.remove_N2:
+            spec_names.remove("N2")
+
+        nb_spec = len(spec_names)
 
         # Matrix with number of each atom in species (order of rows: C, H, O, N)
         atomic_array = utils.parse_species_names(spec_names)
@@ -695,33 +700,42 @@ class MLPModel(object):
             A_atomic[j,:] *=  mass_per_atom_array[j]
         for k in range(nb_spec):
             A_atomic[:,k] /=  mol_weights[k]
-        # We will need the transpose
-        self.A_atomic_t = np.transpose(A_atomic)
+
         # If hydrogen we discard carbon, so that the writing in keras custom layer is more simple
         if self.fuel=="H2":
-            self.A_atomic_t = self.A_atomic_t[:,1:]
+            A_atomic = A_atomic[1:,:]
+
+        # If we remove N2, we assume that we have no nitrogen at all
+        if self.remove_N2==True:
+            A_atomic = A_atomic[:-1,:]
+
+        # We will need the transpose
+        self.A_atomic_t = np.transpose(A_atomic)
             
         
         # For atomic conservation, we need to build the inverse of the following matrix
         # A=(ajk) where ajk = (Mj/Mk)*nkj
         # Where it is done for a subset of species used to balance conservation
         if self.hard_constraints_model==1:
-            
-            # Exception to tackle: H2 fuel does not have carbon
+
+            # We tackle each case: whether or not H and N are included
             if self.fuel=="H2":
-                balancing_species = ["H2O", "O2", "N2"]
-                mass_per_atom_array = np.array([1.008, 15.999, 14.007])
-                balancing_species_W = np.array([18.015, 31.998, 28.014])  
-                atoms_indices = [1,2,3]
+                if self.remove_N2==True: # N chemistry is not kept
+                    balancing_species = ["H2O", "O2"]
+                    mass_per_atom_array = np.array([1.008, 15.999])
+                else:
+                    balancing_species = ["H2O", "O2", "N2"]
+                    mass_per_atom_array = np.array([1.008, 15.999, 14.007])
             else:
-                balancing_species = ["CO2", "H2O", "O2", "N2"]
-                mass_per_atom_array = np.array([12.011, 1.008, 15.999])
-                balancing_species_W = np.array([44.009, 18.015, 31.998]) 
-                atoms_indices = [0,1,2,3]
+                if self.remove_N2==True: # N chemistry is not kept
+                    balancing_species = ["CO2", "H2O", "O2"]
+                    mass_per_atom_array = np.array([12.011, 1.008, 15.999, 14.007])
+                else:
+                    balancing_species = ["CO2", "H2O", "O2", "N2"]
+                    mass_per_atom_array = np.array([12.011, 1.008, 15.999])
                 
             # We take atomic_array and just keep desired species
             A_reduced = A_atomic[:,[spec_names.index(spec) for spec in balancing_species]]
-            A_reduced = A_reduced[atoms_indices,:]
                     
             # Inverting matrix
             try:
@@ -741,13 +755,9 @@ class MLPModel(object):
             #cst_spec_indices = [spec_names.index(spec) for spec in balancing_species]
         
         
-        # More natural method : orthogonal projection
+        # More natural method : orthogonal projection    /!\ NOT OPERATIONAL /!\
         if self.hard_constraints_model==2:
-            
-            # We need to restric A_atomic
-            if self.fuel=="H2":
-                A_atomic = A_atomic[1:,:]
-            
+
             # We need to form matrix L
             M = A_atomic
             MMt = np.dot(M, np.transpose(M))

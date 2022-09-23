@@ -60,13 +60,14 @@ class ModelTesting(object):
         # Getting species and number of species
         if self.mechanism_type=="reduced":
             gas_reduced = ct.Solution(self.reduced_mechanism)
-            self.spec_list_red = gas_reduced.species_names
-            self.nb_species_red = len(self.spec_list_red)
-            self.nb_species_ANN = self.nb_species_red
+            self.spec_list_ANN = gas_reduced.species_names
+            self.nb_species_ANN_tot = len(self.spec_list_ANN)
+            self.nb_species_ANN = self.nb_species_ANN_tot
             if self.remove_N2:
-                self.nb_species_ANN = self.nb_species_red - 1
+                self.nb_species_ANN = self.nb_species_ANN_tot - 1
         else:
-            self.nb_species_ANN = self.nb_species_ref
+            self.spec_list_ANN = self.spec_list_ref
+            self.nb_species_ANN_tot = self.nb_species_ref
             if self.remove_N2:
                 self.nb_species_ANN = self.nb_species_ref - 1
 
@@ -152,7 +153,7 @@ class ModelTesting(object):
         W_atoms = np.array([12.011, 1.008, 15.999, 14.007])
         
         # Matrix with number of each atom in species (order of rows: C, H, O, N)
-        atomic_array = utils.parse_species_names(self.spec_list_red)
+        atomic_array = utils.parse_species_names(self.spec_list_ANN)
 
         #-------------------- CVODE COMPUTATION---------------------------
         # Remark: we don't use the method we wrote below
@@ -231,7 +232,7 @@ class ModelTesting(object):
 
             
             # atomic composition of species  WHAT IS SELF.NO_SPECIES_NN ?
-            atomic_cons_current = np.dot(atomic_array,Y_new.reshape(self.nb_species_red)/molecular_weights)
+            atomic_cons_current = np.dot(atomic_array,Y_new.reshape(self.nb_species_ANN_tot)/molecular_weights)
             atomic_cons_current = np.multiply(W_atoms, atomic_cons_current)
             atomic_cons = np.vstack([atomic_cons,atomic_cons_current])
             
@@ -273,7 +274,7 @@ class ModelTesting(object):
         for spec in self.spec_to_plot:
             fig, ax = plt.subplots(1, 1)
             ax.plot(states.t, states.Y[:,gas.species_index(spec)], ls="--", color = "k", lw=2, label="CVODE")
-            ax.plot(states.t, state_save[:,self.spec_list_red.index(spec)+1], ls="-", color = "b", lw=2, marker='x', label="NN")
+            ax.plot(states.t, state_save[:,self.spec_list_ANN.index(spec)+1], ls="-", color = "b", lw=2, marker='x', label="NN")
             ax.set_xlabel('$t$ $[ms]$', fontsize=ftsize)
             ax.set_ylabel(f'{spec} mass fraction $[-]$', fontsize=ftsize)
             if spec=="N2": #because N2 is often constant
@@ -626,7 +627,7 @@ class ModelTesting(object):
 
         # If N2 is not considered, it needs to be removed from the state_vector
         if self.remove_N2:
-            n2_index = self.spec_list_red.index("N2")
+            n2_index = self.spec_list_ANN.index("N2")
             n2_value = state_vector[n2_index+1]
             state_vector = np.delete(state_vector, n2_index+1)
 
