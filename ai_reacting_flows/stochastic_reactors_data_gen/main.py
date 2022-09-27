@@ -84,24 +84,13 @@ def generate_stochastic_database(data_gen_parameters, comm):
     dt = data_gen_parameters["time_step"]
     time = 0.0
 
-    # Initial plots
-    if rank==0:
-        particle_cloud.plot_TZ_scatter_inst()
-        particle_cloud.plot_TZ_scatter_all()
-        if data_gen_parameters["calc_mean_traj"]:
-            particle_cloud.plot_TZ_trajectories()
-            particle_cloud.plot_T_time_trajectories()
-        if data_gen_parameters["ML_inference_flag"]==False:
-            particle_cloud.plot_pdf_T_inst()
-            particle_cloud.plot_pdf_T_all()
-
     while (time<data_gen_parameters["time_max"] and particle_cloud.stats_converged==False):
         
         # Advancing particles state by one dt
         time += dt
         particle_cloud.advance_time(dt)
 
-
+    # End of simulation operations
     if rank==0:
     
         # Export learning datasets (X and Y)
@@ -125,6 +114,19 @@ def generate_stochastic_database(data_gen_parameters, comm):
         # Plot final database pdf's
         if data_gen_parameters["ML_inference_flag"]==False:
             particle_cloud.plot_pdf_dtb_final()
+
+
+        # Plot some graphs to represent the data
+        particle_cloud.plot_TZ_scatter_inst()
+        particle_cloud.plot_TZ_scatter_all()
+        if data_gen_parameters["calc_mean_traj"]:
+            particle_cloud.plot_TZ_trajectories()
+            particle_cloud.plot_T_time_trajectories()
+        if data_gen_parameters["ML_inference_flag"]==False:
+            particle_cloud.plot_pdf_T_inst()
+            particle_cloud.plot_pdf_T_all()
+
+
 
     # Number of chemical states in database
     nb_states_dtb = particle_cloud.df_all_states.shape[0]

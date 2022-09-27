@@ -55,7 +55,6 @@ class ParticlesCloud(object):
         self.time = 0.0
         self.iteration = 0
         self.dt = data_gen_parameters["time_step"]
-        self.plot_freq = data_gen_parameters["plot_freq"]
         self.calc_mean_traj = data_gen_parameters["calc_mean_traj"]
         
         # Statistics convergence status
@@ -294,19 +293,6 @@ class ParticlesCloud(object):
         # Add states to pandas dataframe
         self._update_database()
         t5 = perf_counter()
-        
-        # Plots about particles states
-        if self.rank==0:
-
-            if self.iteration%self.plot_freq==0:
-                self.plot_TZ_scatter_inst()
-                self.plot_TZ_scatter_all()
-                if self.calc_mean_traj:
-                    self.plot_TZ_trajectories()
-                    self.plot_T_time_trajectories()
-                if self.ML_inference_flag==False:
-                    self.plot_pdf_T_inst()
-                    self.plot_pdf_T_all()
         
         # Additional statistics on particles
         self.calc_statistics()
