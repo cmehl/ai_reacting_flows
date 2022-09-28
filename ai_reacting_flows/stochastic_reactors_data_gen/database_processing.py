@@ -7,6 +7,7 @@ import random
 import joblib
 import pandas as pd
 import numpy as np
+import h5py
 import cantera as ct
 import matplotlib.pyplot as plt
 from sklearn.cluster import KMeans
@@ -35,9 +36,10 @@ class LearningDatabase(object):
             sys.exit("ERROR: chemical mechanism should be in yaml format !")
 
 
-        # Load database
-        self.X = pd.read_csv(self.dtb_folder + "/X_dtb.csv", delimiter=";")
-        self.Y = pd.read_csv(self.dtb_folder + "/Y_dtb.csv", delimiter=";")
+        # Read H5 files to get databases in pandas format
+        self.solution_folder = self.dtb_folder + "/solutions"
+        self.nb_solutions = len([entry for entry in os.listdir(self.solution_folder) if os.path.isfile(os.path.join(self.solution_folder, entry))])
+        self.get_database_from_h5()
 
         # Extracting some information
         self.species_names = self.X.columns[2:-1]
@@ -76,6 +78,36 @@ class LearningDatabase(object):
         shutil.copy(self.detailed_mechanism, self.dtb_folder + "/" + self.database_name + "/mech_detailed.yaml")
 
         self.is_reduced = False
+
+    
+    def get_database_from_h5(self):
+
+        # Solution 0
+        h5file_r = h5py.File(self.solution_folder + "/solution_00000.h5", 'r')
+        data_X = h5file_r.get("X")[()]
+        col_names_X = h5file_r["X"].attrs["cols"]
+        data_Y = h5file_r.get("Y")[()]
+        col_names_Y = h5file_r["Y"].attrs["cols"]
+        h5file_r.close()
+
+        self.X = pd.DataFrame(data=data_X, columns=col_names_X)
+        self.Y = pd.DataFrame(data=data_Y, columns=col_names_Y)
+
+        # Loop on other solutions
+        for i in range(1,self.nb_solutions):
+
+            h5file_r = h5py.File(self.solution_folder + f"/solution_{i:05d}.h5", 'r')
+            data_X = h5file_r.get("X")[()]
+            col_names_X = h5file_r["X"].attrs["cols"]
+            data_Y = h5file_r.get("Y")[()]
+            col_names_Y = h5file_r["Y"].attrs["cols"]
+            h5file_r.close()
+
+            df_X_current = pd.DataFrame(data=data_X, columns=col_names_X)
+            self.X = pd.concat([self.X, df_X_current], ignore_index=True)
+
+            df_Y_current = pd.DataFrame(data=data_Y, columns=col_names_Y)
+            self.Y = pd.concat([self.Y, df_Y_current], ignore_index=True)
 
 
     def apply_temperature_threshold(self, T_threshold):
