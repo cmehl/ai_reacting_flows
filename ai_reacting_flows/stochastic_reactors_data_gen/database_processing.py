@@ -362,7 +362,7 @@ class LearningDatabase(object):
 
 
 
-    def process_database(self):
+    def process_database(self, plot_distributions = False, distribution_species=[]):
 
         self.is_processed = True
 
@@ -376,6 +376,9 @@ class LearningDatabase(object):
         self.list_Y_p_val = []
 
         for i_cluster in range(self.nb_clusters):
+            
+            print("")
+            print(f"CLUSTER {i_cluster}:")
 
             # Isolate cluster i
             X_p = self.X[self.X["cluster"]==i_cluster]
@@ -447,10 +450,17 @@ class LearningDatabase(object):
             self.list_Y_p_val.append(Y_val)
 
             # Saving datasets
+            print(">> Saving datasets")
             X_train.to_csv(self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/X_train.csv", index=False)
             X_val.to_csv(self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/X_val.csv", index=False)
             Y_train.to_csv(self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/Y_train.csv", index=False)
             Y_val.to_csv(self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/Y_val.csv", index=False)
+
+            # Plotting distributions if necessary
+            if plot_distributions:
+                print(">> Plotting distributions")
+                for spec in distribution_species:
+                   self.plot_distributions(X_train, X_val, Y_train, Y_val, spec, i_cluster)
 
         
 
@@ -467,4 +477,65 @@ class LearningDatabase(object):
 
         print(f"\n => There are {size_total} points overall")
 
+
+
+    # Distribution plotting function
+    def plot_distributions(self, X_train, X_val, Y_train, Y_val, species, i_cluster):
+
+        # Number of collocations points for pdf
+        n = 400
+        
+        # Computing PDF's
+        x_train = np.linspace(X_train[species + "_X"].min(), X_train[species + "_X"].max(), n)
+        pdf_X_train = utils.compute_pdf(x_train, X_train[species + "_X"])
+
+        x_val = np.linspace(X_val[species + "_X"].min(), X_val[species + "_X"].max(), n)
+        pdf_X_val = utils.compute_pdf(x_val, X_val[species + "_X"])
+
+        y_train = np.linspace(Y_train[species + "_Y"].min(), Y_train[species + "_Y"].max(), n)
+        pdf_Y_train = utils.compute_pdf(y_train, Y_train[species + "_Y"])
+
+        y_val = np.linspace(Y_val[species + "_Y"].min(), Y_val[species + "_Y"].max(), n)
+        pdf_Y_val = utils.compute_pdf(y_val, Y_val[species + "_Y"])
+
+
+        fig1, (ax1, ax2) = plt.subplots(ncols=2)
+        fig2, (ax3, ax4) = plt.subplots(ncols=2)
+
+        ax1.plot(x_train, pdf_X_train, color="k", lw=2)
+        ax1.set_xlabel(f"{species} X $[-]$", fontsize=12)
+        ax1.set_ylabel("pdf $[-]$", fontsize=12)
+        #
+        ax2.plot(y_train, pdf_Y_train, color="k", lw=2)
+        ax2.set_xlabel(f"{species} Y $[-]$", fontsize=12)
+        ax2.set_ylabel("pdf $[-]$", fontsize=12)
+
+
+        ax3.plot(x_val, pdf_X_val, color="k", lw=2)
+        ax3.set_xlabel(f"{species} X $[-]$", fontsize=12)
+        ax3.set_ylabel("pdf $[-]$", fontsize=12)
+        #
+        ax4.plot(y_val, pdf_Y_val, color="k", lw=2)
+        ax4.set_xlabel(f"{species} Y $[-]$", fontsize=12)
+        ax4.set_ylabel("pdf $[-]$", fontsize=12)
+
+        for ax in [ax1,ax2,ax3,ax4]:
+            ax.ticklabel_format(axis="x", style="sci", scilimits=(0,0),useMathText=True)
+            ax.ticklabel_format(axis="y", style="sci", scilimits=(0,0),useMathText=True)
+
+            ax.xaxis.get_offset_text().set_fontsize(10)
+            ax.yaxis.get_offset_text().set_fontsize(10)
+
+            ax.tick_params(axis='both', which='major', labelsize=10)
+            ax.tick_params(axis='both', which='minor', labelsize=8)
+
+            ax.set_aspect(1.0/ax.get_data_ratio(), adjustable='box')
+
+
+        fig1.tight_layout()
+        fig2.tight_layout()
+
+
+        fig1.savefig(self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/distrib_{species}_train.png", dpi=300, bbox_inches='tight')
+        fig2.savefig(self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/distrib_{species}_val.png", dpi=300, bbox_inches='tight')
 
