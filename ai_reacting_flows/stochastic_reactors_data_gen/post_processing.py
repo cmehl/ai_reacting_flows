@@ -72,7 +72,7 @@ class StochDatabase(object):
             h5file_r.close()
 
             df_current = pd.DataFrame(data=data, columns=col_names)
-            self.df = pd.concat([df_current, df_current], ignore_index=True)
+            self.df = pd.concat([self.df, df_current], ignore_index=True)
 
         
 
