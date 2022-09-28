@@ -22,8 +22,10 @@ class StochDatabase(object):
         self.add_1D_premixed_archetype = False
 
         # Loading database: concatenation of each data in h5 file
-        self.solution_folder = stoch_dtb_folder + "/solutions"
-        self.nb_solutions = len([entry for entry in os.listdir(self.solution_folder) if os.path.isfile(os.path.join(self.solution_folder, entry))])
+        h5file_r = h5py.File(self.stoch_dtb_folder + f"/solutions.h5", 'r')
+        names = h5file_r.keys()
+        self.nb_solutions = len(names)
+        h5file_r.close()
         self.get_all_states()
 
         # Loading trajectories
@@ -56,23 +58,22 @@ class StochDatabase(object):
     def get_all_states(self):
 
         # Solution 0
-        h5file_r = h5py.File(self.solution_folder + "/solution_00000.h5", 'r')
-        data = h5file_r.get("all_states")[()]
-        col_names = h5file_r["all_states"].attrs["cols"]
-        h5file_r.close()
+        h5file_r = h5py.File(self.stoch_dtb_folder + "/solutions.h5", 'r')
+        data = h5file_r.get("ITERATION_00000/all_states")[()]
+        col_names = h5file_r["ITERATION_00000/all_states"].attrs["cols"]
 
         self.df = pd.DataFrame(data=data, columns=col_names)
 
         # Loop on other solutions
         for i in range(1,self.nb_solutions):
 
-            h5file_r = h5py.File(self.solution_folder + f"/solution_{i:05d}.h5", 'r')
-            data = h5file_r.get("all_states")[()]
-            col_names = h5file_r["all_states"].attrs["cols"]
-            h5file_r.close()
+            data = h5file_r.get(f"ITERATION_{i:05d}/all_states")[()]
 
             df_current = pd.DataFrame(data=data, columns=col_names)
             self.df = pd.concat([self.df, df_current], ignore_index=True)
+
+        h5file_r.close()
+
 
         
 
@@ -177,9 +178,9 @@ class StochDatabase(object):
     def plot_T_Z_indiv(self, iteration):
 
         # Loading solution at given iteration
-        h5file_r = h5py.File(self.solution_folder + f"/solution_{iteration:05d}.h5", 'r')
-        data = h5file_r.get("all_states")[()]
-        col_names = h5file_r["all_states"].attrs["cols"]
+        h5file_r = h5py.File(self.stoch_dtb_folder + f"/solutions.h5", 'r')
+        data = h5file_r.get(f"ITERATION_{iteration:05d}/all_states")[()]
+        col_names = h5file_r[f"ITERATION_{iteration:05d}/all_states"].attrs["cols"]
         h5file_r.close()
         df = pd.DataFrame(data=data, columns=col_names)
 
@@ -201,9 +202,9 @@ class StochDatabase(object):
     def plot_Z_Yk_indiv(self, species_to_plot, iteration):
 
         # Loading solution at given iteration
-        h5file_r = h5py.File(self.solution_folder + f"/solution_{iteration:05d}.h5", 'r')
-        data = h5file_r.get("all_states")[()]
-        col_names = h5file_r["all_states"].attrs["cols"]
+        h5file_r = h5py.File(self.stoch_dtb_folder + f"/solutions.h5", 'r')
+        data = h5file_r.get(f"ITERATION_{iteration:05d}/all_states")[()]
+        col_names = h5file_r[f"ITERATION_{iteration:05d}/all_states"].attrs["cols"]
         h5file_r.close()
         df = pd.DataFrame(data=data, columns=col_names)
 
@@ -227,9 +228,9 @@ class StochDatabase(object):
     def plot_T_Yk_indiv(self, species_to_plot, iteration):
 
         # Loading solution at given iteration
-        h5file_r = h5py.File(self.solution_folder + f"/solution_{iteration:05d}.h5", 'r')
-        data = h5file_r.get("all_states")[()]
-        col_names = h5file_r["all_states"].attrs["cols"]
+        h5file_r = h5py.File(self.stoch_dtb_folder + f"/solutions.h5", 'r')
+        data = h5file_r.get(f"ITERATION_{iteration:05d}/all_states")[()]
+        col_names = h5file_r[f"ITERATION_{iteration:05d}/all_states"].attrs["cols"]
         h5file_r.close()
         df = pd.DataFrame(data=data, columns=col_names)
 
@@ -369,9 +370,9 @@ class StochDatabase(object):
     def plot_pdf_T_inst(self, iteration):    
 
         # Loading solution at given iteration
-        h5file_r = h5py.File(self.solution_folder + f"/solution_{iteration:05d}.h5", 'r')
-        data = h5file_r.get("all_states")[()]
-        col_names = h5file_r["all_states"].attrs["cols"]
+        h5file_r = h5py.File(self.stoch_dtb_folder + f"/solutions.h5", 'r')
+        data = h5file_r.get(f"ITERATION_{iteration:05d}/all_states")[()]
+        col_names = h5file_r[f"ITERATION_{iteration:05d}/all_states"].attrs["cols"]
         h5file_r.close()
         df = pd.DataFrame(data=data, columns=col_names)
             

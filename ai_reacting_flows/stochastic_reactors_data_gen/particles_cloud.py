@@ -179,10 +179,6 @@ class ParticlesCloud(object):
         #     INPUT/OUTPUT INITIALIZATION
         # =====================================================================
 
-        if self.rank==0:
-            # Folder with solutions
-            os.mkdir(self.results_folder +  "/solutions/")
-
         # Columns of data array with solution and post-processing variables
         self.cols_all_states = ['Temperature'] + ['Pressure'] + self.species_names + ['Mix_frac'] + ['Equiv_ratio'] + ['Prog_var'] +  ['Time'] + ['Particle_number'] + ['Inlet_number'] + ['Y_C', 'Y_H', 'Y_O', 'Y_N']
         
@@ -597,8 +593,9 @@ class ParticlesCloud(object):
             arr[i,part.nb_state_vars+6:part.nb_state_vars+10] = part.atomic_mass_fractions
 
         # Store initial solution in h5 file
-        f = h5py.File(self.results_folder +  f"/solutions/solution_{self.iteration:05d}.h5","a")
-        dset = f.create_dataset("all_states",data=arr)
+        f = h5py.File(self.results_folder +  f"/solutions.h5","a")
+        grp = f.create_group(f"ITERATION_{self.iteration:05d}")    # Group created because this function is called first
+        dset = grp.create_dataset("all_states",data=arr)
         dset.attrs["cols"] = self.cols_all_states
         f.close()
 
@@ -618,8 +615,9 @@ class ParticlesCloud(object):
             arr[i,part.nb_state_vars] = part.prog_var
 
         # Store initial solution in h5 file
-        f = h5py.File(self.results_folder +  f"/solutions/solution_{self.iteration:05d}.h5","a")
-        dset = f.create_dataset(which_state,data=arr)
+        f = h5py.File(self.results_folder +  f"/solutions.h5","a")
+        grp = f.get(f"ITERATION_{self.iteration:05d}")
+        dset = grp.create_dataset(which_state,data=arr)
         dset.attrs["cols"] = cols
         f.close()
 
