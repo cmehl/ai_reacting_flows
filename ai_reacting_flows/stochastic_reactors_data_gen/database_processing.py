@@ -492,11 +492,12 @@ class LearningDatabase(object):
         x_val = np.linspace(X_val[species + "_X"].min(), X_val[species + "_X"].max(), n)
         pdf_X_val = utils.compute_pdf(x_val, X_val[species + "_X"])
 
-        y_train = np.linspace(Y_train[species + "_Y"].min(), Y_train[species + "_Y"].max(), n)
-        pdf_Y_train = utils.compute_pdf(y_train, Y_train[species + "_Y"])
+        if species!="Temperature":
+            y_train = np.linspace(Y_train[species + "_Y"].min(), Y_train[species + "_Y"].max(), n)
+            pdf_Y_train = utils.compute_pdf(y_train, Y_train[species + "_Y"])
 
-        y_val = np.linspace(Y_val[species + "_Y"].min(), Y_val[species + "_Y"].max(), n)
-        pdf_Y_val = utils.compute_pdf(y_val, Y_val[species + "_Y"])
+            y_val = np.linspace(Y_val[species + "_Y"].min(), Y_val[species + "_Y"].max(), n)
+            pdf_Y_val = utils.compute_pdf(y_val, Y_val[species + "_Y"])
 
 
         fig1, (ax1, ax2) = plt.subplots(ncols=2)
@@ -506,18 +507,20 @@ class LearningDatabase(object):
         ax1.set_xlabel(f"{species} X $[-]$", fontsize=12)
         ax1.set_ylabel("pdf $[-]$", fontsize=12)
         #
-        ax2.plot(y_train, pdf_Y_train, color="k", lw=2)
-        ax2.set_xlabel(f"{species} Y $[-]$", fontsize=12)
-        ax2.set_ylabel("pdf $[-]$", fontsize=12)
+        if species!="Temperature":
+            ax2.plot(y_train, pdf_Y_train, color="k", lw=2)
+            ax2.set_xlabel(f"{species} Y $[-]$", fontsize=12)
+            ax2.set_ylabel("pdf $[-]$", fontsize=12)
 
 
         ax3.plot(x_val, pdf_X_val, color="k", lw=2)
         ax3.set_xlabel(f"{species} X $[-]$", fontsize=12)
         ax3.set_ylabel("pdf $[-]$", fontsize=12)
         #
-        ax4.plot(y_val, pdf_Y_val, color="k", lw=2)
-        ax4.set_xlabel(f"{species} Y $[-]$", fontsize=12)
-        ax4.set_ylabel("pdf $[-]$", fontsize=12)
+        if species!="Temperature":
+            ax4.plot(y_val, pdf_Y_val, color="k", lw=2)
+            ax4.set_xlabel(f"{species} Y $[-]$", fontsize=12)
+            ax4.set_ylabel("pdf $[-]$", fontsize=12)
 
         for ax in [ax1,ax2,ax3,ax4]:
             ax.ticklabel_format(axis="x", style="sci", scilimits=(0,0),useMathText=True)
