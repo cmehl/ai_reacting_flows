@@ -185,8 +185,6 @@ class ParticlesCloud(object):
 
         # Columns of data array with solution and post-processing variables
         self.cols_all_states = ['Temperature'] + ['Pressure'] + self.species_names + ['Mix_frac'] + ['Equiv_ratio'] + ['Prog_var'] +  ['Time'] + ['Particle_number'] + ['Inlet_number'] + ['Y_C', 'Y_H', 'Y_O', 'Y_N']
-        self.n_cols = self.nb_state_vars + 6 + 4
-
         
         # Initialize mean trajectories
         if self.calc_mean_traj:
@@ -583,7 +581,7 @@ class ParticlesCloud(object):
     def _write_solution(self):
         
         # Set current iteration results in a dataframe
-        arr = np.empty((self.nb_parts_tot, self.n_cols))
+        arr = np.empty((self.nb_parts_tot, len(self.cols_all_states)))
         for i in range(self.nb_parts_tot):
             # i-th particle
             part = self.particles_list[i]
@@ -610,7 +608,7 @@ class ParticlesCloud(object):
         
         # Set current iteration results in a dataframe
         cols = ['Temperature'] + ['Pressure'] + self.species_names + ['Prog_var']
-        arr = np.empty((self.nb_parts_tot, self.n_cols))
+        arr = np.empty((self.nb_parts_tot, len(cols)))
         for i in range(self.nb_parts_tot):
             # i-th particle
             part = self.particles_list[i]
@@ -624,7 +622,7 @@ class ParticlesCloud(object):
         dset = f.create_dataset(which_state,data=arr)
         dset.attrs["cols"] = cols
         f.close()
-        
+
 
 # =============================================================================
 #   PARTICLES STATISTICS COMPUTATION 
