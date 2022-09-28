@@ -600,7 +600,8 @@ class ParticlesCloud(object):
 
         # Store initial solution in h5 file
         f = h5py.File(self.results_folder +  f"/solutions/solution_{self.iteration:05d}.h5","a")
-        f.create_dataset("all_states",data=arr)
+        dset = f.create_dataset("all_states",data=arr)
+        dset.attrs["cols"] = self.cols_all_states
         f.close()
 
 
@@ -608,6 +609,7 @@ class ParticlesCloud(object):
     def _update_dtb_states(self, which_state):
         
         # Set current iteration results in a dataframe
+        cols = ['Temperature'] + ['Pressure'] + self.species_names + ['Prog_var']
         arr = np.empty((self.nb_parts_tot, self.n_cols))
         for i in range(self.nb_parts_tot):
             # i-th particle
@@ -619,7 +621,8 @@ class ParticlesCloud(object):
 
         # Store initial solution in h5 file
         f = h5py.File(self.results_folder +  f"/solutions/solution_{self.iteration:05d}.h5","a")
-        f.create_dataset(which_state,data=arr)
+        dset = f.create_dataset(which_state,data=arr)
+        dset.attrs["cols"] = cols
         f.close()
         
 
@@ -645,8 +648,8 @@ class ParticlesCloud(object):
 
     def plot_stats(self):
             
-        if not os.path.isdir(self.results_folder + "/figures/statistics"):
-            os.mkdir(self.results_folder + "/figures/statistics")
+        if not os.path.isdir(self.results_folder + "/statistics"):
+            os.mkdir(self.results_folder + "/statistics")
             
         # Creating the time vector
         N = len(self.mean_T_vect)
@@ -664,7 +667,7 @@ class ParticlesCloud(object):
         ax1.set_ylabel("$T$ $[K]$")
         fig1.legend()
         fig1.tight_layout()
-        fig1.savefig(self.results_folder + "/figures/statistics/stats_T.png")
+        fig1.savefig(self.results_folder + "/statistics/stats_T.png")
         plt.close()
         
         
@@ -676,7 +679,7 @@ class ParticlesCloud(object):
         ax2.set_ylim([0,1])
         fig2.legend()
         fig2.tight_layout()
-        fig2.savefig(self.results_folder + "/figures/statistics/ratio_T.png")
+        fig2.savefig(self.results_folder + "/statistics/ratio_T.png")
         plt.close()
             
 # =============================================================================
