@@ -351,16 +351,16 @@ class LearningDatabase(object):
         h_new_out = np.sum(gas_red_mech.partial_molar_enthalpies/gas_red_mech.molecular_weights*Yk_new_out, axis=1)
 
         # Residuals
-        res_Ya_in = Ya_in - Ya_new_in
-        res_Ya_out = Ya_out - Ya_new_out
-        res_h_in = h_in - h_new_in
-        res_h_out = h_out - h_new_out
+        res_rel_Ya_in = np.abs((Ya_in - Ya_new_in)/Ya_in)
+        res_rel_Ya_out = np.abs((Ya_out - Ya_new_out)/Ya_out)
+        res_rel_h_in = np.abs((h_in - h_new_in)/h_in)
+        res_rel_h_out = np.abs((h_out - h_new_out)/h_out)
 
         # Checking that residuals are all small
-        assert res_Ya_in.max() < 1.0e-10
-        assert res_Ya_out.max() < 1.0e-10
-        assert res_h_in.max() < 1.0e-10
-        assert res_h_out.max() < 1.0e-10
+        assert res_rel_Ya_in.max() < 1.0e-10
+        assert res_rel_Ya_out.max() < 1.0e-10
+        assert res_rel_h_in.max() < 1.0e-10
+        assert res_rel_h_out.max() < 1.0e-10
 
 
 
