@@ -228,7 +228,6 @@ class LearningDatabase(object):
         # Checking if database has not already been reduced
         if self.is_reduced:
             sys.exit("ERROR: database is already reduced !")
-        self.is_reduced = True
 
         # Number of species in each species set
         nb_spec_red = len(species_subset)
@@ -258,6 +257,10 @@ class LearningDatabase(object):
         self.X = self.X[to_keep]
         to_keep = ["Temperature", "Pressure"] + species_subset + ["Prog_var"]
         self.Y = self.Y[to_keep]
+
+
+        # Flag is changed here because databases have been changed
+        self.is_reduced = True
 
 
         # Getting atomic mass fractions of the reduced set of mass fractions
