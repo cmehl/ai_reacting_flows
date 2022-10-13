@@ -61,6 +61,7 @@ class LearningDatabase(object):
         shelfFile["log_transform"] = self.log_transform
         shelfFile["output_omegas"] = self.output_omegas
         shelfFile["with_N_chemistry"] = self.with_N_chemistry
+        shelfFile["clusterization_method"] = None   # Default value, erased if clustering is done
         #
         shelfFile.close()
 
