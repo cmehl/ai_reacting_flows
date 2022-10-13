@@ -104,9 +104,13 @@ class ModelTesting(object):
 
         # Progress variable definition (we do it in any case, even if no clustering based on progress variable)
         self.pv_species = testing_parameters["pv_species"]
-        self.pv_ind = []
+        self.pv_ind_detailed = []
+        if self.mechanism_type=="reduced":
+            self.pv_ind_reduced = []
         for i in range(len(self.pv_species)):
-            self.pv_ind.append(gas.species_index(self.pv_species[i])) 
+            self.pv_ind_detailed.append(gas.species_index(self.pv_species[i])) 
+            if self.mechanism_type=="reduced":
+                self.pv_ind_reduced.append(gas_reduced.species_index(self.pv_species[i])) 
 
 
         # Getting fictive species names
@@ -472,7 +476,10 @@ class ModelTesting(object):
         for spec in self.spec_to_plot:
             fig, ax = plt.subplots(1, 1)
             ax.plot(f.grid, Omega_exact[gas.species_index(spec),:], ls="-", color = "b", lw=2, label="Exact")
-            ax.plot(f.grid, Omega_ann[gas.species_index(spec),:], ls="--", color = "purple", lw=2, label="Neural network")
+            if self.mechanism_type=="reduced":
+                ax.plot(f.grid, Omega_ann[gas_reduced.species_index(spec),:], ls="--", color = "purple", lw=2, label="Neural network")
+            else:
+                ax.plot(f.grid, Omega_ann[gas.species_index(spec),:], ls="--", color = "purple", lw=2, label="Neural network")
             ax.set_xlabel('$x$ [m]')
             ax.set_ylabel(f'{spec} Reaction rate')
             ax.set_xlim([0.008, 0.014])
@@ -576,6 +583,8 @@ class ModelTesting(object):
             for i in range(self.nb_clusters):
                 if progvar>=self.c_bounds[i] and progvar<self.c_bounds[i+1]:
                     self.cluster = i
+                elif progvar==1.0:
+                    self.cluster = self.nb_clusters - 1
         # By default if no clustering, we assume that we only have a cluster 0
         else:
             self.cluster = 0
@@ -706,14 +715,16 @@ class ModelTesting(object):
         # Equilibrium state in present conditions
         if mechanism_type=="reduced":
             gas = ct.Solution(self.reduced_mechanism)
+            pv_ind = self.pv_ind_reduced
         else:
             gas = ct.Solution(self.mech)
+            pv_ind = self.pv_ind_detailed
         gas.TPY = state[0], pressure, state[1:]
         gas.equilibrate('HP')
 
         Yc_eq = 0.0
         Yc = 0.0
-        for i in self.pv_ind:
+        for i in pv_ind:
             Yc_eq += gas.Y[i]
             Yc += state[i+1]
      

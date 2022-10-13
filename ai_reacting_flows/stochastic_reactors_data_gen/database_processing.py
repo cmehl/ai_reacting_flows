@@ -7,6 +7,7 @@ import random
 import joblib
 import pandas as pd
 import numpy as np
+import h5py
 import cantera as ct
 import matplotlib.pyplot as plt
 from sklearn.cluster import KMeans
@@ -35,9 +36,12 @@ class LearningDatabase(object):
             sys.exit("ERROR: chemical mechanism should be in yaml format !")
 
 
-        # Load database
-        self.X = pd.read_csv(self.dtb_folder + "/X_dtb.csv", delimiter=";")
-        self.Y = pd.read_csv(self.dtb_folder + "/Y_dtb.csv", delimiter=";")
+        # Read H5 files to get databases in pandas format
+        h5file_r = h5py.File(self.dtb_folder + f"/solutions.h5", 'r')
+        names = h5file_r.keys()
+        self.nb_solutions = len(names)
+        h5file_r.close()
+        self.get_database_from_h5()
 
         # Extracting some information
         self.species_names = self.X.columns[2:-1]
@@ -57,6 +61,7 @@ class LearningDatabase(object):
         shelfFile["log_transform"] = self.log_transform
         shelfFile["output_omegas"] = self.output_omegas
         shelfFile["with_N_chemistry"] = self.with_N_chemistry
+        shelfFile["clusterization_method"] = None   # Default value, erased if clustering is done
         #
         shelfFile.close()
 
@@ -76,6 +81,33 @@ class LearningDatabase(object):
         shutil.copy(self.detailed_mechanism, self.dtb_folder + "/" + self.database_name + "/mech_detailed.yaml")
 
         self.is_reduced = False
+
+    
+    def get_database_from_h5(self):
+
+        # Solution 0
+        h5file_r = h5py.File(self.dtb_folder + "/solutions.h5", 'r')
+        data_X = h5file_r.get("ITERATION_00000/X")[()]
+        col_names_X = h5file_r["ITERATION_00000/X"].attrs["cols"]
+        data_Y = h5file_r.get("ITERATION_00000/Y")[()]
+        col_names_Y = h5file_r["ITERATION_00000/Y"].attrs["cols"]
+
+        self.X = pd.DataFrame(data=data_X, columns=col_names_X)
+        self.Y = pd.DataFrame(data=data_Y, columns=col_names_Y)
+
+        # Loop on other solutions
+        for i in range(1,self.nb_solutions):
+
+            data_X = h5file_r.get(f"ITERATION_{i:05d}/X")[()]
+            data_Y = h5file_r.get(f"ITERATION_{i:05d}/Y")[()]
+
+            df_X_current = pd.DataFrame(data=data_X, columns=col_names_X)
+            self.X = pd.concat([self.X, df_X_current], ignore_index=True)
+
+            df_Y_current = pd.DataFrame(data=data_Y, columns=col_names_Y)
+            self.Y = pd.concat([self.Y, df_Y_current], ignore_index=True)
+
+        h5file_r.close()
 
 
     def apply_temperature_threshold(self, T_threshold):
@@ -197,7 +229,6 @@ class LearningDatabase(object):
         # Checking if database has not already been reduced
         if self.is_reduced:
             sys.exit("ERROR: database is already reduced !")
-        self.is_reduced = True
 
         # Number of species in each species set
         nb_spec_red = len(species_subset)
@@ -227,6 +258,10 @@ class LearningDatabase(object):
         self.X = self.X[to_keep]
         to_keep = ["Temperature", "Pressure"] + species_subset + ["Prog_var"]
         self.Y = self.Y[to_keep]
+
+
+        # Flag is changed here because databases have been changed
+        self.is_reduced = True
 
 
         # Getting atomic mass fractions of the reduced set of mass fractions
@@ -317,20 +352,20 @@ class LearningDatabase(object):
         h_new_out = np.sum(gas_red_mech.partial_molar_enthalpies/gas_red_mech.molecular_weights*Yk_new_out, axis=1)
 
         # Residuals
-        res_Ya_in = Ya_in - Ya_new_in
-        res_Ya_out = Ya_out - Ya_new_out
-        res_h_in = h_in - h_new_in
-        res_h_out = h_out - h_new_out
+        res_rel_Ya_in = np.abs((Ya_in - Ya_new_in)/Ya_in)
+        res_rel_Ya_out = np.abs((Ya_out - Ya_new_out)/Ya_out)
+        res_rel_h_in = np.abs((h_in - h_new_in)/h_in)
+        res_rel_h_out = np.abs((h_out - h_new_out)/h_out)
 
         # Checking that residuals are all small
-        assert res_Ya_in.max() < 1.0e-10
-        assert res_Ya_out.max() < 1.0e-10
-        assert res_h_in.max() < 1.0e-10
-        assert res_h_out.max() < 1.0e-10
+        assert res_rel_Ya_in.max() < 1.0e-10
+        assert res_rel_Ya_out.max() < 1.0e-10
+        assert res_rel_h_in.max() < 1.0e-10
+        assert res_rel_h_out.max() < 1.0e-10
 
 
 
-    def process_database(self):
+    def process_database(self, plot_distributions = False, distribution_species=[]):
 
         self.is_processed = True
 
@@ -344,6 +379,9 @@ class LearningDatabase(object):
         self.list_Y_p_val = []
 
         for i_cluster in range(self.nb_clusters):
+            
+            print("")
+            print(f"CLUSTER {i_cluster}:")
 
             # Isolate cluster i
             X_p = self.X[self.X["cluster"]==i_cluster]
@@ -415,10 +453,17 @@ class LearningDatabase(object):
             self.list_Y_p_val.append(Y_val)
 
             # Saving datasets
+            print(">> Saving datasets")
             X_train.to_csv(self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/X_train.csv", index=False)
             X_val.to_csv(self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/X_val.csv", index=False)
             Y_train.to_csv(self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/Y_train.csv", index=False)
             Y_val.to_csv(self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/Y_val.csv", index=False)
+
+            # Plotting distributions if necessary
+            if plot_distributions:
+                print(">> Plotting distributions")
+                for spec in distribution_species:
+                   self.plot_distributions(X_train, X_val, Y_train, Y_val, spec, i_cluster)
 
         
 
@@ -435,4 +480,68 @@ class LearningDatabase(object):
 
         print(f"\n => There are {size_total} points overall")
 
+
+
+    # Distribution plotting function
+    def plot_distributions(self, X_train, X_val, Y_train, Y_val, species, i_cluster):
+
+        # Number of collocations points for pdf
+        n = 400
+        
+        # Computing PDF's
+        x_train = np.linspace(X_train[species + "_X"].min(), X_train[species + "_X"].max(), n)
+        pdf_X_train = utils.compute_pdf(x_train, X_train[species + "_X"])
+
+        x_val = np.linspace(X_val[species + "_X"].min(), X_val[species + "_X"].max(), n)
+        pdf_X_val = utils.compute_pdf(x_val, X_val[species + "_X"])
+
+        if species!="Temperature":
+            y_train = np.linspace(Y_train[species + "_Y"].min(), Y_train[species + "_Y"].max(), n)
+            pdf_Y_train = utils.compute_pdf(y_train, Y_train[species + "_Y"])
+
+            y_val = np.linspace(Y_val[species + "_Y"].min(), Y_val[species + "_Y"].max(), n)
+            pdf_Y_val = utils.compute_pdf(y_val, Y_val[species + "_Y"])
+
+
+        fig1, (ax1, ax2) = plt.subplots(ncols=2)
+        fig2, (ax3, ax4) = plt.subplots(ncols=2)
+
+        ax1.plot(x_train, pdf_X_train, color="k", lw=2)
+        ax1.set_xlabel(f"{species} X $[-]$", fontsize=12)
+        ax1.set_ylabel("pdf $[-]$", fontsize=12)
+        #
+        if species!="Temperature":
+            ax2.plot(y_train, pdf_Y_train, color="k", lw=2)
+            ax2.set_xlabel(f"{species} Y $[-]$", fontsize=12)
+            ax2.set_ylabel("pdf $[-]$", fontsize=12)
+
+
+        ax3.plot(x_val, pdf_X_val, color="k", lw=2)
+        ax3.set_xlabel(f"{species} X $[-]$", fontsize=12)
+        ax3.set_ylabel("pdf $[-]$", fontsize=12)
+        #
+        if species!="Temperature":
+            ax4.plot(y_val, pdf_Y_val, color="k", lw=2)
+            ax4.set_xlabel(f"{species} Y $[-]$", fontsize=12)
+            ax4.set_ylabel("pdf $[-]$", fontsize=12)
+
+        for ax in [ax1,ax2,ax3,ax4]:
+            ax.ticklabel_format(axis="x", style="sci", scilimits=(0,0),useMathText=True)
+            ax.ticklabel_format(axis="y", style="sci", scilimits=(0,0),useMathText=True)
+
+            ax.xaxis.get_offset_text().set_fontsize(10)
+            ax.yaxis.get_offset_text().set_fontsize(10)
+
+            ax.tick_params(axis='both', which='major', labelsize=10)
+            ax.tick_params(axis='both', which='minor', labelsize=8)
+
+            ax.set_aspect(1.0/ax.get_data_ratio(), adjustable='box')
+
+
+        fig1.tight_layout()
+        fig2.tight_layout()
+
+
+        fig1.savefig(self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/distrib_{species}_train.png", dpi=300, bbox_inches='tight')
+        fig2.savefig(self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/distrib_{species}_val.png", dpi=300, bbox_inches='tight')
 

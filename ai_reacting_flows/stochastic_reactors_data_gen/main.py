@@ -66,7 +66,6 @@ def generate_stochastic_database(data_gen_parameters, comm):
             PRINT("WARNING: existing results directory has been removed. \n")
             shutil.rmtree(results_folder)
         os.mkdir(results_folder)
-        os.mkdir(results_folder + "/figures")
 
         # Copying input files to results folder to document run
         shutil.copy("./" + data_gen_parameters["inlets_file"], results_folder)
@@ -84,50 +83,23 @@ def generate_stochastic_database(data_gen_parameters, comm):
     dt = data_gen_parameters["time_step"]
     time = 0.0
 
-    # Initial plots
-    if rank==0:
-        particle_cloud.plot_TZ_scatter_inst()
-        particle_cloud.plot_TZ_scatter_all()
-        if data_gen_parameters["calc_mean_traj"]:
-            particle_cloud.plot_TZ_trajectories()
-            particle_cloud.plot_T_time_trajectories()
-        if data_gen_parameters["ML_inference_flag"]==False:
-            particle_cloud.plot_pdf_T_inst()
-            particle_cloud.plot_pdf_T_all()
-
     while (time<data_gen_parameters["time_max"] and particle_cloud.stats_converged==False):
         
         # Advancing particles state by one dt
         time += dt
         particle_cloud.advance_time(dt)
 
-
+    # End of simulation operations
     if rank==0:
-    
-        # Export learning datasets (X and Y)
-        if data_gen_parameters["build_ml_dtb"]:
-            particle_cloud.export_learning_datasets()
-            shutil.move("./X_dtb.csv", results_folder + "/X_dtb.csv")
-            shutil.move("./Y_dtb.csv", results_folder + "/Y_dtb.csv")
-    
-        # Save pandas dataframe with all states
-        particle_cloud.export_database()
-        shutil.move("./database_states.csv", results_folder + "/database_states.csv")
 
         # Save mean trajectories
         if data_gen_parameters["calc_mean_traj"]:
-            particle_cloud.export_trajectories()
+            particle_cloud.write_trajectories()
             shutil.move("./mean_trajectories.h5", results_folder + "/mean_trajectories.h5")
 
         # Plot some statistics on particles
         particle_cloud.plot_stats()
 
-        # Plot final database pdf's
-        if data_gen_parameters["ML_inference_flag"]==False:
-            particle_cloud.plot_pdf_dtb_final()
-
-    # Number of chemical states in database
-    nb_states_dtb = particle_cloud.df_all_states.shape[0]
 
     #==============================================================================
     # ENDING THE SIMULATION
@@ -140,8 +112,6 @@ def generate_stochastic_database(data_gen_parameters, comm):
         #  End of simulation printing
         PRINT("")
         PRINT("END OF SIMULATION")
-        PRINT("Database:")
-        PRINT(f"  >> Number of chemical states stored in database: {nb_states_dtb:d}")
         PRINT("CPU costs:")
         PRINT(f"Total CPU time of simulation: {t_end-t_ini:4.3f} s")
         PRINT(f"  >> Cumulated time spent in simulation for diffusion: {particle_cloud.timings['Diffusion'].sum():5.4f} s")

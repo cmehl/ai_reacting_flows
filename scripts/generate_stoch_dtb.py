@@ -14,9 +14,9 @@ comm = MPI.COMM_WORLD
 data_gen_parameters = {}
 
 # General parameters
-data_gen_parameters["mech_file"] = "/work/mehlc/2_IA_KINETICS/ai_reacting_flows/data/chemical_mechanisms/mech_H2.cti"      # Mechanism file
+data_gen_parameters["mech_file"] = "/work/mehlc/2_IA_KINETICS/ai_reacting_flows/data/chemical_mechanisms/mech_CH4_gri.yaml"      # Mechanism file
 data_gen_parameters["inlets_file"] = "inlets_file.xlsx"      # file defining the stochastic reactors inlets
-data_gen_parameters["results_folder_suffix"] = "hotspot_H2_DEV"    # Name of the resulting database (used as a suffix of "STOCH_DTB")
+data_gen_parameters["results_folder_suffix"] = "PREMIXED_CH4_TEST"    # Name of the resulting database (used as a suffix of "STOCH_DTB")
 data_gen_parameters["build_ml_dtb"] = True     # Flag to generate ML database or do a stand-alone simulation
 data_gen_parameters["time_step"] = 0.5e-6       # Constant time step of the simulation
 data_gen_parameters["time_max"] = 4e-6          # Simulation end time
@@ -26,10 +26,9 @@ data_gen_parameters["mixing_model"] = "CURL_MODIFIED"         # Mixing model (CU
 data_gen_parameters["mixing_time"] = 0.4e-3                 # Mixing time-scale
 data_gen_parameters["T_threshold"] = 200.0                  # Temperature threshold for database
 data_gen_parameters["calc_progvar"] = True                  # Flag to decide if progress variable is computed
-data_gen_parameters["pv_species"] = ["H2O"]                 # Species used to define progress variable
+data_gen_parameters["pv_species"] = ["CO", "CO2"]                 # Species used to define progress variable
 
 # post-processing parameters
-data_gen_parameters["plot_freq"] = 999999                  # Frequency of plotting (plot every plot_freq iterations)
 data_gen_parameters["calc_mean_traj"] = True              # Flag to decide if mean trajectories are computed in the post-processing step
 
 # ML database parameters

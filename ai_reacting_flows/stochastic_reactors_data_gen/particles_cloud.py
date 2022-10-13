@@ -55,7 +55,6 @@ class ParticlesCloud(object):
         self.time = 0.0
         self.iteration = 0
         self.dt = data_gen_parameters["time_step"]
-        self.plot_freq = data_gen_parameters["plot_freq"]
         self.calc_mean_traj = data_gen_parameters["calc_mean_traj"]
         
         # Statistics convergence status
@@ -177,35 +176,11 @@ class ParticlesCloud(object):
         
         
         # =====================================================================
-        #     INITIALIZATION OF POST-PROCESSING
+        #     INPUT/OUTPUT INITIALIZATION
         # =====================================================================
 
-        #ML database generation
-        if self.build_ml_dtb:
-            cols = ['Temperature'] + ['Pressure'] + self.species_names + ['Prog_var']
-            self.df_X_states = pd.DataFrame(columns=cols)
-            self.df_Y_states = pd.DataFrame(columns=cols)
-
-        # Initialize database for this cloud of particles
-        cols = ['Temperature'] + ['Pressure'] + self.species_names + ['Mix_frac'] + ['Equiv_ratio'] + ['Prog_var'] +  ['Time'] + ['Particle_number'] + ['Inlet_number'] + ['Y_C', 'Y_H', 'Y_O', 'Y_N']
-        n_cols = self.nb_state_vars + 6 + 4
-        arr = np.empty((self.nb_parts_tot, n_cols))
-        for i in range(self.nb_parts_tot):
-            # i-th particle
-            part = self.particles_list[i]
-            arr[i,0] = part.T
-            arr[i,1] = part.P
-            arr[i,2:part.nb_state_vars] = part.Y
-            arr[i,part.nb_state_vars] = part.mix_frac
-            arr[i,part.nb_state_vars+1] = part.equiv_ratio
-            arr[i,part.nb_state_vars+2] = part.prog_var
-            arr[i,part.nb_state_vars+3] = 0.0
-            arr[i,part.nb_state_vars+4] = part.num_part
-            arr[i,part.nb_state_vars+5] = part.num_inlet
-            arr[i,part.nb_state_vars+6:part.nb_state_vars+10] = part.atomic_mass_fractions
-        self.df_current = pd.DataFrame(data=arr, columns=cols)
-        self.df_all_states = self.df_current
-        
+        # Columns of data array with solution and post-processing variables
+        self.cols_all_states = ['Temperature'] + ['Pressure'] + self.species_names + ['Mix_frac'] + ['Equiv_ratio'] + ['Prog_var'] +  ['Time'] + ['Particle_number'] + ['Inlet_number'] + ['Y_C', 'Y_H', 'Y_O', 'Y_N']
         
         # Initialize mean trajectories
         if self.calc_mean_traj:
@@ -249,9 +224,13 @@ class ParticlesCloud(object):
         
         # Initial time
         t1 = perf_counter()
+
+        # Write current iteration solution
+        if self.rank==0:
+            self._write_solution()
         
         # Store state before chemistry to build X.csv
-        if self.build_ml_dtb:
+        if self.build_ml_dtb and self.rank==0:
             self._update_dtb_states("X")
 
         t1 = perf_counter()
@@ -264,7 +243,7 @@ class ParticlesCloud(object):
         self._update_vars()
 
         # Store state after chemistry to build Y.csv
-        if self.build_ml_dtb:
+        if self.build_ml_dtb and self.rank==0:
             self._update_dtb_states("Y")
         
         # Advance molecular diffusion
@@ -286,27 +265,9 @@ class ParticlesCloud(object):
             if self.rank==0:
                 self._append_means_to_trajectory()
         t4 = perf_counter()
-        
-        # Update time and iteration
-        self.time += dt
-        self.iteration += 1
 
-        # Add states to pandas dataframe
-        self._update_database()
+        # TODO REMOVE
         t5 = perf_counter()
-        
-        # Plots about particles states
-        if self.rank==0:
-
-            if self.iteration%self.plot_freq==0:
-                self.plot_TZ_scatter_inst()
-                self.plot_TZ_scatter_all()
-                if self.calc_mean_traj:
-                    self.plot_TZ_trajectories()
-                    self.plot_T_time_trajectories()
-                if self.ML_inference_flag==False:
-                    self.plot_pdf_T_inst()
-                    self.plot_pdf_T_all()
         
         # Additional statistics on particles
         self.calc_statistics()
@@ -323,6 +284,10 @@ class ParticlesCloud(object):
         
         # Check termination of computation
         self.check_termination()
+
+        # Update time and iteration
+        self.time += dt
+        self.iteration += 1
         
         
         
@@ -590,7 +555,7 @@ class ParticlesCloud(object):
         
         
     # Export trajectories in HDF5 format
-    def export_trajectories(self):
+    def write_trajectories(self):
                 
         # Create h5 file
         f = h5py.File("mean_trajectories.h5","w")
@@ -609,12 +574,10 @@ class ParticlesCloud(object):
 #   DATABASE HANDLING
 # =============================================================================    
     
-    def _update_database(self):
+    def _write_solution(self):
         
         # Set current iteration results in a dataframe
-        cols = ['Temperature'] + ['Pressure'] + self.species_names + ['Mix_frac'] + ['Equiv_ratio'] + ['Prog_var'] +  ['Time'] + ['Particle_number'] + ['Inlet_number'] + ['Y_C', 'Y_H', 'Y_O', 'Y_N']
-        n_cols = self.particles_list[0].nb_state_vars + 6 + 4
-        arr = np.empty((self.nb_parts_tot, n_cols))
+        arr = np.empty((self.nb_parts_tot, len(self.cols_all_states)))
         for i in range(self.nb_parts_tot):
             # i-th particle
             part = self.particles_list[i]
@@ -628,9 +591,13 @@ class ParticlesCloud(object):
             arr[i,part.nb_state_vars+4] = part.num_part
             arr[i,part.nb_state_vars+5] = part.num_inlet
             arr[i,part.nb_state_vars+6:part.nb_state_vars+10] = part.atomic_mass_fractions
-        self.df_current = pd.DataFrame(data=arr, columns=cols)
-        
-        self.df_all_states = pd.concat([self.df_all_states, self.df_current], ignore_index=True)
+
+        # Store initial solution in h5 file
+        f = h5py.File(self.results_folder +  f"/solutions.h5","a")
+        grp = f.create_group(f"ITERATION_{self.iteration:05d}")    # Group created because this function is called first
+        dset = grp.create_dataset("all_states",data=arr)
+        dset.attrs["cols"] = self.cols_all_states
+        f.close()
 
 
 
@@ -638,8 +605,7 @@ class ParticlesCloud(object):
         
         # Set current iteration results in a dataframe
         cols = ['Temperature'] + ['Pressure'] + self.species_names + ['Prog_var']
-        n_cols = self.particles_list[0].nb_state_vars + 1
-        arr = np.empty((self.nb_parts_tot, n_cols))
+        arr = np.empty((self.nb_parts_tot, len(cols)))
         for i in range(self.nb_parts_tot):
             # i-th particle
             part = self.particles_list[i]
@@ -647,196 +613,39 @@ class ParticlesCloud(object):
             arr[i,1] = part.P
             arr[i,2:part.nb_state_vars] = part.Y
             arr[i,part.nb_state_vars] = part.prog_var
-        df = pd.DataFrame(data=arr, columns=cols)
-        
-        if which_state=="X":
-            self.df_X_states =  pd.concat([self.df_X_states, df], ignore_index=True)
-        elif which_state=="Y":
-            self.df_Y_states =  pd.concat([self.df_Y_states, df], ignore_index=True)
-        
-            
-        
-    def export_database(self):
-        
-        # Sort by simulation number and by time
-        self.df_all_states = self.df_all_states.sort_values(['Particle_number', 'Time'], ascending=[True, True])
 
-        # Export to csv
-        self.df_all_states.to_csv("database_states.csv", sep=";", index=False)
-
-
-    def export_learning_datasets(self):
-        
-        # Export to csv
-        self.df_X_states.to_csv("X_dtb.csv", sep=";", index=False)
-        self.df_Y_states.to_csv("Y_dtb.csv", sep=";", index=False)
+        # Store initial solution in h5 file
+        f = h5py.File(self.results_folder +  f"/solutions.h5","a")
+        grp = f.get(f"ITERATION_{self.iteration:05d}")
+        dset = grp.create_dataset(which_state,data=arr)
+        dset.attrs["cols"] = cols
+        f.close()
 
 
 # =============================================================================
-#   TRAJECTORY PLOTTING
+#   PARTICLES STATISTICS COMPUTATION 
 # =============================================================================
-    
-    def plot_TZ_scatter_inst(self):
-        
-        if not os.path.isdir(self.results_folder + "/figures/inst"):
-            os.mkdir(self.results_folder +  "/figures/inst")
-        
-        points = np.empty([self.nb_parts_tot, 2])
-        for part in self.particles_list:
-            points[part.num_part,0] = part.T
-            points[part.num_part,1] = part.mix_frac
-            
-        
-        fig, ax = plt.subplots()
-        ax.scatter(points[:,1], points[:,0], color="red")
-        ax.set_ylabel(r"$T$ $[K]$")
-        ax.set_xlabel(r"$Z$ $[-]$")
-        
-        ax.set_xlim([0.9*np.min(points[:,1]), 1.1*np.max(points[:,1])])
-        
-        fig.tight_layout()
-        
-        fig.savefig(f"{self.results_folder}/figures/inst/TZ_plot_{self.iteration:04d}.png")
-        
-        plt.close()
-        
-    
-    
-    def plot_TZ_scatter_all(self):
-        
-        if not os.path.isdir(self.results_folder + "/figures/all"):
-            os.mkdir(self.results_folder + "/figures/all")
-            
-        
-        # Creating axis
-        ax = plt.gca()
-        
-        df = self.df_all_states
-        plot = df.plot.scatter(x='Mix_frac', y='Temperature', ax=ax, c='Time', colormap='viridis')
-        ax.set_xlabel(r"$Z$ $[-]$")
-        ax.set_ylabel(r"$T$ $[K]$")
-        
-        ax.set_xlim([0.9*df['Mix_frac'].min(), 1.1*df['Mix_frac'].max()])
-            
-        fig = plot.get_figure()
-        fig.savefig(f"{self.results_folder}/figures/all/TZ_plot_{self.iteration:04d}.png")
-        
-        plt.close()
-        
-        
-    def plot_TZ_trajectories(self):
-        
-        if not os.path.isdir(self.results_folder + "/figures/trajectories"):
-            os.mkdir(self.results_folder +  "/figures/trajectories")
-        
-        # styles
-        linestyles = ["--", "-", ".-", ":"]
-        
-        fig, ax = plt.subplots()
-        
-        for i in range(self.nb_inlets):
-            ax.plot(self.mean_trajectories[:, i, self.nb_state_vars+1], self.mean_trajectories[:, i, 1], color="k", linestyle=linestyles[i], label=f"Inlet {i+1:d}")
-        
-        ax.set_xlabel(r"$Z$ $[-]$")
-        ax.set_ylabel(r"$T$ $[K]$")
-        
-        ax.set_xlim([0.9*np.min(self.mean_trajectories[:, i, self.nb_state_vars+1]), 1.1*np.max(self.mean_trajectories[:, i, self.nb_state_vars+1]) ])
-        
-        fig.savefig(f"{self.results_folder}/figures/trajectories/TZ_plot_{self.iteration:04d}.png")
-        
-        plt.close()
-        
-               
-    def plot_T_time_trajectories(self):
-        
-        if not os.path.isdir(self.results_folder + "/figures/trajectories"):
-            os.mkdir(self.results_folder + "/figures/trajectories")
-        
-        # styles
-        linestyles = ["--", "-", ".-", ":"]
-        
-        fig, ax = plt.subplots()
-        
-        for i in range(self.nb_inlets):
-            ax.plot(self.mean_trajectories[:, i, 0], self.mean_trajectories[:, i, 1], color="k", linestyle=linestyles[i], label=f"Inlet {i+1:d}")
-        
-        ax.set_xlabel(r"$t$ $[s]$")
-        ax.set_ylabel(r"$T$ $[K]$")
-        
-        ax.legend()
-        
-        fig.savefig(f"{self.results_folder}/figures/trajectories/T_time_plot_{self.iteration:04d}.png")
-        
-        plt.close()
-        
-        
 
-# =============================================================================
-#   VARIABLES DISTRIBUTIONS PLOTTING
-# =============================================================================   
-        
-    def plot_pdf_T_inst(self):
-            
-        if not os.path.isdir(self.results_folder + "/figures/pdf_T_inst"):
-            os.mkdir(self.results_folder + "/figures/pdf_T_inst")
-            
-        # Temperature histogram
-        fig, ax = plt.subplots()
-        
-        sns.histplot(data=self.df_current, x="Temperature", ax=ax, stat="probability",
-                     binwidth=20, kde=True)
+    def calc_statistics(self):
 
-        fig.tight_layout()
-            
-        fig.savefig(f"{self.results_folder}/figures/pdf_T_inst/PDF_T_plot_{self.iteration:04d}.png")
+        # Temperature vector
+        Temp_vect = np.empty(self.nb_parts_tot)
+        for i, part in enumerate(self.particles_list):
+            Temp_vect[i] = part.T
         
-        plt.close()  
-            
-            
-    def plot_pdf_T_all(self):
-            
-        if not os.path.isdir(self.results_folder + "/figures/pdf_T_all"):
-            os.mkdir(self.results_folder + "/figures/pdf_T_all")       
-            
-        # Temperature histogram
-        fig, ax = plt.subplots()
-        
-        sns.histplot(data=self.df_all_states, x="Temperature", ax=ax, stat="probability",
-                     binwidth=20, kde=True)
+        # Mean and standard deviation of temperature
+        self.mean_T = Temp_vect.mean()
+        self.stdev_T = Temp_vect.std()
+        self.mean_T_vect.append(self.mean_T)
+        self.stdev_T_vect.append(self.stdev_T)
+        self.ratio_T_stdev = self.stdev_T / self.mean_T
 
-        fig.tight_layout()
-            
-        fig.savefig(f"{self.results_folder}/figures/pdf_T_all/PDF_T_plot_{self.iteration:04d}.png")
-            
-        plt.close()
-    
-    
-    def plot_pdf_dtb_final(self):
-            
-        if not os.path.isdir(self.results_folder + "/figures/pdfs_dtb_final"):
-            os.mkdir(self.results_folder + "/figures/pdfs_dtb_final")       
-            
-        # Removing temperature values below threshold
-        df_final = self.df_all_states[self.df_all_states["Temperature"]>self.T_threshold]
-            
-        # Temperature histogram
-        fig, ax = plt.subplots()
-        
-        sns.histplot(data=df_final, x="Temperature", ax=ax, stat="probability",
-                     binwidth=20, kde=True)
 
-        fig.tight_layout()
-            
-        fig.savefig(f"{self.results_folder}/figures/pdfs_dtb_final/PDF_T.png")
-            
-        plt.close()
-            
-            
-            
+
     def plot_stats(self):
             
-        if not os.path.isdir(self.results_folder + "/figures/statistics"):
-            os.mkdir(self.results_folder + "/figures/statistics")
+        if not os.path.isdir(self.results_folder + "/statistics"):
+            os.mkdir(self.results_folder + "/statistics")
             
         # Creating the time vector
         N = len(self.mean_T_vect)
@@ -854,7 +663,7 @@ class ParticlesCloud(object):
         ax1.set_ylabel("$T$ $[K]$")
         fig1.legend()
         fig1.tight_layout()
-        fig1.savefig(self.results_folder + "/figures/statistics/stats_T.png")
+        fig1.savefig(self.results_folder + "/statistics/stats_T.png")
         plt.close()
         
         
@@ -866,21 +675,8 @@ class ParticlesCloud(object):
         ax2.set_ylim([0,1])
         fig2.legend()
         fig2.tight_layout()
-        fig2.savefig(self.results_folder + "/figures/statistics/ratio_T.png")
+        fig2.savefig(self.results_folder + "/statistics/ratio_T.png")
         plt.close()
-
-# =============================================================================
-#   PARTICLES STATISTICS COMPUTATION 
-# =============================================================================
-
-    def calc_statistics(self):
-        
-        # Mean and standard deviation of temperature
-        self.mean_T = self.df_current['Temperature'].mean()
-        self.stdev_T = self.df_current['Temperature'].std()
-        self.mean_T_vect.append(self.mean_T)
-        self.stdev_T_vect.append(self.stdev_T)
-        self.ratio_T_stdev = self.stdev_T / self.mean_T
             
 # =============================================================================
 #   DISPLAYING
@@ -930,9 +726,6 @@ class ParticlesCloud(object):
         if self.ratio_T_stdev<threshold:
             self.stats_converged = True
             print("-----------LOW TEMPERATURE VARIANCE: END OF COMPUTATION-----------")
-        
-        
-        
         
         
 # =============================================================================

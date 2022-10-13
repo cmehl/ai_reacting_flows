@@ -9,7 +9,7 @@ Created on Fri Dec 20 12:22:15 2019
 import sys
 
 import numpy as np
-import pandas as pd
+from scipy.stats.kde import gaussian_kde
 import cantera as ct
 import oyaml as yaml
 import copy
@@ -414,6 +414,15 @@ def compute_0D_reactor(fuel, mech_file, phi, T0, p):
 def sample_comb2(dims, nsamp):
     idx = np.random.choice(np.prod(dims), nsamp, replace=False)
     return np.vstack(np.unravel_index(idx, dims)).T
+
+
+# Compute PDF using KDE method
+def compute_pdf(x, samples):
+
+    pdf_kde = gaussian_kde(samples)
+    pdf = pdf_kde(x)
+
+    return pdf
 
 
 #==============================================================================
