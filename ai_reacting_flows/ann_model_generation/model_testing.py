@@ -40,7 +40,8 @@ class ModelTesting(object):
         # Getting parameters from ANN model
         shelfFile = shelve.open(self.models_folder + "/model_params")
         self.output_omegas = shelfFile["output_omegas"]
-        self.log_transform = shelfFile["log_transform"]
+        self.log_transform_X = shelfFile["log_transform_X"]
+        self.log_transform_Y = shelfFile["log_transform_Y"]
         self.threshold = shelfFile["threshold"]
         self.remove_N2 = shelfFile["remove_N2"]
         self.hard_constraints_model = shelfFile["hard_constraints_model"]
@@ -87,6 +88,8 @@ class ModelTesting(object):
             else:
                 sys.exit("ERROR: There are more than one clusters and no clustering method file in the model folder")
             print(f"   >> Clustering method {self.clustering_method} is used \n")
+        else:
+            self.clustering_method = None
 
 
         # Load models
@@ -218,7 +221,10 @@ class ModelTesting(object):
             progvar = self.compute_progvar(state, pressure, self.mechanism_type)
 
             # Attribute cluster
-            self.attribute_cluster(state, progvar)
+            if self.nb_clusters>0:
+                self.attribute_cluster(state, progvar)
+            else:
+                self.cluster = 0
 
             print(f"Current point in cluster: {self.cluster} \n")
 
@@ -447,7 +453,10 @@ class ModelTesting(object):
             progvar = self.compute_progvar(state, pressure, self.mechanism_type)
 
             # Attribute cluster
-            self.attribute_cluster(state, progvar)
+            if self.nb_clusters>0:
+                self.attribute_cluster(state, progvar)
+            else:
+                self.cluster = 0
 
             print(f"Current point in cluster: {self.cluster} \n")
             
@@ -642,16 +651,16 @@ class ModelTesting(object):
 
         
         # NN update for Yk's
-        if self.log_transform==1:
+        if self.log_transform_X==1:
             state_vector[state_vector<self.threshold] = self.threshold
-        elif self.log_transform==2:
+        elif self.log_transform_X==2:
             state_vector[state_vector<0.0] = 0.0
             
         log_state = np.zeros(self.nb_species_ANN+1)
         log_state[0] = state_vector[0]
-        if self.log_transform==1:
+        if self.log_transform_X==1:
             log_state[1:] = np.log(state_vector[1:])
-        elif self.log_transform==2:
+        elif self.log_transform_X==2:
             log_state[1:] = (state_vector[1:]**self.lambda_bct - 1.0)/self.lambda_bct
         else:
             log_state[1:] = state_vector[1:]
@@ -669,22 +678,22 @@ class ModelTesting(object):
         Y_new = self.Yscaler_list[self.cluster].inverse_transform(state_new)
 
         # Log transform of species
-        if self.log_transform>0:
+        if self.log_transform_Y>0:
             if self.output_omegas:
                 log_state_updated = log_state[0,1:] + Y_new
-                if self.log_transform==1:
+                if self.log_transform_Y==1:
                     Y_new = np.exp(log_state_updated)
-                elif self.log_transform==2:
+                elif self.log_transform_Y==2:
                     Y_new = (self.lambda_bct*log_state_updated+1.0)**(1./self.lambda_bct)
             else:
-                if self.log_transform==1:
+                if self.log_transform_Y==1:
                     Y_new = np.exp(Y_new)
-                elif self.log_transform==2:
+                elif self.log_transform_Y==2:
                     Y_new = (self.lambda_bct*Y_new+1.0)**(1./self.lambda_bct)
                 
                 
         # If reaction rate outputs from network
-        if self.output_omegas and self.log_transform==0:
+        if self.output_omegas and self.log_transform_Y==0:
             if self.remove_N2:
                 Y_old_wo_N2 = np.delete(Y_old, n2_index)
                 Y_new += Y_old_wo_N2

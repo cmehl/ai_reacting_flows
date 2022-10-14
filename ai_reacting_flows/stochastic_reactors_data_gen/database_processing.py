@@ -24,7 +24,8 @@ class LearningDatabase(object):
         # Input parameters
         self.dtb_folder  = dtb_processing_parameters["dtb_folder"]
         self.database_name = dtb_processing_parameters["database_name"]
-        self.log_transform  = dtb_processing_parameters["log_transform"]
+        self.log_transform_X  = dtb_processing_parameters["log_transform_X"]
+        self.log_transform_Y  = dtb_processing_parameters["log_transform_Y"]
         self.threshold  = dtb_processing_parameters["threshold"]
         self.output_omegas  = dtb_processing_parameters["output_omegas"]
         self.detailed_mechanism  = dtb_processing_parameters["detailed_mechanism"]
@@ -58,7 +59,8 @@ class LearningDatabase(object):
         shelfFile = shelve.open(self.dtb_folder + "/" + self.database_name + "/dtb_params")
         #
         shelfFile["threshold"] = self.threshold
-        shelfFile["log_transform"] = self.log_transform
+        shelfFile["log_transform_X"] = self.log_transform_X
+        shelfFile["log_transform_Y"] = self.log_transform_Y
         shelfFile["output_omegas"] = self.output_omegas
         shelfFile["with_N_chemistry"] = self.with_N_chemistry
         shelfFile["clusterization_method"] = None   # Default value, erased if clustering is done
@@ -410,18 +412,21 @@ class LearningDatabase(object):
 
 
             # Clip if logarithm transformation
-            if self.log_transform>0:
+            if self.log_transform_X>0:
                 X_p[X_p < self.threshold] = self.threshold
-                #
+            if self.log_transform_Y>0:
                 Y_p[Y_p < self.threshold] = self.threshold
 
 
             #Applying transformation (log of BCT)
-            if self.log_transform==1:
+            if self.log_transform_X==1:
                 X_p.loc[:, X_cols[1:]] = np.log(X_p[X_cols[1:]])
-                Y_p.loc[:, Y_cols] = np.log(Y_p[Y_cols])
-            elif self.log_transform==2:
+            elif self.log_transform_X==2:
                 X_p.loc[:, X_cols[1:]] = (X_p[X_cols[1:]]**self.lambda_bct - 1.0)/self.lambda_bct
+            #
+            if self.log_transform_Y==1:
+                Y_p.loc[:, Y_cols] = np.log(Y_p[Y_cols])
+            elif self.log_transform_Y==2:
                 Y_p.loc[:, Y_cols] = (Y_p[Y_cols]**self.lambda_bct - 1.0)/self.lambda_bct
 
 
