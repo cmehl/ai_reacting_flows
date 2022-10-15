@@ -93,7 +93,8 @@ class MLPModel(object):
         # Load databased-linked parameter using shelve file
         shelfFile = shelve.open(self.dataset_path + "/dtb_params")
         self.threshold = shelfFile["threshold"]
-        self.log_transform = shelfFile["log_transform"]
+        self.log_transform_X = shelfFile["log_transform_X"]
+        self.log_transform_Y = shelfFile["log_transform_Y"]
         self.output_omegas = shelfFile["output_omegas"]
         self.clustering_type = shelfFile["clusterization_method"]
         self.with_N_chemistry = shelfFile["with_N_chemistry"]
@@ -147,7 +148,8 @@ class MLPModel(object):
         shelfFile = shelve.open(self.directory + f'/model_params')
         #
         shelfFile["threshold"] = self.threshold
-        shelfFile["log_transform"] = self.log_transform
+        shelfFile["log_transform_X"] = self.log_transform_X
+        shelfFile["log_transform_Y"] = self.log_transform_Y
         shelfFile["output_omegas"] = self.output_omegas
         shelfFile["hard_constraints_model"] = self.hard_constraints_model
         shelfFile["remove_N2"] = self.remove_N2
@@ -360,7 +362,7 @@ class MLPModel(object):
             
             # Metrics
             metrics_list=[metrics.mape,metrics.mae,metrics.mse]
-            metrics_list.append(sum_species_metric(param1_Y_tensor, param2_Y_tensor, self.log_transform))            
+            metrics_list.append(sum_species_metric(param1_Y_tensor, param2_Y_tensor, self.log_transform_Y))            
             
             # define the loss function   
             loss=losses.mean_squared_error
@@ -466,30 +468,23 @@ class MLPModel(object):
             # ============== in depth error analysis
             
             # ----Validation data
-            if self.log_transform>0:
+            if self.log_transform_Y>0:
                 log_Y_val_pred = model.predict(X_val)
                 #
                 Y_val_unscaled = Yscaler.inverse_transform(Y_val)
     
-                if self.output_omegas==True:
-                    Y_val_unscaled = -np.sign(Y_val_unscaled) * np.exp(-np.abs(Y_val_unscaled))
-                else:
-                    if self.log_transform_Y==1: # LOG
-                        Y_val_unscaled = np.exp(Y_val_unscaled)
-                    elif self.log_transform_Y==2: # BCT
-                        Y_val_unscaled = (self.lambda_bct*Y_val_unscaled+1.0)**(1./self.lambda_bct)
-                    
+                if self.log_transform_Y==1: # LOG
+                    Y_val_unscaled = np.exp(Y_val_unscaled)
+                elif self.log_transform_Y==2: # BCT
+                    Y_val_unscaled = (self.lambda_bct*Y_val_unscaled+1.0)**(1./self.lambda_bct)
                 #
                 Y_val_pred_unscaled = Yscaler.inverse_transform(log_Y_val_pred)
 
                 
-                if self.output_omegas==True:
-                    Y_val_pred_unscaled = -np.sign(Y_val_pred_unscaled) * np.exp(-np.abs(Y_val_pred_unscaled))
-                else:
-                    if self.log_transform==1: # LOG
-                        Y_val_pred_unscaled = np.exp(Y_val_pred_unscaled)
-                    if self.log_transform==2: # BCT
-                        Y_val_pred_unscaled = (self.lambda_bct*Y_val_pred_unscaled+1.0)**(1./self.lambda_bct)
+                if self.log_transform_Y==1: # LOG
+                    Y_val_pred_unscaled = np.exp(Y_val_pred_unscaled)
+                if self.log_transform_Y==2: # BCT
+                    Y_val_pred_unscaled = (self.lambda_bct*Y_val_pred_unscaled+1.0)**(1./self.lambda_bct)
                     
             else:
                 Y_val_pred = model.predict(X_val)
@@ -499,10 +494,10 @@ class MLPModel(object):
                 Y_val_pred_unscaled = Yscaler.inverse_transform(Y_val_pred)
 
             #
-            if self.log_transform==1: # LOG
+            if self.log_transform_X==1: # LOG
                 X_val_unscaled = Xscaler.inverse_transform(X_val)
                 X_val_unscaled[:,1:] = np.exp(X_val_unscaled[:,1:])
-            elif self.log_transform==2: # BCT
+            elif self.log_transform_X==2: # BCT
                 X_val_unscaled = Xscaler.inverse_transform(X_val)
                 X_val_unscaled[:,1:] = (self.lambda_bct*X_val_unscaled[:,1:]+1.0)**(1./self.lambda_bct) 
             else:
@@ -596,7 +591,7 @@ class MLPModel(object):
                                                                             self.A_atomic_t, self.A_inv_final_t,kernel_initializer=initializers.GlorotUniform())(layers_dict["output_layer_interm"])
                 else:
                     layers_dict["output_layer"] = AtomicConservation(n_Y, self._param1_X, self._param2_X, self._param1_Y, 
-                                                            self._param2_Y, self.log_transform, self.threshold, self.A_atomic_t, self.A_inv_final_t,kernel_initializer=initializers.GlorotUniform())([layers_dict["output_layer_interm"],layers_dict["input_layer"]])
+                                                            self._param2_Y, self.log_transform_Y, self.threshold, self.A_atomic_t, self.A_inv_final_t,kernel_initializer=initializers.GlorotUniform())([layers_dict["output_layer_interm"],layers_dict["input_layer"]])
                                 
             elif self.hard_constraints_model==2:
 
@@ -650,7 +645,7 @@ class MLPModel(object):
                                                                             self.A_atomic_t, self.A_inv_final_t,kernel_initializer=initializers.GlorotUniform())(layers_dict["output_layer_interm"])
                 else:
                     layers_dict["output_layer"] = AtomicConservation(n_Y, self._param1_X, self._param2_X, self._param1_Y, 
-                                                            self._param2_Y, self.log_transform, self.threshold, self.A_atomic_t, self.A_inv_final_t,kernel_initializer=initializers.GlorotUniform())([layers_dict["output_layer_interm"],layers_dict["input_layer"]])
+                                                            self._param2_Y, self.log_transform_Y, self.threshold, self.A_atomic_t, self.A_inv_final_t,kernel_initializer=initializers.GlorotUniform())([layers_dict["output_layer_interm"],layers_dict["input_layer"]])
                                 
             elif self.hard_constraints_model==2:
 
