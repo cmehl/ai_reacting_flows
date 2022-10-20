@@ -31,10 +31,9 @@ from tensorflow.keras import initializers
 from tensorflow.keras.utils import plot_model
 
 from ai_reacting_flows.ann_model_generation.tensorflow_custom import sum_species_metric
-from ai_reacting_flows.ann_model_generation.tensorflow_custom import AtomicConservation
-from ai_reacting_flows.ann_model_generation.tensorflow_custom import AtomicConservation_RR
-from ai_reacting_flows.ann_model_generation.tensorflow_custom import AtomicConservation_RR_lsq
+from ai_reacting_flows.ann_model_generation.tensorflow_custom import AtomicConservation, AtomicConservation_RR, AtomicConservation_RR_lsq
 from ai_reacting_flows.ann_model_generation.tensorflow_custom import GetN2Layer, ZerosLayer, GetLeftPartLayer, GetRightPartLayer
+from ai_reacting_flows.ann_model_generation.tensorflow_custom import ResidualBlock
 
 import ai_reacting_flows.tools.utilities as utils
 
@@ -67,6 +66,7 @@ class MLPModel(object):
         # Network shapes
         self.nb_units_in_layers_list = training_parameters["nb_units_in_layers_list"]
         self.layers_activation_list = training_parameters["layers_activation_list"]
+        self.layers_type = training_parameters["layers_type"]
     
         # Optimization parameters
         self.batch_size = training_parameters["batch_size"]
@@ -99,6 +99,10 @@ class MLPModel(object):
         self.clustering_type = shelfFile["clusterization_method"]
         self.with_N_chemistry = shelfFile["with_N_chemistry"]
         shelfFile.close()
+
+
+        # Checking consistency of inputs
+        self.check_inputs()
 
 
         # Get the number of clusters
@@ -135,8 +139,6 @@ class MLPModel(object):
             self.mechanism = self.dataset_path + "/mech_detailed.yaml"
         elif self.mechanism_type=="reduced":
             self.mechanism = self.dataset_path + "/mech_reduced.yaml"
-        else:
-            sys.exit('ERROR: mechanism_type should be either "detailed" or "reduced"')
 
         # We copy the mechanism files in order to use them for testing
         shutil.copy(self.dataset_path + "/mech_detailed.yaml", self.directory)
@@ -523,6 +525,14 @@ class MLPModel(object):
 
     def generate_nn_model_N2_cte(self, n_X, n_Y, nb_units_in_layers, layers_activation):
 
+        # Choosing hidden layer type: dense or resblock
+        if self.layers_type=="dense":
+            hidden_layer = layers.Dense
+            prefix_layer = "dense"
+        elif self.layers_type=="resnet":
+            hidden_layer = ResidualBlock
+            prefix_layer = "resblock"
+
         layers_dict = {}
         
         layers_dict["input_layer"] = layers.Input(shape=(n_X,), name="input_layer")
@@ -541,14 +551,19 @@ class MLPModel(object):
         yk_layer_2 = GetRightPartLayer(self._right_n2, self._n2_index+2, kernel_initializer=initializers.GlorotUniform())(layers_dict["input_layer"])
         yk_layer = layers.Concatenate(axis=1)([yk_layer_1, yk_layer_2])
 
-            
-        layers_dict["dense_layer_1"] = layers.Dense(units=nb_units_in_layers[0],kernel_regularizer=regularizers.l2(self.alpha_reg),
-                                        activation=layers_activation[0], kernel_initializer=initializers.GlorotUniform(), name="dense_layer_1")(yk_layer)
+        if self.layers_type=="resnet":  
+            layers_dict["dense_layer_1"] = layers.Dense(units=nb_units_in_layers[0],kernel_regularizer=regularizers.l2(self.alpha_reg),
+                                            activation=layers_activation[0], kernel_initializer=initializers.GlorotUniform(), name="dense_layer_1")(yk_layer)
 
+            layers_dict["hidden_layer_1"] = hidden_layer(units=nb_units_in_layers[0],kernel_regularizer=regularizers.l2(self.alpha_reg),
+                                            activation=layers_activation[0], kernel_initializer=initializers.GlorotUniform(), name=prefix_layer + "_1")(layers_dict["dense_layer_1"])
+        else:
+            layers_dict["hidden_layer_1"] = hidden_layer(units=nb_units_in_layers[0],kernel_regularizer=regularizers.l2(self.alpha_reg),
+                                            activation=layers_activation[0], kernel_initializer=initializers.GlorotUniform(), name=prefix_layer + "_1")(yk_layer)
             
         for i in range(2, len(nb_units_in_layers)+1):
-            layers_dict[f"dense_layer_{i}"] = layers.Dense(units=nb_units_in_layers[i-1],kernel_regularizer=regularizers.l2(self.alpha_reg),
-                                                            activation=layers_activation[i-1] ,kernel_initializer=initializers.GlorotUniform(), name=f"dense_layer_{i}")(layers_dict[f"dense_layer_{i-1}"])
+            layers_dict[f"hidden_layer_{i}"] = hidden_layer(units=nb_units_in_layers[i-1],kernel_regularizer=regularizers.l2(self.alpha_reg),
+                                                            activation=layers_activation[i-1] ,kernel_initializer=initializers.GlorotUniform(), name=prefix_layer + f"_{i}")(layers_dict[f"hidden_layer_{i-1}"])
 
             
             #=========================== model's output definition ( constrained or not )=====================================
@@ -556,7 +571,7 @@ class MLPModel(object):
         if self.hard_constraints_model==0:
 
             # layers_dict['output_layer'] = layers.Dense(units=Y_train.shape[1], kernel_regularizer=regularizers.l2(alpha_reg), kernel_initializer=initializers.GlorotUniform(),name='output_layer')(layers_dict[f"activation_layer_{len(nb_units_in_layers)}"])
-            output_layer = layers.Dense(units=n_Y-1, kernel_regularizer=regularizers.l2(self.alpha_reg), kernel_initializer=initializers.GlorotUniform(),name='output_layer')(layers_dict[f"dense_layer_{len(nb_units_in_layers)}"]) 
+            output_layer = layers.Dense(units=n_Y-1, kernel_regularizer=regularizers.l2(self.alpha_reg), kernel_initializer=initializers.GlorotUniform(),name='output_layer')(layers_dict[f"hidden_layer_{len(nb_units_in_layers)}"]) 
 
             # We recreate whole vector with correct ordering 
             output_layer_1 = GetLeftPartLayer(self._left_n2, self._n2_index, kernel_initializer=initializers.GlorotUniform())(output_layer)
@@ -571,7 +586,7 @@ class MLPModel(object):
             # Intermediate dense layer
             # layers_dict["output_layer_interm"] = layers.Dense(units=Y_train.shape[1],kernel_regularizer=regularizers.l2(alpha_reg),kernel_initializer=initializers.GlorotUniform(), name="output_layer_interm")(layers_dict[f"activation_layer_{len(nb_units_in_layers)}"])
                 
-            output_layer_interm = layers.Dense(units=n_Y-1, kernel_regularizer=regularizers.l2(self.alpha_reg), kernel_initializer=initializers.GlorotUniform(),name='output_layer_interm')(layers_dict[f"dense_layer_{len(nb_units_in_layers)}"]) 
+            output_layer_interm = layers.Dense(units=n_Y-1, kernel_regularizer=regularizers.l2(self.alpha_reg), kernel_initializer=initializers.GlorotUniform(),name='output_layer_interm')(layers_dict[f"hidden_layer_{len(nb_units_in_layers)}"]) 
 
 
             output_layer_1 = GetLeftPartLayer(self._left_n2, self._n2_index, kernel_initializer=initializers.GlorotUniform())(output_layer_interm)
@@ -597,11 +612,8 @@ class MLPModel(object):
 
                 # Layer enforcing physical constraint
                 # Atomic conservation
-                if self.output_omegas==True:
-                    layers_dict["output_layer"] = AtomicConservation_RR_lsq(n_Y, self._param1_Y, self._param2_Y, self._param2_Y_scale, 
-                                                                            self.L, kernel_initializer=initializers.GlorotUniform())(layers_dict["output_layer_interm"])
-                else:
-                    sys.exit("hard_constraints_model=2 not written for output_omegas=False")
+                layers_dict["output_layer"] = AtomicConservation_RR_lsq(n_Y, self._param1_Y, self._param2_Y, self._param2_Y_scale, 
+                                                                        self.L, kernel_initializer=initializers.GlorotUniform())(layers_dict["output_layer_interm"])
         
         # ================                Define model   ==========================================================
         
@@ -614,28 +626,46 @@ class MLPModel(object):
 
     def generate_nn_model(self, n_X, n_Y, nb_units_in_layers, layers_activation):
 
+        # Choosing hidden layer type: dense or resblock
+        if self.layers_type=="dense":
+            hidden_layer = layers.Dense
+            prefix_layer = "dense"
+        elif self.layers_type=="resnet":
+            hidden_layer = ResidualBlock
+            prefix_layer = "resblock"
+
+
         layers_dict = {}
         
         layers_dict["input_layer"] = layers.Input(shape=(n_X,), name="input_layer")
 
-        layers_dict["dense_layer_1"] = layers.Dense(units=nb_units_in_layers[0],kernel_regularizer=regularizers.l2(self.alpha_reg),
-                                        activation=layers_activation[0], kernel_initializer=initializers.GlorotUniform(), name="dense_layer_1")(layers_dict["input_layer"])
+        # If resnet, we need an input to the resblock with same dimension as the units (to be able to perform the sum inputs+outputs)
+        if self.layers_type=="resnet":
+
+            layers_dict["dense_layer_1"] = layers.Dense(units=nb_units_in_layers[0],kernel_regularizer=regularizers.l2(self.alpha_reg),
+                                        activation=layers_activation[0], kernel_initializer=initializers.GlorotUniform(), name= "dense_layer_1")(layers_dict["input_layer"])
+
+            layers_dict["hidden_layer_1"] = hidden_layer(units=nb_units_in_layers[0],kernel_regularizer=regularizers.l2(self.alpha_reg),
+                                        activation=layers_activation[0], kernel_initializer=initializers.GlorotUniform(), name=prefix_layer + "_1")(layers_dict["dense_layer_1"])
+        else:
+            layers_dict["hidden_layer_1"] = hidden_layer(units=nb_units_in_layers[0],kernel_regularizer=regularizers.l2(self.alpha_reg),
+                                            activation=layers_activation[0], kernel_initializer=initializers.GlorotUniform(), name=prefix_layer + "_1")(layers_dict["input_layer"])
 
             
         for i in range(2, len(nb_units_in_layers)+1):
-            layers_dict[f"dense_layer_{i}"] = layers.Dense(units=nb_units_in_layers[i-1],kernel_regularizer=regularizers.l2(self.alpha_reg),
-                                                            activation=layers_activation[i-1] ,kernel_initializer=initializers.GlorotUniform(), name=f"dense_layer_{i}")(layers_dict[f"dense_layer_{i-1}"])
+            layers_dict[f"hidden_layer_{i}"] = hidden_layer(units=nb_units_in_layers[i-1],kernel_regularizer=regularizers.l2(self.alpha_reg),
+                                                            activation=layers_activation[i-1] ,kernel_initializer=initializers.GlorotUniform(), name=prefix_layer + f"_{i}")(layers_dict[f"hidden_layer_{i-1}"])
 
-            
+         
         #=========================== model's output definition ( constrained or not )=====================================
             
         if self.hard_constraints_model==0:
-            layers_dict['output_layer'] = layers.Dense(units=n_Y, kernel_regularizer=regularizers.l2(self.alpha_reg), kernel_initializer=initializers.GlorotUniform(),name='output_layer')(layers_dict[f"dense_layer_{len(nb_units_in_layers)}"]) 
+            layers_dict['output_layer'] = layers.Dense(units=n_Y, kernel_regularizer=regularizers.l2(self.alpha_reg), kernel_initializer=initializers.GlorotUniform(),name='output_layer')(layers_dict[f"hidden_layer_{len(nb_units_in_layers)}"]) 
 
         elif self.hard_constraints_model>0:
                 
             # Intermediate dense layer   
-            layers_dict['output_layer_interm'] = layers.Dense(units=n_Y, kernel_regularizer=regularizers.l2(self.alpha_reg), kernel_initializer=initializers.GlorotUniform(),name='output_layer_interm')(layers_dict[f"dense_layer_{len(nb_units_in_layers)}"])
+            layers_dict['output_layer_interm'] = layers.Dense(units=n_Y, kernel_regularizer=regularizers.l2(self.alpha_reg), kernel_initializer=initializers.GlorotUniform(),name='output_layer_interm')(layers_dict[f"hidden_layer_{len(nb_units_in_layers)}"])
 
             if self.hard_constraints_model==1:
                 # Layer enforcing physical constraint
@@ -651,11 +681,8 @@ class MLPModel(object):
 
                 # Layer enforcing physical constraint
                 # Atomic conservation
-                if self.output_omegas==True:
-                    layers_dict["output_layer"] = AtomicConservation_RR_lsq(n_Y, self._param1_Y, self._param2_Y, self._param2_Y_scale, 
-                                                                            self.L, kernel_initializer=initializers.GlorotUniform())(layers_dict["output_layer_interm"])
-                else:
-                    sys.exit("hard_constraints_model=2 not written for output_omegas=False")
+                layers_dict["output_layer"] = AtomicConservation_RR_lsq(n_Y, self._param1_Y, self._param2_Y, self._param2_Y_scale, 
+                                                                        self.L, kernel_initializer=initializers.GlorotUniform())(layers_dict["output_layer_interm"])
         
         # ================                Define model   ==========================================================
         
@@ -770,4 +797,18 @@ class MLPModel(object):
             
         return param1, param2
 
-        
+
+    def check_inputs(self):
+
+        # Mechanism type
+        if self.mechanism_type not in ["detailed", "reduced"]:
+            sys.exit('ERROR: mechanism_type should be either "detailed" or "reduced"')
+
+        # Layers type
+        if self.layers_type not in ["dense", "resnet"]:
+            sys.exit("ERROR: Wrong layer type, it should be 'dense' or 'resnet'")
+
+        # Conservation layer
+        if self.hard_constraints_model==2 and self.output_omegas==False:
+            sys.exit("hard_constraints_model=2 not written for output_omegas=False")
+
