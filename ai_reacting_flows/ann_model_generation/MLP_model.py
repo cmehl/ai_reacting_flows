@@ -528,10 +528,13 @@ class MLPModel(object):
         # Choosing hidden layer type: dense or resblock
         if self.layers_type=="dense":
             hidden_layer = layers.Dense
-            prefix_layer = "dense"
+            prefix_layer = "dense_layer"
         elif self.layers_type=="resnet":
             hidden_layer = ResidualBlock
-            prefix_layer = "resblock"
+            prefix_layer = "resblock_layer"
+
+        # Layer number (might differ from i in the case of resnet -> if there is a dense layer we want first resnet to be called resblock_layer_2 for easier reading in C++)
+        layer_nb = 1
 
         layers_dict = {}
         
@@ -553,18 +556,21 @@ class MLPModel(object):
 
         if self.layers_type=="resnet":  
             layers_dict["dense_layer_1"] = layers.Dense(units=nb_units_in_layers[0],kernel_regularizer=regularizers.l2(self.alpha_reg),
-                                            activation=layers_activation[0], kernel_initializer=initializers.GlorotUniform(), name="dense_layer_1")(yk_layer)
+                                            activation=layers_activation[0], kernel_initializer=initializers.GlorotUniform(), name=f"dense_layer_{layer_nb}")(yk_layer)
+            layer_nb += 1
 
             layers_dict["hidden_layer_1"] = hidden_layer(units=nb_units_in_layers[0],kernel_regularizer=regularizers.l2(self.alpha_reg),
-                                            activation=layers_activation[0], kernel_initializer=initializers.GlorotUniform(), name=prefix_layer + "_1")(layers_dict["dense_layer_1"])
+                                            activation=layers_activation[0], kernel_initializer=initializers.GlorotUniform(), name=prefix_layer + f"_{layer_nb}")(layers_dict["dense_layer_1"])
+            layer_nb += 1
         else:
             layers_dict["hidden_layer_1"] = hidden_layer(units=nb_units_in_layers[0],kernel_regularizer=regularizers.l2(self.alpha_reg),
-                                            activation=layers_activation[0], kernel_initializer=initializers.GlorotUniform(), name=prefix_layer + "_1")(yk_layer)
-            
+                                            activation=layers_activation[0], kernel_initializer=initializers.GlorotUniform(), name=prefix_layer + f"_{layer_nb}")(yk_layer)
+            layer_nb += 1
+
         for i in range(2, len(nb_units_in_layers)+1):
             layers_dict[f"hidden_layer_{i}"] = hidden_layer(units=nb_units_in_layers[i-1],kernel_regularizer=regularizers.l2(self.alpha_reg),
-                                                            activation=layers_activation[i-1] ,kernel_initializer=initializers.GlorotUniform(), name=prefix_layer + f"_{i}")(layers_dict[f"hidden_layer_{i-1}"])
-
+                                                            activation=layers_activation[i-1] ,kernel_initializer=initializers.GlorotUniform(), name=prefix_layer + f"_{{layer_nb}}")(layers_dict[f"hidden_layer_{i-1}"])
+            layer_nb += 1
             
             #=========================== model's output definition ( constrained or not )=====================================
             
@@ -629,33 +635,38 @@ class MLPModel(object):
         # Choosing hidden layer type: dense or resblock
         if self.layers_type=="dense":
             hidden_layer = layers.Dense
-            prefix_layer = "dense"
+            prefix_layer = "dense_layer"
         elif self.layers_type=="resnet":
             hidden_layer = ResidualBlock
-            prefix_layer = "resblock"
+            prefix_layer = "resblock_layer"
 
 
         layers_dict = {}
         
         layers_dict["input_layer"] = layers.Input(shape=(n_X,), name="input_layer")
 
+        # Layer number (might differ from i in the case of resnet -> if there is a dense layer we want first resnet to be called resblock_layer_2 for easier reading in C++)
+        layer_nb = 1
+
         # If resnet, we need an input to the resblock with same dimension as the units (to be able to perform the sum inputs+outputs)
         if self.layers_type=="resnet":
 
             layers_dict["dense_layer_1"] = layers.Dense(units=nb_units_in_layers[0],kernel_regularizer=regularizers.l2(self.alpha_reg),
-                                        activation=layers_activation[0], kernel_initializer=initializers.GlorotUniform(), name= "dense_layer_1")(layers_dict["input_layer"])
+                                        activation=layers_activation[0], kernel_initializer=initializers.GlorotUniform(), name= f"dense_layer_{layer_nb}")(layers_dict["input_layer"])
+            layer_nb += 1
 
             layers_dict["hidden_layer_1"] = hidden_layer(units=nb_units_in_layers[0],kernel_regularizer=regularizers.l2(self.alpha_reg),
-                                        activation=layers_activation[0], kernel_initializer=initializers.GlorotUniform(), name=prefix_layer + "_1")(layers_dict["dense_layer_1"])
+                                        activation=layers_activation[0], kernel_initializer=initializers.GlorotUniform(), name=prefix_layer + f"_{layer_nb}")(layers_dict["dense_layer_1"])
+            layer_nb += 1
         else:
             layers_dict["hidden_layer_1"] = hidden_layer(units=nb_units_in_layers[0],kernel_regularizer=regularizers.l2(self.alpha_reg),
-                                            activation=layers_activation[0], kernel_initializer=initializers.GlorotUniform(), name=prefix_layer + "_1")(layers_dict["input_layer"])
-
+                                            activation=layers_activation[0], kernel_initializer=initializers.GlorotUniform(), name=prefix_layer + f"_{layer_nb}")(layers_dict["input_layer"])
+            layer_nb += 1
             
         for i in range(2, len(nb_units_in_layers)+1):
             layers_dict[f"hidden_layer_{i}"] = hidden_layer(units=nb_units_in_layers[i-1],kernel_regularizer=regularizers.l2(self.alpha_reg),
-                                                            activation=layers_activation[i-1] ,kernel_initializer=initializers.GlorotUniform(), name=prefix_layer + f"_{i}")(layers_dict[f"hidden_layer_{i-1}"])
-
+                                                            activation=layers_activation[i-1] ,kernel_initializer=initializers.GlorotUniform(), name=prefix_layer + f"_{layer_nb}")(layers_dict[f"hidden_layer_{i-1}"])
+            layer_nb += 1
          
         #=========================== model's output definition ( constrained or not )=====================================
             

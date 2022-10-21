@@ -378,8 +378,8 @@ class ResidualBlock(Layer):
         self.activation = activation
         self.kernel_initializer = kernel_initializer
         self.hidden = Dense(self.units, kernel_regularizer=self.kernel_regularizer, activation=self.activation,
-                                    kernel_initializer=self.kernel_initializer)
-        self.outputs = Dense(self.units)
+                                    kernel_initializer=self.kernel_initializer, name="hidden_unit_0")
+        self.outputs = Dense(self.units, name="hidden_unit_1")
         
     def call(self, inputs):
         Z = inputs
