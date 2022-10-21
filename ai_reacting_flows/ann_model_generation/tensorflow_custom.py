@@ -10,7 +10,7 @@ import tensorflow as tf
 from tensorflow.python import ops
 from tensorflow.keras import backend as K
 from tensorflow.keras.layers import Layer, Dense
-from tensorflow.keras import initializers
+from tensorflow.keras import initializers, regularizers
 from tensorflow.python.framework import dtypes
 from tensorflow.python.framework import tensor_shape
 from tensorflow.python.keras.engine.input_spec import InputSpec
@@ -396,9 +396,9 @@ class ResidualBlock(Layer):
         config = super().get_config().copy()
         config.update({
                        "units": self.units,
-                       "kernel_regularizer": self.kernel_regularizer,
+                       "kernel_regularizer": regularizers.serialize(self.kernel_regularizer),
                        "activation": self.activation,
-                       "kernel_initializer": self.kernel_initializer,
+                       "kernel_initializer": initializers.serialize(self.kernel_initializer),
                        })
         return config
 
