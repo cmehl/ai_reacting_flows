@@ -19,6 +19,7 @@ training_parameters["remove_N2"] = True    # if True, N2 is removed from the neu
 
 training_parameters["nb_units_in_layers_list"] = [[20,20], [10,10], [10,10]]   # Network shape: number of units in each layer
 training_parameters["layers_activation_list"] = [['tanh','tanh'],['tanh','tanh'],['tanh','tanh']]    # Activation functions
+training_parameters["layers_type"] = "dense"               # "dense" or "resnet"
     
 training_parameters["batch_size"] = 512         # Batch size for the gradient descent
 training_parameters["initial_learning_rate"] = 1.0e-3           # Initial learnign rate
