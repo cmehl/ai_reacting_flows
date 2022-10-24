@@ -9,8 +9,8 @@ Created on Thu May 14 10:24:33 2020
 import tensorflow as tf
 from tensorflow.python import ops
 from tensorflow.keras import backend as K
-from tensorflow.keras.layers import Layer
-from tensorflow.keras import initializers
+from tensorflow.keras.layers import Layer, Dense
+from tensorflow.keras import initializers, regularizers
 from tensorflow.python.framework import dtypes
 from tensorflow.python.framework import tensor_shape
 from tensorflow.python.keras.engine.input_spec import InputSpec
@@ -357,6 +357,50 @@ class AtomicConservation_RR_lsq(Layer):
         base_config = super(AtomicConservation_RR_lsq, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
 
+
+# =============================================================================
+# Residual blocks layer
+# =============================================================================
+
+class ResidualBlock(Layer):
+    """ A custom residual block for the ResNet Model
+    """
+    def __init__(self,
+                 units,
+                 kernel_regularizer,
+                 activation,
+                 kernel_initializer,
+                 **kwargs):
+        
+        super().__init__(**kwargs)
+        self.units = units
+        self.kernel_regularizer = kernel_regularizer
+        self.activation = activation
+        self.kernel_initializer = kernel_initializer
+        self.hidden = Dense(self.units, kernel_regularizer=self.kernel_regularizer, activation=self.activation,
+                                    kernel_initializer=self.kernel_initializer, name="hidden_unit_0")
+        self.outputs = Dense(self.units, name="hidden_unit_1")
+        
+    def call(self, inputs):
+        Z = inputs
+        Z = self.hidden(Z)
+        outputs = self.outputs(Z)
+        if self.activation == "swish":
+            return tf.keras.activations.swish(inputs + outputs)
+        elif self.activation == "tanh":
+            return tf.keras.activations.tanh(inputs + outputs)
+        else:
+            return tf.keras.activations.relu(inputs + outputs)
+    
+    def get_config(self):
+        config = super().get_config().copy()
+        config.update({
+                       "units": self.units,
+                       "kernel_regularizer": regularizers.serialize(self.kernel_regularizer),
+                       "activation": self.activation,
+                       "kernel_initializer": initializers.serialize(self.kernel_initializer),
+                       })
+        return config
 
 # =============================================================================
 # CUSTOM SLICING LAYERS
