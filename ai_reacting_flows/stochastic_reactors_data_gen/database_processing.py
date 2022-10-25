@@ -84,6 +84,8 @@ class LearningDatabase(object):
 
         self.is_reduced = False
 
+        self.check_inputs()
+
     
     def get_database_from_h5(self):
 
@@ -417,6 +419,10 @@ class LearningDatabase(object):
             if self.log_transform_Y>0:
                 Y_p[Y_p < self.threshold] = self.threshold
 
+            # If log transform at input and not at output and output_omega, we need to save un-transformed data
+            if self.log_transform_X>0 and self.log_transform_Y==0 and self.output_omegas==True:
+                X_p_save = X_p.loc[:, X_cols[1:]]
+
 
             #Applying transformation (log of BCT)
             if self.log_transform_X==1:
@@ -432,7 +438,10 @@ class LearningDatabase(object):
 
             # If differences are considered
             if self.output_omegas==True:
-                Y_p = Y_p.subtract(X_p.loc[:,X_cols[1:]].reset_index(drop=True))
+                if self.log_transform_X>0 and self.log_transform_Y==0:  # Case where X has been logged but not Y
+                    Y_p = Y_p.subtract(X_p_save.reset_index(drop=True))
+                else:
+                    Y_p = Y_p.subtract(X_p.loc[:,X_cols[1:]].reset_index(drop=True))
 
             # Renaming columns
             X_p.columns = [str(col) + '_X' for col in X_p.columns]
@@ -549,4 +558,11 @@ class LearningDatabase(object):
 
         fig1.savefig(self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/distrib_{species}_train.png", dpi=300, bbox_inches='tight')
         fig2.savefig(self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/distrib_{species}_val.png", dpi=300, bbox_inches='tight')
+
+
+
+    def check_inputs(self):
+
+        if self.log_transform_X==0 and self.log_transform_Y>0:
+            sys.exit("ERROR: log_transform_Y cannot be active if log_transform_X==0 !")
 
