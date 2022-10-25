@@ -699,11 +699,7 @@ class ModelTesting(object):
                 
         # If reaction rate outputs from network
         if self.output_omegas and self.log_transform_Y==0:
-            if self.remove_N2:
-                Y_old_wo_N2 = np.delete(Y_old, n2_index)
-                Y_new += Y_old_wo_N2
-            else:
-                Y_new += Y_old
+            Y_new += state_vector[1:]   # Remark: state vector already contains information about N2 removal
 
         # Adding back N2 before computing temperature
         if self.remove_N2:
