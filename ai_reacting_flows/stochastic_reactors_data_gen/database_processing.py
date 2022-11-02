@@ -89,29 +89,35 @@ class LearningDatabase(object):
     
     def get_database_from_h5(self):
 
-        # Solution 0
+        # Opening h5 file
         h5file_r = h5py.File(self.dtb_folder + "/solutions.h5", 'r')
-        data_X = h5file_r.get("ITERATION_00000/X")[()]
+
+        # Solution 0 read to get columns names
         col_names_X = h5file_r["ITERATION_00000/X"].attrs["cols"]
-        data_Y = h5file_r.get("ITERATION_00000/Y")[()]
         col_names_Y = h5file_r["ITERATION_00000/Y"].attrs["cols"]
 
-        self.X = pd.DataFrame(data=data_X, columns=col_names_X)
-        self.Y = pd.DataFrame(data=data_Y, columns=col_names_Y)
-
         # Loop on other solutions
-        for i in range(1,self.nb_solutions):
+        list_df_X = []
+        list_df_Y = []
+        for i in range(self.nb_solutions):
+
+            if i%100==0:
+                print(f"Opening solution: {i} / {self.nb_solutions}")
 
             data_X = h5file_r.get(f"ITERATION_{i:05d}/X")[()]
             data_Y = h5file_r.get(f"ITERATION_{i:05d}/Y")[()]
 
-            df_X_current = pd.DataFrame(data=data_X, columns=col_names_X)
-            self.X = pd.concat([self.X, df_X_current], ignore_index=True)
-
-            df_Y_current = pd.DataFrame(data=data_Y, columns=col_names_Y)
-            self.Y = pd.concat([self.Y, df_Y_current], ignore_index=True)
+            list_df_X.append(pd.DataFrame(data=data_X, columns=col_names_X))
+            list_df_Y.append(pd.DataFrame(data=data_Y, columns=col_names_Y))
 
         h5file_r.close()
+
+        print(f"\n Performing concatenation of dataframes...")
+
+        self.X = pd.concat(list_df_X, ignore_index=True)
+        self.Y = pd.concat(list_df_Y, ignore_index=True)
+
+        print("End of concatenation ! \n")
 
 
     def apply_temperature_threshold(self, T_threshold):
@@ -163,6 +169,7 @@ class LearningDatabase(object):
             # Attributing cluster
             for i in range(nb_clusters):
 
+                #TODO Painful loop, must be written using pandas functions
                 for index, row in self.X.iterrows():
                     c = row["Prog_var"]
                     if (c>=c_bounds[i]) & (c<c_bounds[i+1]):
