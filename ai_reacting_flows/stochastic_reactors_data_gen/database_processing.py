@@ -265,9 +265,9 @@ class LearningDatabase(object):
 
 
         # Removing unwanted species
-        to_keep = ["Temperature", "Pressure"] + species_subset + ["Prog_var", "cluster"]
+        to_keep = ["Temperature", "Pressure"] + species_subset + ["Prog_var", "HRR", "cluster"]
         self.X = self.X[to_keep]
-        to_keep = ["Temperature", "Pressure"] + species_subset + ["Prog_var"]
+        to_keep = ["Temperature", "Pressure"] + species_subset + ["Prog_var", "HRR"]
         self.Y = self.Y[to_keep]
 
 
@@ -330,9 +330,9 @@ class LearningDatabase(object):
             self.X[spec + "_F"] = Yk_in_fictive[:,i]
             self.Y[spec + "_F"] = Yk_out_fictive[:,i]
 
-        # Moving progress variable and cluster at the end
-        self.X = self.X[[c for c in self.X if c not in ['Prog_var', 'cluster']] + ['Prog_var', 'cluster']]
-        self.Y = self.Y[[c for c in self.Y if c not in ['Prog_var',]] + ['Prog_var']]
+        # Moving progress variable, HRR, and cluster at the end
+        self.X = self.X[[c for c in self.X if c not in ['Prog_var', 'HRR', 'cluster']] + ['Prog_var', 'HRR', 'cluster']]
+        self.Y = self.Y[[c for c in self.Y if c not in ['Prog_var', 'HRR']] + ['Prog_var', 'HRR']]
 
         # Modification of the CANTERA mechanism
         mechanism = utils.cantera_yaml(self.detailed_mechanism)
@@ -404,7 +404,7 @@ class LearningDatabase(object):
 
             # Removing useless columns
             X_cols = X_p.columns.to_list()
-            list_to_remove = ["Prog_var", "cluster"]
+            list_to_remove = ["Prog_var", "HRR", "cluster"]
             if remove_pressure_X:
                 list_to_remove.append('Pressure')
             #
@@ -412,7 +412,7 @@ class LearningDatabase(object):
             X_p = X_p[X_cols] 
             #
             Y_cols = Y_p.columns.to_list()
-            list_to_remove = ["Temperature", "Prog_var"]
+            list_to_remove = ["Temperature", "Prog_var", "HRR"]
             if remove_pressure_Y:
                 list_to_remove.append('Pressure')
             #

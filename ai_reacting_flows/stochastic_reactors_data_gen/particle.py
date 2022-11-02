@@ -73,6 +73,8 @@ class Particle(object):
                 self.pv_ind.append(gas.species_index(self.pv_species[i]))
         #
         self.compute_progress_variable()
+        #
+        self.compute_heat_release_rate()
 
         
 
@@ -287,6 +289,20 @@ class Particle(object):
                 Yc += self.Y[i]
             
             self.prog_var = Yc/Yc_eq
+
+
+    # Heat release rate
+    def compute_heat_release_rate(self):
+
+        # We need CANTERA solution object
+        gas = ct.Solution(self.mech_file)
+        gas.TPX = self.T, self.P, self.X
+
+        self.hrr = 0.0       
+        for spec in gas.species_names:
+            standard_enthalpy_spec = gas.standard_enthalpies_RT[gas.species_index(spec)] * ct.gas_constant * gas.T
+            self.hrr += -gas.net_production_rates[gas.species_index(spec)] * standard_enthalpy_spec
+
 
     
     # Mixture fraction based on atomic balance

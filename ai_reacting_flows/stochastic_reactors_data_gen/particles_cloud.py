@@ -180,7 +180,7 @@ class ParticlesCloud(object):
         # =====================================================================
 
         # Columns of data array with solution and post-processing variables
-        self.cols_all_states = ['Temperature'] + ['Pressure'] + self.species_names + ['Mix_frac'] + ['Equiv_ratio'] + ['Prog_var'] +  ['Time'] + ['Particle_number'] + ['Inlet_number'] + ['Y_C', 'Y_H', 'Y_O', 'Y_N']
+        self.cols_all_states = ['Temperature'] + ['Pressure'] + self.species_names + ['Mix_frac'] + ['Equiv_ratio'] + ['Prog_var'] + ['HRR'] +  ['Time'] + ['Particle_number'] + ['Inlet_number'] + ['Y_C', 'Y_H', 'Y_O', 'Y_N']
         
         # Initialize mean trajectories
         if self.calc_mean_traj:
@@ -494,6 +494,7 @@ class ParticlesCloud(object):
             part.compute_equiv_ratio()
             part.compute_progress_variable()
             part.compute_mixture_fraction()
+            part.compute_heat_release_rate()
 
         # Allgather regroups the chunks and give the whole list to all the processors (<=> gather + broadcast)
         result = self.comm.allgather(lists_particles)
@@ -587,10 +588,11 @@ class ParticlesCloud(object):
             arr[i,part.nb_state_vars] = part.mix_frac
             arr[i,part.nb_state_vars+1] = part.equiv_ratio
             arr[i,part.nb_state_vars+2] = part.prog_var
-            arr[i,part.nb_state_vars+3] = self.time
-            arr[i,part.nb_state_vars+4] = part.num_part
-            arr[i,part.nb_state_vars+5] = part.num_inlet
-            arr[i,part.nb_state_vars+6:part.nb_state_vars+10] = part.atomic_mass_fractions
+            arr[i,part.nb_state_vars+3] = part.hrr
+            arr[i,part.nb_state_vars+4] = self.time
+            arr[i,part.nb_state_vars+5] = part.num_part
+            arr[i,part.nb_state_vars+6] = part.num_inlet
+            arr[i,part.nb_state_vars+7:part.nb_state_vars+11] = part.atomic_mass_fractions
 
         # Store initial solution in h5 file
         f = h5py.File(self.results_folder +  f"/solutions.h5","a")
@@ -604,7 +606,7 @@ class ParticlesCloud(object):
     def _update_dtb_states(self, which_state):
         
         # Set current iteration results in a dataframe
-        cols = ['Temperature'] + ['Pressure'] + self.species_names + ['Prog_var']
+        cols = ['Temperature'] + ['Pressure'] + self.species_names + ['Prog_var'] + ['HRR']
         arr = np.empty((self.nb_parts_tot, len(cols)))
         for i in range(self.nb_parts_tot):
             # i-th particle
@@ -613,6 +615,7 @@ class ParticlesCloud(object):
             arr[i,1] = part.P
             arr[i,2:part.nb_state_vars] = part.Y
             arr[i,part.nb_state_vars] = part.prog_var
+            arr[i,part.nb_state_vars+1] = part.hrr
 
         # Store initial solution in h5 file
         f = h5py.File(self.results_folder +  f"/solutions.h5","a")
