@@ -7,9 +7,20 @@ import random
 import joblib
 import pandas as pd
 import numpy as np
+from scipy.interpolate import interpn
+from scipy.interpolate import interp1d
+from scipy.stats.kde import gaussian_kde
 import h5py
 import cantera as ct
+
+import matplotlib as mpl
 import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize 
+from matplotlib import cm
+
+import seaborn as sns
+sns.set_style("darkgrid")
+
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
@@ -45,7 +56,7 @@ class LearningDatabase(object):
         self.get_database_from_h5()
 
         # Extracting some information
-        self.species_names = self.X.columns[2:-1]
+        self.species_names = self.X.columns[2:-2]
         self.nb_species = len(self.species_names)
 
         # Saving folder: by default the model is saved in cluster0
@@ -96,7 +107,7 @@ class LearningDatabase(object):
         col_names_X = h5file_r["ITERATION_00000/X"].attrs["cols"]
         col_names_Y = h5file_r["ITERATION_00000/Y"].attrs["cols"]
 
-        # Loop on other solutions
+        # Loop on solutions
         list_df_X = []
         list_df_Y = []
         for i in range(self.nb_solutions):
@@ -215,7 +226,7 @@ class LearningDatabase(object):
 
 
 
-
+    # Very basic re-sampling, not used
     def undersample_cluster(self, i_cluster, ratio_to_keep):
         
         # Here it is better to work with the ratio of data to delete
@@ -232,6 +243,57 @@ class LearningDatabase(object):
         self.X.drop(rows, axis=0, inplace=True)
         self.Y.drop(rows, axis=0, inplace=True)
 
+
+
+    # Re-sampling based on heat release rate
+    def undersample_HRR(self, jpdf_var_1, jpdf_var_2, n_samples):
+
+        # Setting a numpy seed
+        np.random.seed(1991) 
+
+        # Joint PDF
+        x = self.X[jpdf_var_1]
+        y = self.X[jpdf_var_2]
+        data, x_e, y_e = np.histogram2d(x, y, bins = 100, density = False)
+        pnts_count = interpn( ( 0.5*(x_e[1:] + x_e[:-1]) , 0.5*(y_e[1:]+y_e[:-1]) ) , data , np.vstack([x,y]).T , method = "splinef2d", bounds_error = False)
+        pnts_count[np.where(np.isnan(pnts_count))] = 0.0
+        pnts_count = np.abs(pnts_count)
+        pnts_density = pnts_count / pnts_count.sum()
+
+        a = np.abs(self.X["HRR"])
+        a = (a-a.min())/(a.max()-a.min())
+        sum_hrr = a.sum()
+        p_hrr = a / sum_hrr
+
+        # Constructing PDF for random points choice
+        # Idea: we promote high HRR and in the meantime penalize high density in original dataset
+        n = self.X.shape[0]
+        p = np.empty(n)
+        for i in range(n):
+            if pnts_density[i]==0.0:
+                p[i] = 1.0
+            else:
+                p[i] = p_hrr[i]/pnts_density[i]
+        p /= p.sum()
+
+        # Performing the random choice of points
+        choice = np.random.choice(range(n), replace=False, size=n_samples, p=p)
+
+        # Performing the point selection in database
+        self.X = self.X.iloc[choice]
+        self.X = self.X.reset_index(drop=True)
+        #
+        self.Y = self.Y.iloc[choice]
+        self.Y = self.Y.reset_index(drop=True)
+
+        # Checking the defined probability law
+        # plt.scatter(x, y, c=p, cmap='viridis')
+        # plt.colorbar()
+        # plt.show()
+
+        print(f"\n Number of points in undersampled dataset: {self.X.shape[0]} \n")
+        print(f"    >> {100*self.X.shape[0]/n} % of the database is retained")
+    
 
 
     # Function to reduce the species in the database. A closure based on fictive species is here selected
@@ -375,7 +437,7 @@ class LearningDatabase(object):
         assert res_rel_h_out.max() < 1.0e-10
 
 
-
+    # Database final processing
     def process_database(self, plot_distributions = False, distribution_species=[]):
 
         self.is_processed = True
@@ -572,4 +634,46 @@ class LearningDatabase(object):
 
         if self.log_transform_X==0 and self.log_transform_Y>0:
             sys.exit("ERROR: log_transform_Y cannot be active if log_transform_X==0 !")
+
+
+
+    # 2-D joint PDF plotting of two variable
+    def density_scatter(self, var_x , var_y, sort = True, bins = 100):
+        # Functions from https://stackoverflow.com/questions/20105364/how-can-i-make-a-scatter-plot-colored-by-density-in-matplotlib
+
+        x = self.X[var_x]
+        y = self.X[var_y]
+
+        fig , ax = plt.subplots()
+        data , x_e, y_e = np.histogram2d(x, y, bins = bins, density = False )
+        z = interpn( ( 0.5*(x_e[1:] + x_e[:-1]) , 0.5*(y_e[1:]+y_e[:-1]) ) , data , np.vstack([x,y]).T , method = "splinef2d", bounds_error = False)
+
+        #To be sure to plot all data
+        z[np.where(np.isnan(z))] = 0.0
+
+        # Sort the points by density, so that the densest points are plotted last
+        if sort :
+            idx = z.argsort()
+            x, y, z = x[idx], y[idx], z[idx]
+
+        ax.scatter(x, y, c=z)
+
+        norm = Normalize(vmin = np.min(z), vmax = np.max(z))
+        cbar = fig.colorbar(cm.ScalarMappable(norm = norm), ax=ax)
+        cbar.ax.set_ylabel('Density')
+
+        fig.tight_layout()
+
+
+
+    # Marginal PDF of a given variable in the dataframe
+    def plot_pdf_var(self, var): 
+            
+        # Temperature histogram
+        fig, ax = plt.subplots()
+        
+        sns.histplot(data=self.X, x=var, ax=ax, stat="probability",
+                     binwidth=20, kde=True)
+
+        fig.tight_layout()
 

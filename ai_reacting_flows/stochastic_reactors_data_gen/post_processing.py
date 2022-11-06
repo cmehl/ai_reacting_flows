@@ -2,9 +2,14 @@ import os
 
 import numpy as np
 import pandas as pd
+from scipy.interpolate import interpn
 import cantera as ct
 import h5py
+
 import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize 
+from matplotlib import cm
+
 import seaborn as sns
 sns.set_style("darkgrid")
 
@@ -45,6 +50,9 @@ class StochDatabase(object):
         # 
         f.close()
 
+        # Additional post_processing
+        self.compute_additional_postpros()
+
         # Saving folder
         if not os.path.isdir(save_folder):
             os.mkdir(save_folder)
@@ -57,26 +65,29 @@ class StochDatabase(object):
 
     def get_all_states(self):
 
-        # Solution 0
+        # Reading file
         h5file_r = h5py.File(self.stoch_dtb_folder + "/solutions.h5", 'r')
-        data = h5file_r.get("ITERATION_00000/all_states")[()]
+
+        # Solution 0 read to get columns names
         col_names = h5file_r["ITERATION_00000/all_states"].attrs["cols"]
 
-        self.df = pd.DataFrame(data=data, columns=col_names)
+        # Loop on solutions
+        list_df = []
+        for i in range(self.nb_solutions):
 
-        # Loop on other solutions
-        for i in range(1,self.nb_solutions):
+            if i%100==0:
+                print(f"Opening solution: {i} / {self.nb_solutions}")
 
             data = h5file_r.get(f"ITERATION_{i:05d}/all_states")[()]
 
-            df_current = pd.DataFrame(data=data, columns=col_names)
-            self.df = pd.concat([self.df, df_current], ignore_index=True)
+            list_df.append(pd.DataFrame(data=data, columns=col_names))
+        
+        self.df = pd.concat(list_df, ignore_index=True)
 
         h5file_r.close()
 
 
         
-
     #--------------------------------------------------------
     # CANONICAL FLAMES CALCULATION
     #--------------------------------------------------------
@@ -100,6 +111,15 @@ class StochDatabase(object):
 
         # Compute flame
         self.T_cano_1D, self.Y_cano_dict_1D = utils.compute_adiabatic(fuel, mech_file, phi, T0, p, diffusion_model)
+
+    #--------------------------------------------------------
+    # ADDITIONAL CALCULATIONS
+    #--------------------------------------------------------
+
+    def compute_additional_postpros(self):
+
+        self.df["abs_HRR"] = np.abs(self.df["HRR"])
+        self.df["log_abs_HRR"] = np.log(self.df["abs_HRR"])
 
 
     #--------------------------------------------------------
@@ -169,6 +189,24 @@ class StochDatabase(object):
 
             # Save
             fig.savefig(self.save_folder + f"/dtb_T_{spec}_plot.png", dpi=300)
+
+
+    # Generic plotting function
+    def plot_generic(self, var_x, var_y, var_c):
+
+        # Creating axis
+        fig, ax = plt.subplots()
+
+        self.df.plot.scatter(x=var_x, y=var_y, ax=ax, c=var_c, colormap='viridis')
+        ax.set_xlabel(var_x)
+        ax.set_ylabel(var_y)
+
+        ax.set_xlim([0.9*self.df[var_x].min(), 1.1*self.df[var_x].max()])
+
+        fig.tight_layout()
+
+        # Save
+        fig.savefig(self.save_folder + f"/dtb_x{var_x}_y{var_y}_c{var_c}_plot.png", dpi=300)
 
 
     #--------------------------------------------------------
@@ -260,6 +298,32 @@ class StochDatabase(object):
 
             # Save
             fig.savefig(self.save_folder + f"/dtb_T_{spec}_plot_{iteration:05d}.png", dpi=300)
+
+
+
+    # Generic plotting function
+    def plot_generic_indiv(self, var_x, var_y, var_c, iteration):
+
+        # Loading solution at given iteration
+        h5file_r = h5py.File(self.stoch_dtb_folder + f"/solutions.h5", 'r')
+        data = h5file_r.get(f"ITERATION_{iteration:05d}/all_states")[()]
+        col_names = h5file_r[f"ITERATION_{iteration:05d}/all_states"].attrs["cols"]
+        h5file_r.close()
+        df = pd.DataFrame(data=data, columns=col_names)
+
+        # Creating axis
+        fig, ax = plt.subplots()
+
+        df.plot.scatter(x=var_x, y=var_y, ax=ax, c=var_c, colormap='viridis')
+        ax.set_xlabel(var_x)
+        ax.set_ylabel(var_y)
+
+        ax.set_xlim([0.9*df[var_x].min(), 1.1*df[var_x].max()])
+
+        fig.tight_layout()
+
+        # Save
+        fig.savefig(self.save_folder + f"/dtb_x{var_x}_y{var_y}_c{var_c}_plot_{iteration:05d}.png", dpi=300)
 
 
     #--------------------------------------------------------
@@ -398,4 +462,79 @@ class StochDatabase(object):
         fig.tight_layout()
             
         fig.savefig(self.save_folder + f"/PDF_T_plot.png")
+
+
+
+    def plot_pdf_HRR_inst(self, iteration):    
+
+        # Loading solution at given iteration
+        h5file_r = h5py.File(self.stoch_dtb_folder + f"/solutions.h5", 'r')
+        data = h5file_r.get(f"ITERATION_{iteration:05d}/all_states")[()]
+        col_names = h5file_r[f"ITERATION_{iteration:05d}/all_states"].attrs["cols"]
+        h5file_r.close()
+        df = pd.DataFrame(data=data, columns=col_names)
+            
+        # Temperature histogram
+        fig, ax = plt.subplots()
+        
+        sns.histplot(data=df, x="HRR", ax=ax, stat="probability",
+                     binwidth=20, kde=True)
+
+        fig.tight_layout()
+            
+        fig.savefig(self.save_folder + f"/PDF_HRR_plot_iteration{iteration:05d}.png")
+
+
+
+    def plot_pdf_HRR_all(self): 
+            
+        # Temperature histogram
+        fig, ax = plt.subplots()
+        
+        sns.histplot(data=self.df, x="log_abs_HRR", ax=ax, stat="probability",
+                     bins=20000, kde=False)
+
+        ax.set_xlim([-20.0,25])
+        ax.set_ylim([0,0.002])
+
+        fig.tight_layout()
+            
+        fig.savefig(self.save_folder + f"/PDF_HRR_plot.png")
+
+
+    #--------------------------------------------------------
+    # Points density
+    #--------------------------------------------------------
+
+
+    def density_scatter(self, var_x , var_y, sort = True, bins = 100):
+        # Functions from https://stackoverflow.com/questions/20105364/how-can-i-make-a-scatter-plot-colored-by-density-in-matplotlib
+
+        x = self.df[var_x]
+        y = self.df[var_y]
+
+        fig , ax = plt.subplots()
+        data , x_e, y_e = np.histogram2d( x, y, bins = bins, density = True )
+        z = interpn( ( 0.5*(x_e[1:] + x_e[:-1]) , 0.5*(y_e[1:]+y_e[:-1]) ) , data , np.vstack([x,y]).T , method = "splinef2d", bounds_error = False)
+
+        #To be sure to plot all data
+        z[np.where(np.isnan(z))] = 0.0
+
+        # Sort the points by density, so that the densest points are plotted last
+        if sort :
+            idx = z.argsort()
+            x, y, z = x[idx], y[idx], z[idx]
+
+        ax.scatter(x, y, c=z)
+
+        norm = Normalize(vmin = np.min(z), vmax = np.max(z))
+        cbar = fig.colorbar(cm.ScalarMappable(norm = norm), ax=ax)
+        cbar.ax.set_ylabel('Density')
+
+        fig.tight_layout()
+
+        fig.savefig(self.save_folder + f"/pnts_density_x{var_x}_y{var_y}_plot.png")
+
+
+
             
