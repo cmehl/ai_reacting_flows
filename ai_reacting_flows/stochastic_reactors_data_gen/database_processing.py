@@ -193,6 +193,14 @@ class LearningDatabase(object):
             cols = [0] + [2+i for i in range(self.nb_species)]
             data = self.X.values[:,cols]
 
+            # If log transform, we also apply it when clustering
+            if self.log_transform_X>0:
+                data[data < self.threshold] = self.threshold
+                if self.log_transform_X==1:
+                    data[:, 1:] = np.log(data[:, 1:])
+                elif self.log_transform_X==2:
+                    data[:, 1:] = (data[:, 1:]**self.lambda_bct - 1.0)/self.lambda_bct
+
             # Normalizing states before k-means
             Xscaler = StandardScaler()
             Xscaler.fit(data)
@@ -246,35 +254,86 @@ class LearningDatabase(object):
 
 
     # Re-sampling based on heat release rate
-    def undersample_HRR(self, jpdf_var_1, jpdf_var_2, n_samples):
+    def undersample_HRR(self, jpdf_var_1, jpdf_var_2, n_samples=None, n_bins=100):
+        
+        # Dataset size
+        n = self.X.shape[0]
+
+        # Variable on which to take statistics
+        a = np.abs(self.X["HRR"])
+        a = (a-a.min())/(a.max()-a.min())
+        a = 1.0 + 200.0*a
 
         # Setting a numpy seed
         np.random.seed(1991) 
 
-        # Joint PDF
         x = self.X[jpdf_var_1]
         y = self.X[jpdf_var_2]
-        data, x_e, y_e = np.histogram2d(x, y, bins = 100, density = False)
-        pnts_count = interpn( ( 0.5*(x_e[1:] + x_e[:-1]) , 0.5*(y_e[1:]+y_e[:-1]) ) , data , np.vstack([x,y]).T , method = "splinef2d", bounds_error = False)
-        pnts_count[np.where(np.isnan(pnts_count))] = 0.0
-        pnts_count = np.abs(pnts_count)
-        pnts_density = pnts_count / pnts_count.sum()
+        data, x_e, y_e = np.histogram2d(x, y, bins = n_bins, density = True)
+        # data = data.T
 
-        a = np.abs(self.X["HRR"])
-        a = (a-a.min())/(a.max()-a.min())
-        sum_hrr = a.sum()
-        p_hrr = a / sum_hrr
+        # fig, ax = plt.subplots()
+        # ax.scatter(x, y, c=a, s=1)
+        # norm = Normalize(vmin = np.min(a), vmax = np.max(a))
+        # cbar = fig.colorbar(cm.ScalarMappable(norm = norm), ax=ax)
+        # cbar.ax.set_ylabel('logHRR')
+        # fig.tight_layout()
 
-        # Constructing PDF for random points choice
-        # Idea: we promote high HRR and in the meantime penalize high density in original dataset
-        n = self.X.shape[0]
-        p = np.empty(n)
-        for i in range(n):
-            if pnts_density[i]==0.0:
-                p[i] = 1.0
-            else:
-                p[i] = p_hrr[i]/pnts_density[i]
-        p /= p.sum()
+        data_hrr, _, _ = np.histogram2d(x, y, bins = n_bins, density = True, weights=a)
+        # data_hrr = data_hrr.T
+        counts, _, _ = np.histogram2d(x, y, bins = n_bins, density = False)
+        data_hrr = data_hrr / counts
+        data_hrr[np.where(np.isnan(data_hrr))] = 0.0
+        data_hrr[np.where(np.isinf(data_hrr))] = 0.0
+
+        # Finding number of samples to keep (methodology of Chi et al.), if no number is provided in function input
+        if n_samples is None:
+            # We first locate the bin with maximal HRR
+            list_indices = np.where(data_hrr==np.amax(data_hrr))
+            # We then compute the number of desired samples
+            n_samples = n * (data[list_indices[0][0],list_indices[1][0]]/data_hrr[list_indices[0][0],list_indices[1][0]])
+            n_samples = int(n_samples)
+
+        # Computing weighting function
+        f_m = (n_samples/n) * (data_hrr/data)
+        f_m[np.where(np.isnan(f_m))] = 0.0
+
+        # X, Y = np.meshgrid(x_e, y_e)
+        # fig, ax = plt.subplots()
+        # im = ax.pcolormesh(X, Y, data_hrr.T, cmap="viridis", vmin=0.0, vmax=0.0005)
+        # fig.colorbar(im, ax=ax)
+        # fig.show()
+
+        # X, Y = np.meshgrid(x_e, y_e)
+        # fig, ax = plt.subplots()
+        # im=ax.pcolormesh(X, Y, data.T, cmap="viridis", vmin=0.0, vmax=0.1)
+        # fig.colorbar(im, ax=ax)
+        # fig.show()
+
+        # p_1 = f_m/f_m.sum()
+        # X, Y = np.meshgrid(x_e, y_e)
+        # fig, ax = plt.subplots()
+        # im = ax.pcolormesh(X, Y, p_1.T, cmap="viridis", vmin=0.0, vmax=0.000001)
+        # fig.colorbar(im, ax=ax)
+        # fig.show()
+
+        f_m_interp = interpn( ( 0.5*(x_e[1:] + x_e[:-1]) , 0.5*(y_e[1:]+y_e[:-1]) ) , f_m , np.vstack([x,y]).T , method = "linear", bounds_error = False)
+        f_m_interp[np.where(np.isnan(f_m_interp))] = 0.0
+
+        # random.choice needs probability (sum to 1)
+        p = f_m_interp/f_m_interp.sum()
+
+        # fig, ax = plt.subplots()
+        # im = ax.scatter(x, y, c=p, s=4, vmin=0.0, vmax=0.00005)
+        # cbar = fig.colorbar(im, ax=ax)
+        # cbar.ax.set_ylabel('p')
+        # fig.tight_layout()
+
+        # We impose big weights for points where c<0.2
+        X_save = self.X.copy()
+        X_save["p"] = p
+        X_save[X_save["Prog_var"]<0.2]["p"] = 1.0  # very large weight
+        p = X_save["p"]/X_save["p"].sum()
 
         # Performing the random choice of points
         choice = np.random.choice(range(n), replace=False, size=n_samples, p=p)
@@ -285,11 +344,6 @@ class LearningDatabase(object):
         #
         self.Y = self.Y.iloc[choice]
         self.Y = self.Y.reset_index(drop=True)
-
-        # Checking the defined probability law
-        # plt.scatter(x, y, c=p, cmap='viridis')
-        # plt.colorbar()
-        # plt.show()
 
         print(f"\n Number of points in undersampled dataset: {self.X.shape[0]} \n")
         print(f"    >> {100*self.X.shape[0]/n} % of the database is retained")
