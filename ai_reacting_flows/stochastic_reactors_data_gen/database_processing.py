@@ -262,7 +262,7 @@ class LearningDatabase(object):
         # Variable on which to take statistics
         a = np.abs(self.X["HRR"])
         a = (a-a.min())/(a.max()-a.min())
-        a = 1.0 + 200.0*a
+        a = 1.0 + 1.0*a
 
         # Setting a numpy seed
         np.random.seed(1991) 
@@ -332,7 +332,7 @@ class LearningDatabase(object):
         # We impose big weights for points where c<0.2
         X_save = self.X.copy()
         X_save["p"] = p
-        X_save[X_save["Prog_var"]<0.2]["p"] = 1.0  # very large weight
+        X_save.loc[X_save["Prog_var"]<0.2, 'p'] = 1.0
         p = X_save["p"]/X_save["p"].sum()
 
         # Performing the random choice of points
