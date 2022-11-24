@@ -254,7 +254,7 @@ class LearningDatabase(object):
 
 
     # Re-sampling based on heat release rate
-    def undersample_HRR(self, jpdf_var_1, jpdf_var_2, n_samples=None, n_bins=100):
+    def undersample_HRR(self, jpdf_var_1, jpdf_var_2, hrr_func, keep_low_c, n_samples=None, n_bins=100):
         
         # Dataset size
         n = self.X.shape[0]
@@ -262,7 +262,7 @@ class LearningDatabase(object):
         # Variable on which to take statistics
         a = np.abs(self.X["HRR"])
         a = (a-a.min())/(a.max()-a.min())
-        a = 1.0 + 1.0*a
+        a = hrr_func(a)
 
         # Setting a numpy seed
         np.random.seed(1991) 
@@ -286,16 +286,17 @@ class LearningDatabase(object):
         data_hrr[np.where(np.isnan(data_hrr))] = 0.0
         data_hrr[np.where(np.isinf(data_hrr))] = 0.0
 
-        # Finding number of samples to keep (methodology of Chi et al.), if no number is provided in function input
-        if n_samples is None:
-            # We first locate the bin with maximal HRR
-            list_indices = np.where(data_hrr==np.amax(data_hrr))
-            # We then compute the number of desired samples
-            n_samples = n * (data[list_indices[0][0],list_indices[1][0]]/data_hrr[list_indices[0][0],list_indices[1][0]])
-            n_samples = int(n_samples)
+        # METHOD OF CHI, A PRIORI NOT USEFUL
+        # # Finding number of samples to keep (methodology of Chi et al.), if no number is provided in function input
+        # if n_samples is None:
+        #     # We first locate the bin with maximal HRR
+        #     list_indices = np.where(data_hrr==np.amax(data_hrr))
+        #     # We then compute the number of desired samples
+        #     n_samples = n * (data[list_indices[0][0],list_indices[1][0]]/data_hrr[list_indices[0][0],list_indices[1][0]])
+        #     n_samples = int(n_samples)
 
         # Computing weighting function
-        f_m = (n_samples/n) * (data_hrr/data)
+        f_m = (data_hrr/data) #(n_samples/n) * (data_hrr/data) (factor n_samples/n useless as we normalize later)
         f_m[np.where(np.isnan(f_m))] = 0.0
 
         # X, Y = np.meshgrid(x_e, y_e)
@@ -329,10 +330,18 @@ class LearningDatabase(object):
         # cbar.ax.set_ylabel('p')
         # fig.tight_layout()
 
-        # We impose big weights for points where c<0.2
+        # Copying X to manipulate weights
         X_save = self.X.copy()
         X_save["p"] = p
-        X_save.loc[X_save["Prog_var"]<0.2, 'p'] = 1.0
+
+        # Setting probability of points with p=0.0 to a very small value, so that we are able to reach the original datasets for high values of samples
+        X_save.loc[X_save["p"]==0.0, 'p'] = X_save["p"].min()/1000.0
+
+        # Imposing small progress variable values to stay in dataset (needed for ignition)
+        if keep_low_c:
+            X_save.loc[(X_save["Prog_var"]<0.2) & (X_save["Temperature"]>1000.0), 'p'] = 1.0
+
+        # Normalizing
         p = X_save["p"]/X_save["p"].sum()
 
         # Performing the random choice of points
