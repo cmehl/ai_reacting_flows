@@ -230,7 +230,7 @@ class LearningDatabase(object):
         ax.set_xlabel("T [K]")
         ax.set_ylabel("Y H2 [-]")
         fig.tight_layout()
-        fig.savefig(f"cluster_T_{species}.png")
+        fig.savefig(self.dtb_folder + "/" + self.database_name + f"/cluster_T_{species}.png")
 
 
 

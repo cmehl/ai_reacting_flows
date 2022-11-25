@@ -130,7 +130,7 @@ dmypy.json
 /notebooks/MODEL_*
 /notebooks/inlets*
 /notebooks/plots*
-
+/notebooks/postpro*
 
 
 
