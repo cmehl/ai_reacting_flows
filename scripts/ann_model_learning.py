@@ -9,7 +9,9 @@ training_parameters = {}
 training_parameters["model_name_suffix"] = "TEST"    # Name of the resulting model folder (as a suffix of MODEL)
     
 training_parameters["dataset_path"] = "/work/mehlc/2_IA_KINETICS/ai_reacting_flows/scripts/STOCH_DTB_hotspot_H2_DEV/database_1"    # path of the database
-    
+
+training_parameters["new_model_folder"] = True      # New model folders are training models inside existing folder
+
 training_parameters["dt_simu"] = 5.0e-07     # Time step of the prediction
     
 training_parameters["fuel"] = "H2"           # Fuel
@@ -38,7 +40,9 @@ training_parameters["hard_constraints_model"] = 0   # Hard constraint: 0=no cons
 # Models instantiation
 mlp_model = MLPModel(training_parameters)
 
-# Models training
-mlp_model.train_models()
+# Models training: all clusters
+mlp_model.train_model_all_clusters()
 
-
+# Model training: only cluster i_cluster
+# i_cluster = 0
+# mlp_model.train_model_cluster_i(i_cluster)
