@@ -107,7 +107,6 @@ class MLPModel(object):
 
         # Model's path
         self.directory = "./" + self.model_name
-    
         if self.new_model_folder==True:
             print(">> A new folder is created.")
             # Remove folder if already exists
@@ -117,13 +116,38 @@ class MLPModel(object):
         else:
             if not os.path.exists(self.directory):
                 sys.exit(f'ERROR: new_model_folder is set to False but model {self.directory} does not exist')
-            print(f">> Existing model folder {self.directory} is used.")
+            print(f">> Existing model folder {self.directory} is used. \n")
+
+
+        # Parameters which are to be kept constant if new_model_folder is False
+        if self.new_model_folder is True:  # Store parameters
+            shelfFile = shelve.open(self.directory + "/restart_params")
+            shelfFile["dataset_path"] = self.dataset_path
+            shelfFile["dt_simu"] = self.dt_simu
+            shelfFile["fuel"] = self.fuel
+            shelfFile["mechanism_type"] = self.mechanism_type
+            shelfFile.close()
+        else:   # read parameters
+            shelfFile = shelve.open(self.directory + "/restart_params")
+            self.dataset_path = shelfFile["dataset_path"]
+            self.dt_simu = shelfFile["dt_simu"]
+            self.fuel = shelfFile["fuel"]
+            self.mechanism_type = shelfFile["mechanism_type"]
+            shelfFile.close()
+            #
+            print("RE-READ PARAMETERS:")
+            print(f">> The used dataset is: {self.dataset_path}")
+            print(f">> The used time-step is: {self.dt_simu}")
+            print(f">> The considered fuel is: {self.fuel}")
+            print(f">> The chemical mechanism type is: {self.mechanism_type} \n")
+
 
         # Checking consistency of inputs
         self.check_inputs()
 
         # Get the number of clusters
         self.nb_clusters = len(next(os.walk(self.dataset_path))[1])
+        print("CLUSTERING:")
         print(f">> Number of clusters is: {self.nb_clusters}")
         
         # Create __init__.py for later use of python files
