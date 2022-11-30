@@ -43,7 +43,7 @@ import cantera as ct
 tf.keras.backend.set_floatx('float64')
 
 
-tf.random.set_seed(42)
+tf.random.set_seed(24)
 
 class MLPModel(object):
 
