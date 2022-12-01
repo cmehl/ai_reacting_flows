@@ -166,6 +166,7 @@ class ModelTesting(object):
         
         # Matrix with number of each atom in species (order of rows: C, H, O, N)
         atomic_array = utils.parse_species_names(self.spec_list_ANN)
+        
 
         #-------------------- CVODE COMPUTATION---------------------------
         # Remark: we don't use the method we wrote below
@@ -187,6 +188,10 @@ class ModelTesting(object):
 
 
         #-------------------- ANN SOLVER ---------------------------
+
+        # Counting calls
+        ann_calls = 0
+        cvode_calls = 0
 
         # Initial solution
         if self.mechanism_type=="reduced":
@@ -241,6 +246,13 @@ class ModelTesting(object):
                 if cons_criterion > self.hybrid_ann_cvode_tol:
                     # CVODE advance
                     T_new, Y_new = self.advance_state_CVODE(T_old, Y_old, pressure, dt)
+                    cvode_calls += 1
+                    print(">> Hybrid model: CVODE is used")
+                else:
+                    ann_calls +=1
+                    print(">> Hybrid model: ANN is used")
+            else:
+                ann_calls += 1
 
             # Vector with all variable (T and Yks)
             state = np.append(T_new, Y_new)
@@ -270,6 +282,12 @@ class ModelTesting(object):
             # Error on equilibrium temperature
             error_Teq = 100.0*abs(Teq_ref - Teq_ann)/Teq_ref
             print(f"\nError on equilibrium flame temperature is: {error_Teq} % \n")
+
+
+        # Print number of calls
+        print("\n NUMBER OF CALLS TO SOLVERS:")
+        print(f"   >>> Number of ANN calls: {ann_calls}")
+        print(f"   >>> Number of CVODE calls: {cvode_calls}")
 
 
         #-------------------- PLOTTING --------------------------- 
@@ -445,6 +463,10 @@ class ModelTesting(object):
 
         #-------------------- ANN REACTION RATES ---------------------------
 
+        # Counting calls
+        ann_calls = 0
+        cvode_calls = 0
+
         # Initial solution (depends on the use of reduced mechanism)
         if self.mechanism_type=="reduced":
             Yt_ann = np.zeros((gas_reduced.n_species, Yt.shape[1]))
@@ -483,15 +505,28 @@ class ModelTesting(object):
                     if cons_criterion > self.hybrid_ann_cvode_tol:
                         # CVODE advance
                         T_new, Y_new = self.advance_state_CVODE(Tt[i_reac], Yt_ann[:,i_reac], pressure, dt)
+                        cvode_calls += 1
+                        print(">> Hybrid model: CVODE is used")
+                    else:
+                        ann_calls +=1
+                        print(">> Hybrid model: ANN is used")
+                else:
+                    ann_calls += 1
             else:
                 T_new = Tt[i_reac]
                 Y_new = Yt_ann[:,i_reac]
+            
             
             Yt_dt_ann[:,i_reac] = np.reshape(Y_new,-1)
 
         # Reaction rates
         Omega_ann = (Yt_dt_ann-Yt_ann)/dt
 
+
+        # Print number of calls
+        print("\n NUMBER OF CALLS TO SOLVERS:")
+        print(f"   >>> Number of ANN calls: {ann_calls}")
+        print(f"   >>> Number of CVODE calls: {cvode_calls}")
 
         #-------------------- PLOTTING --------------------------- 
         
