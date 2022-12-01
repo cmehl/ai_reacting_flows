@@ -116,6 +116,10 @@ class ModelTesting(object):
             if self.mechanism_type=="reduced":
                 self.pv_ind_reduced.append(gas_reduced.species_index(self.pv_species[i])) 
 
+        # Hybrid computation
+        self.hybrid_ann_cvode = testing_parameters["hybrid_ann_cvode"]
+        self.hybrid_ann_cvode_tol = testing_parameters["hybrid_ann_cvode_tol"]
+
 
         # Getting fictive species names
         if self.mechanism_type=="reduced":
@@ -230,6 +234,13 @@ class ModelTesting(object):
             print(f"Current point in cluster: {self.cluster} \n")
 
             T_new, Y_new = self.advance_state_NN(T_old, Y_old, pressure, dt)
+
+            # If hybrid, we check conservation and use CVODE if not satisfied
+            if self.hybrid_ann_cvode:
+                cons_criterion = np.abs(np.sum(Y_new,axis=0) - 1.0)
+                if cons_criterion > self.hybrid_ann_cvode_tol:
+                    # CVODE advance
+                    T_new, Y_new = self.advance_state_CVODE(T_old, Y_old, pressure, dt)
 
             # Vector with all variable (T and Yks)
             state = np.append(T_new, Y_new)
@@ -465,6 +476,13 @@ class ModelTesting(object):
             # advance to t + dt
             if Tt[i_reac] >= T_threshold:
                 T_new, Y_new = self.advance_state_NN(Tt[i_reac], Yt_ann[:,i_reac], pressure, dt)
+
+                # If hybrid, we check conservation and use CVODE if not satisfied
+                if self.hybrid_ann_cvode:
+                    cons_criterion = np.abs(np.sum(Y_new,axis=0) - 1.0)
+                    if cons_criterion > self.hybrid_ann_cvode_tol:
+                        # CVODE advance
+                        T_new, Y_new = self.advance_state_CVODE(Tt[i_reac], Yt_ann[:,i_reac], pressure, dt)
             else:
                 T_new = Tt[i_reac]
                 Y_new = Yt_ann[:,i_reac]
@@ -616,11 +634,11 @@ class ModelTesting(object):
         # Gas object modification
         gas.TPY= T_old, pressure, Y_old
             
-        r = ct.IdealGasConstPressureReactor(self.gas)
+        r = ct.IdealGasConstPressureReactor(gas)
         
         # Initializing reactor
         sim = ct.ReactorNet([r])
-        states = ct.SolutionArray(self.gas, extra=['t'])
+        states = ct.SolutionArray(gas, extra=['t'])
         
         # Advancing solution
         sim.advance(dt)
