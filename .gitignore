@@ -131,6 +131,6 @@ dmypy.json
 /notebooks/inlets*
 /notebooks/plots*
 /notebooks/postpro*
-
+/notebooks/*.png
 
 
