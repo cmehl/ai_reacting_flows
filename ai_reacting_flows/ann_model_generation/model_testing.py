@@ -131,6 +131,13 @@ class ModelTesting(object):
             self.nb_spec_fictive = len(self.fictive_species)
 
 
+        # Renormalization of Yk to satisfy elements conservation
+        self.yk_renormalization = testing_parameters["yk_renormalization"]
+
+        # Some constants used in the code
+        self.W_atoms = np.array([12.011, 1.008, 15.999, 14.007]) # Order: C, H, O, N
+
+
 #-----------------------------------------------------------------------
 #   MAIN TESTING FUNCTIONS
 #-----------------------------------------------------------------------
@@ -160,14 +167,9 @@ class ModelTesting(object):
         T_ini = states.T
         Y_ini = states.Y
 
-        # For atomic conservation we need atom molecular weights
-        # Order: C, H, O, N
-        W_atoms = np.array([12.011, 1.008, 15.999, 14.007])
-        
         # Matrix with number of each atom in species (order of rows: C, H, O, N)
         atomic_array = utils.parse_species_names(self.spec_list_ANN)
         
-
         #-------------------- CVODE COMPUTATION---------------------------
         # Remark: we don't use the method we wrote below
 
@@ -206,7 +208,7 @@ class ModelTesting(object):
 
         # Vectors to store time data
         state_save = np.append(T_ann, Y_k_ann)
-        sumYs = [1.0]
+        sumYs = np.array([1.0])
         progvar_vect = [0.0]
 
         # atomic composition of species
@@ -215,7 +217,7 @@ class ModelTesting(object):
         else:
             molecular_weights = utils.get_molecular_weights(gas.species_names)
         atomic_cons = np.dot(atomic_array,np.reshape(Y_k_ann,-1)/molecular_weights)
-        atomic_cons = np.multiply(W_atoms, atomic_cons)
+        atomic_cons = np.multiply(self.W_atoms, atomic_cons)
 
         # NEURAL NETWORK COMPUTATION
         i=0
@@ -262,12 +264,12 @@ class ModelTesting(object):
             progvar_vect.append(progvar)
                     
             # Mass conservation
-            sumYs.append(np.sum(Y_new,axis=0))
+            sumYs = np.append(sumYs, np.sum(Y_new,axis=0))
 
             
-            # atomic composition of species  WHAT IS SELF.NO_SPECIES_NN ?
+            # atomic composition of species
             atomic_cons_current = np.dot(atomic_array,Y_new.reshape(self.nb_species_ANN_tot)/molecular_weights)
-            atomic_cons_current = np.multiply(W_atoms, atomic_cons_current)
+            atomic_cons_current = np.multiply(self.W_atoms, atomic_cons_current)
             atomic_cons = np.vstack([atomic_cons,atomic_cons_current])
             
             # Incrementation
@@ -757,6 +759,12 @@ class ModelTesting(object):
         # Adding back N2 before computing temperature
         if self.remove_N2:
             Y_new = np.insert(Y_new, n2_index, n2_value)
+        
+
+        # Enforcing element conservation
+        if self.yk_renormalization:
+            Y_new = self.enforce_elements_balance(gas, Y_old, Y_new)
+
                 
         # Deducing T from energy conservation
         T_new = state_vector[0] - (1/gas.cp)*np.sum(gas.partial_molar_enthalpies/gas.molecular_weights*(Y_new-Y_old))
@@ -769,7 +777,7 @@ class ModelTesting(object):
 
 
 #-----------------------------------------------------------------------
-#   THERMO-CHEMICAL FUNTIONS 
+#   THERMO-CHEMICAL FUNCTIONS 
 #-----------------------------------------------------------------------
 
     # TO CLEAN
@@ -853,27 +861,42 @@ class ModelTesting(object):
 
 
 
+    def enforce_elements_balance(self, gas, Y_old, Y_new):
+
+        # Resulting vector
+        Y_new_corr = Y_new.copy()
+
+        # Matrix with number of each atom in species (order of rows: C, H, O, N)
+        atomic_array = utils.parse_species_names(self.spec_list_ANN)
+
+        # Species molecular weights
+        molecular_weights = utils.get_molecular_weights(gas.species_names)
+
+        # Initial elements mass fractions
+        Y_a_in = np.dot(atomic_array,np.reshape(Y_old,-1)/molecular_weights)
+        Y_a_in = np.multiply(self.W_atoms, Y_a_in)
+
+        # Final elements mass fractions
+        Y_a_out = np.dot(atomic_array,np.reshape(Y_new,-1)/molecular_weights)
+        Y_a_out = np.multiply(self.W_atoms, Y_a_out)
+
+        # Carbon: we correct CO2 (we test if present)
+        if Y_a_in[0]>0:
+            Y_new_corr[gas.species_index("CO2")] += -(Y_a_out[0] - Y_a_in[0])/ ((self.W_atoms[0]/molecular_weights[gas.species_index("CO2")]) * atomic_array[0,gas.species_index("CO2")])
+
+        # Hydrogen: we correct H2
+        Y_new_corr[gas.species_index("H2")] += -(Y_a_out[1] - Y_a_in[1])/ ((self.W_atoms[1]/molecular_weights[gas.species_index("H2")]) * atomic_array[1,gas.species_index("H2")])
+
+        # Nitrogen: we correct N2
+        Y_new_corr[gas.species_index("N2")] += -(Y_a_out[3] - Y_a_in[3])/ ((self.W_atoms[3]/molecular_weights[gas.species_index("N2")]) * atomic_array[3,gas.species_index("N2")])
+
+        # We perform a new estimation of element mass fractions and then correct O using O2
+        Y_a_out = np.dot(atomic_array,np.reshape(Y_new_corr,-1)/molecular_weights)
+        Y_a_out = np.multiply(self.W_atoms, Y_a_out)
+        Y_new_corr[gas.species_index("O2")] += -(Y_a_out[2] - Y_a_in[2])/ ((self.W_atoms[2]/molecular_weights[gas.species_index("O2")]) * atomic_array[2,gas.species_index("O2")])
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+        return Y_new_corr
 
 
 
