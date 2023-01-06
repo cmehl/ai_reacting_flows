@@ -94,6 +94,7 @@ class LearningDatabase(object):
         shutil.copy(self.detailed_mechanism, self.dtb_folder + "/" + self.database_name + "/mech_detailed.yaml")
 
         self.is_reduced = False
+        self.is_resampled = False
 
         self.check_inputs()
 
@@ -234,7 +235,7 @@ class LearningDatabase(object):
 
 
 
-    # Very basic re-sampling, not used
+    # Very basic re-sampling
     def undersample_cluster(self, i_cluster, ratio_to_keep):
         
         # Here it is better to work with the ratio of data to delete
@@ -256,6 +257,10 @@ class LearningDatabase(object):
     # Re-sampling based on heat release rate
     def undersample_HRR(self, jpdf_var_1, jpdf_var_2, hrr_func, keep_low_c, n_samples=None, n_bins=100):
         
+        # Save initial states for later use
+        self.X_old = self.X.copy()
+        self.Y_old = self.Y.copy()
+
         # Dataset size
         n = self.X.shape[0]
 
@@ -324,11 +329,46 @@ class LearningDatabase(object):
         # random.choice needs probability (sum to 1)
         p = f_m_interp/f_m_interp.sum()
 
-        # fig, ax = plt.subplots()
-        # im = ax.scatter(x, y, c=p, s=4, vmin=0.0, vmax=0.00005)
-        # cbar = fig.colorbar(im, ax=ax)
-        # cbar.ax.set_ylabel('p')
-        # fig.tight_layout()
+
+        # PLOTTING FOR PAPER----------------------------------------------------------------------------
+
+        data_hrr_interp = interpn( ( 0.5*(x_e[1:] + x_e[:-1]) , 0.5*(y_e[1:]+y_e[:-1]) ) , data_hrr , np.vstack([x,y]).T , method = "linear", bounds_error = False)
+        # data_hrr_interp[np.where(np.isnan(data_hrr_interp))] = 0.0
+        #
+        data_interp = interpn( ( 0.5*(x_e[1:] + x_e[:-1]) , 0.5*(y_e[1:]+y_e[:-1]) ) , data , np.vstack([x,y]).T , method = "linear", bounds_error = False)
+        # data_interp[np.where(np.isnan(data_interp))] = 0.0
+
+
+        fig, (ax1,ax2,ax3) = plt.subplots(nrows=3)
+        fig.set_size_inches(18.5, 10.5)
+
+        im = ax1.scatter(x, y, c=data_interp, s=4, vmin=0, vmax=0.1)
+        cbar = fig.colorbar(im, ax=ax1)
+        cbar.ax.set_ylabel(r'$f_s$ $[-]$', fontsize=16)
+        fig.tight_layout()
+
+        im = ax2.scatter(x, y, c=np.log(data_hrr_interp), s=4, vmin=-10, vmax=np.log(0.00004))
+        cbar = fig.colorbar(im, ax=ax2)
+        cbar.ax.set_ylabel(r'$\log(f_q)$ $[-]$', fontsize=16)
+        fig.tight_layout()
+
+        im = ax3.scatter(x, y, c=np.log(p), s=4, vmin=-20, vmax=-5)
+        cbar = fig.colorbar(im, ax=ax3)
+        cbar.ax.set_ylabel(r'$\log(f_m)$ $[-]$', fontsize=16)
+        fig.tight_layout()
+
+        ax1.xaxis.set_ticklabels([])
+        ax2.xaxis.set_ticklabels([])
+        for ax in [ax1,ax2,ax3]:
+            ax.set_box_aspect(1)
+            ax.set_ylabel(r"$Y_{H_{2}O}$ $[-]$", fontsize=16)
+        ax3.set_xlabel(r"$T$ $[K]$", fontsize=16)
+
+        fig.tight_layout()
+        fig.savefig("resampling_analysis.png", dpi=400, bbox_inches="tight")
+
+        # -------------------------------------------------------------------------------------------------
+
 
         # Copying X to manipulate weights
         X_save = self.X.copy()
@@ -353,6 +393,8 @@ class LearningDatabase(object):
         #
         self.Y = self.Y.iloc[choice]
         self.Y = self.Y.reset_index(drop=True)
+
+        self.is_resampled = True
 
         print(f"\n Number of points in undersampled dataset: {self.X.shape[0]} \n")
         print(f"    >> {100*self.X.shape[0]/n} % of the database is retained")
@@ -739,4 +781,32 @@ class LearningDatabase(object):
                      binwidth=20, kde=True)
 
         fig.tight_layout()
+
+
+
+    # Compare
+    def compare_resampled_pdfs(self, var): 
+
+        if self.is_resampled is False:
+            sys.exit("Data has not been resampled, this function is not accessible")
+            
+        # Temperature histogram
+        fig, ax1 = plt.subplots()
+        
+        sns.histplot(data=self.X_old, x=var, ax=ax1, color="black", stat="density",
+                     binwidth=10, kde=False, label="Before re-sampling")
+
+        sns.histplot(data=self.X, x=var, ax=ax1, color="blue", stat="density",
+                     binwidth=10, kde=False, alpha=0.4, label="After re-sampling")
+        
+        ax1.set_box_aspect(1)
+        
+        if var=="Temperature":
+            ax1.set_xlabel("$T$ $[K]$", fontsize=14)
+        ax1.set_ylabel("Point density $[-]$", fontsize=14)
+
+        ax1.legend(fontsize=10)
+
+        fig.tight_layout()
+        fig.savefig("comparison_distribution.png", dpi=400)
 
