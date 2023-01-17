@@ -10,6 +10,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from tensorflow.keras.models import model_from_json
+from tensorflow.keras.losses import MeanSquaredError
+
 
 import cantera as ct
 
@@ -733,7 +735,7 @@ class ModelTesting(object):
                 
         # New state predicted by ANN
         state_new = self.models_list[self.cluster].predict(NN_input, batch_size=1)
-                
+
         # Getting Y and scaling
         Y_new = self.Yscaler_list[self.cluster].inverse_transform(state_new)
 
@@ -760,6 +762,8 @@ class ModelTesting(object):
         if self.remove_N2:
             Y_new = np.insert(Y_new, n2_index, n2_value)
         
+        # Sum of Yk before renormalization (used for analysis)
+        self.sum_Yk_before_renorm = Y_new.sum()
 
         # Enforcing element conservation
         if self.yk_renormalization:
@@ -777,10 +781,101 @@ class ModelTesting(object):
 
 
 #-----------------------------------------------------------------------
+#   ANALYZING ERRORS
+#-----------------------------------------------------------------------
+
+    def compute_ann_errors(self, T, Y, pressure, dt, already_transformed=False):
+
+        T_old = T.copy()
+
+        # Dealing with the case where Y is already transformed (logged or bct) at input of function
+        if already_transformed:
+            if self.log_transform_X==1:
+                Y_old = np.exp(Y)
+            elif self.log_transform_X==2:
+                Y_old = (self.lambda_bct*Y+1.0)**(1./self.lambda_bct)
+        else:
+            Y_old = Y.copy()
+
+        # Assign to cluster
+        # Computing current progress variable
+        state = np.append(T_old, Y_old)
+        progvar = self.compute_progvar(state, pressure, self.mechanism_type)
+        #
+        if self.nb_clusters>0:
+            self.attribute_cluster(state, progvar)
+        else:
+            self.cluster = 0
+        #
+        print(f"Current point in cluster: {self.cluster} \n")
+            
+
+        # CVODE run
+        T_cvode, Y_cvode = self.advance_state_CVODE(T_old, Y_old, pressure, dt)
+
+        # ANN run
+        T_ann, Y_ann = self.advance_state_NN(T_old, Y_old, pressure, dt)
+
+        # If N2 is not considered, it needs to be removed
+        if self.remove_N2:
+            n2_index = self.spec_list_ANN.index("N2")
+            #
+            Y_old = np.delete(Y_old, n2_index+1)
+            Y_cvode = np.delete(Y_cvode, n2_index+1)
+            Y_ann = np.delete(Y_ann, n2_index+1)
+
+        # Taking log if necessary (if output is difference of logs)
+        if self.log_transform_Y==1:
+            Y_old[Y_old<self.threshold] = self.threshold
+            Y_cvode[Y_cvode<self.threshold] = self.threshold
+            Y_ann[Y_ann<self.threshold] = self.threshold
+        elif self.log_transform_Y==2:
+            Y_old[Y_old<0.0] = 0.0
+            Y_cvode[Y_cvode<0.0] = 0.0
+            Y_ann[Y_ann<0.0] = 0.0
+        #
+        if self.log_transform_Y==1:
+            log_Y_old = np.log(Y_old)
+            log_Y_cvode = np.log(Y_cvode)
+            log_Y_ann = np.log(Y_ann)
+        elif self.log_transform_Y==2:
+            log_Y_old = (Y_old**self.lambda_bct - 1.0)/self.lambda_bct
+            log_Y_cvode = (Y_cvode**self.lambda_bct - 1.0)/self.lambda_bct
+            log_Y_ann = (Y_ann**self.lambda_bct - 1.0)/self.lambda_bct
+        else:
+            log_Y_old = Y_old
+            log_Y_cvode = Y_cvode
+            log_Y_ann = Y_ann
+
+
+        # We compute difference of logs
+        diff_log_Y_cvode = log_Y_cvode - log_Y_old
+        diff_log_Y_ann = log_Y_ann - log_Y_old
+
+        # We apply the normalizer
+        diff_log_Y_cvode = diff_log_Y_cvode.reshape(1,-1)
+        diff_log_Y_ann = diff_log_Y_ann.reshape(1,-1)
+        #
+        diff_log_Y_cvode_norm = self.Yscaler_list[self.cluster].transform(diff_log_Y_cvode)
+        diff_log_Y_ann_norm = self.Yscaler_list[self.cluster].transform(diff_log_Y_ann)
+        #
+        diff_log_Y_cvode_norm = diff_log_Y_cvode_norm.reshape(-1)
+        diff_log_Y_ann_norm = diff_log_Y_ann_norm.reshape(-1)
+
+        # Error (MSE)
+        mse = MeanSquaredError()
+        err_Yk = mse(diff_log_Y_cvode_norm, diff_log_Y_ann)  
+
+        err_T = 100.0*np.abs((T_ann-T_cvode)/T_cvode)
+
+        return err_Yk, err_T
+
+
+#-----------------------------------------------------------------------
 #   THERMO-CHEMICAL FUNCTIONS 
 #-----------------------------------------------------------------------
 
-    # TO CLEAN
+    # Progress variable
     def compute_progvar(self, state, pressure, mechanism_type):
 
         # Equilibrium state in present conditions
