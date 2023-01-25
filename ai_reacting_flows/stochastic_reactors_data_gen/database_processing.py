@@ -338,10 +338,21 @@ class LearningDatabase(object):
         data_interp = interpn( ( 0.5*(x_e[1:] + x_e[:-1]) , 0.5*(y_e[1:]+y_e[:-1]) ) , data , np.vstack([x,y]).T , method = "linear", bounds_error = False)
         # data_interp[np.where(np.isnan(data_interp))] = 0.0
 
+        # # Single plot (better for ppt)
+        # fig, ax = plt.subplots()
+        # im = ax.scatter(x, y, c=np.log(p), s=4, vmin=-20, vmax=-5)
+        # cbar = fig.colorbar(im, ax=ax)
+        # cbar.ax.set_ylabel(r'$\log(f_m)$ $[-]$', fontsize=16)
+        # fig.tight_layout()
+        # ax.set_ylabel(r"$Y_{H_{2}O}$ $[-]$", fontsize=16)
+        # ax.set_xlabel(r"$T$ $[K]$", fontsize=16)
+        # fig.tight_layout()
+        # fig.savefig("fm.png", dpi=400, bbox_inches="tight")
 
         fig, (ax1,ax2,ax3) = plt.subplots(nrows=3)
         fig.set_size_inches(18.5, 10.5)
 
+        plt.set_cmap('plasma')
         im = ax1.scatter(x, y, c=data_interp, s=4, vmin=0, vmax=0.1)
         cbar = fig.colorbar(im, ax=ax1)
         cbar.ax.set_ylabel(r'$f_s$ $[-]$', fontsize=16)
@@ -777,10 +788,19 @@ class LearningDatabase(object):
         # Temperature histogram
         fig, ax = plt.subplots()
         
-        sns.histplot(data=self.X, x=var, ax=ax, stat="probability",
-                     binwidth=20, kde=True)
+        sns.histplot(data=self.X, x=var, ax=ax, stat="density",
+                     binwidth=10, kde=False)
+
+        ax.set_box_aspect(1)
+
+        if var=="Temperature":
+            ax.set_xlabel("$T$ $[K]$", fontsize=14)
+        ax.set_ylabel("Point density $[-]$", fontsize=14)
+
+        ax.legend(fontsize=10)
 
         fig.tight_layout()
+        fig.savefig(f"distribution_{var}.png", dpi=400)
 
 
 
