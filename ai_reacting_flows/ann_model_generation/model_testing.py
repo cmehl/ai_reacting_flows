@@ -147,6 +147,10 @@ class ModelTesting(object):
     # OD IGNITION
     def test_0D_ignition(self, phi, T0, pressure, dt, nb_ite=100):
 
+        # Initialization of ignition delays
+        tau_ign_CVODE = 0.0
+        tau_ign_ANN = 0.0
+
         #-------------------- INITIALISATION---------------------------
         
         # CANTERA gas object
@@ -179,6 +183,9 @@ class ModelTesting(object):
             simtime += dt
             sim.advance(simtime)
             states.append(r.thermo.state, t=simtime*1e3)
+
+            if states.T[-1] > T0+200.0 and tau_ign_CVODE==0.0:
+                tau_ign_CVODE = simtime
                 
         # Equilibrium temperature
         Teq_ref = states.T[len(states.T)-1]
@@ -246,8 +253,7 @@ class ModelTesting(object):
 
             # If hybrid, we check conservation and use CVODE if not satisfied
             if self.hybrid_ann_cvode:
-                cons_criterion = np.abs(np.sum(Y_new,axis=0) - 1.0)
-                if cons_criterion > self.hybrid_ann_cvode_tol:
+                if self.ia_success is False:
                     # CVODE advance
                     T_new, Y_new = self.advance_state_CVODE(T_old, Y_old, pressure, dt)
                     cvode_calls += 1
@@ -277,6 +283,9 @@ class ModelTesting(object):
             # Incrementation
             i+=1
             time += dt
+
+            if T_new > T0+200.0 and tau_ign_ANN==0.0:
+                tau_ign_ANN = time
         
         
         # ANN equilibrium (last temperature)
@@ -371,6 +380,10 @@ class ModelTesting(object):
         fig3.tight_layout()
         fig3.savefig(folder + "/AtomCons.png", dpi=500)
 
+
+        # Ignition delays comparison
+        print(f" >> CVODE ignition delay: {tau_ign_CVODE}")
+        print(f" >> ANN ignition delay: {tau_ign_ANN}")
 
 
     # 1D PREMIXED
@@ -693,6 +706,9 @@ class ModelTesting(object):
     # NN model
     def advance_state_NN(self, T_old, Y_old, pressure, dt):
 
+        # Boolean for IA computation success (used for hybrid model)
+        self.ia_success = True
+
         # CANTERA gas object
         if self.mechanism_type=="reduced":
             gas = ct.Solution(self.reduced_mechanism)
@@ -764,6 +780,12 @@ class ModelTesting(object):
         
         # Sum of Yk before renormalization (used for analysis)
         self.sum_Yk_before_renorm = Y_new.sum()
+
+        # Hybrid model: checking if we satisfy the threshold
+        if self.hybrid_ann_cvode:
+            cons_criterion = np.abs(np.sum(Y_new,axis=0) - 1.0)
+            if cons_criterion > self.hybrid_ann_cvode_tol:
+                self.ia_success = False
 
         # Enforcing element conservation
         if self.yk_renormalization:
