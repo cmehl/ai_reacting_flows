@@ -41,6 +41,13 @@ class Particle(object):
         
         # Get initial sensible enthalpy
         self.compute_hs_from_T()
+
+        # We associate a mass to the particle, and initialize it to 1, by convention
+        self.mass = 1.0
+        # We can then deduce mass for each chemical species in the particle
+        self.mass_k = self.mass * self.Y
+        # We can then also define a total sensible enthalpy
+        self.Hs = self.mass * self.hs
         
         # Particle state: sensible enthalpy + pressure + mass fractions
         self.state = np.empty(self.nb_state_vars)
