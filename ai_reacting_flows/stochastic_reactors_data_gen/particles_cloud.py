@@ -132,6 +132,15 @@ class ParticlesCloud(object):
             self._calc_lewis_numbers(self.state_per_inlet[1]) # By default, state of inlet 1 selected for Lewis number -> TO ADAPT 
             self.tau_k = self.mixing_time * self.Le_k
             self.tau_min = np.min(self.tau_k)
+
+            # List of particle pairs
+            self.particle_pairs = list(itertools.product(np.arange(self.nb_parts_tot), np.arange(self.nb_parts_tot)))
+
+            # Removing pairs of type (i,i)
+            for pair in self.particle_pairs:
+                if pair[0]==pair[1]:
+                    self.particle_pairs.remove(pair)
+
         else:
             self.tau_min = self.mixing_time
         
@@ -400,26 +409,18 @@ class ParticlesCloud(object):
     # CURL model: with differential diffusion => we work with species masses
     def _mix_curl_dd(self):
 
-        # List of particle pairs
-        particle_pairs = list(itertools.product(np.arange(self.nb_parts_tot), np.arange(self.nb_parts_tot)))
-
-        # Removing pairs of type (i,i)
-        for pair in particle_pairs:
-            if pair[0]==pair[1]:
-                particle_pairs.remove(pair)
-
-        masses_of_pairs = np.empty(len(particle_pairs))
-        for i, pair in enumerate(particle_pairs):
+        masses_of_pairs = np.empty(len(self.particle_pairs))
+        for i, pair in enumerate(self.particle_pairs):
             masses_of_pairs[i] = self.particles_list[pair[0]].mass + self.particles_list[pair[1]].mass
         prob_of_pairs = masses_of_pairs / masses_of_pairs.sum()
 
         # Randomly select mixing pairs
-        pairs_index = np.random.choice(len(particle_pairs), size=self.Npairs_curl, p=prob_of_pairs,replace=False)
+        pairs_index = np.random.choice(len(self.particle_pairs), size=self.Npairs_curl, p=prob_of_pairs,replace=False)
         
         # Going back to pairs
         pairs = []
         for i in pairs_index:
-            pairs.append(particle_pairs[i])
+            pairs.append(self.particle_pairs[i])
         
         # Carrying out diffusion
         for pair in pairs:
@@ -440,7 +441,7 @@ class ParticlesCloud(object):
             Hs_1_ini = part_1.Hs
 
             # REN ET AL MODEL -> NOR WORKING WELL
-            # # Variables needed to update particles   
+            # # Variables needed to update particles
             # Y_12 = (part_1.mass_k + part_2.mass_k)/(part_1.mass + part_2.mass)
             # hs_12 = (part_1.Hs + part_2.Hs)/(part_1.mass + part_2.mass)
             # theta_k = (3.0-(9.0-8.0*self.tau_k)**0.5)/2
@@ -455,14 +456,16 @@ class ParticlesCloud(object):
 
             # Species masses updated using alpha weighted by lewis numbers
             part_1.mass_k += 0.5 * (alpha/self.Le_k) * (part_2.mass_k - part_1.mass_k)
+            # part_1.mass_k += 0.5 * alpha * (part_2.mass_k - part_1.mass_k)
 
 
+            # part_2.mass_k += 0.5 * alpha * (mass_k_1_ini - part_2.mass_k)
             part_2.mass_k += 0.5 * (alpha/self.Le_k) * (mass_k_1_ini - part_2.mass_k)
             part_2.Hs += 0.5 * alpha * (Hs_1_ini - part_2.Hs)
 
             # Dealing with negative masses (we put them in the other particle)
             for j in range(len(part_1.mass_k)):
-                
+
                 if part_1.mass_k[j] < 0.0:
                     part_2.mass_k[j] += part_1.mass_k[j]
                     part_1.mass_k[j] = 0.0
@@ -509,8 +512,17 @@ class ParticlesCloud(object):
         cp = gas_equil.cp_mass
         Dk =  gas_equil.mix_diff_coeffs_mass
         rho = gas_equil.density
+        mu = gas_equil.viscosity
         #
         self.Le_k = cond / (rho*cp*Dk)
+        self.Sc_k =  mu / (rho*Dk)
+
+        # Write Schmidt numbers in a file (converge use)
+        file_schmidt = self.results_folder + "/schmidt.dat"
+        with open(file_schmidt, 'w') as f:
+            for i,spec in enumerate(gas_equil.species_names):
+                f.write(f"{spec}      {self.Sc_k[i]}\n")
+        
                 
                 
                 
