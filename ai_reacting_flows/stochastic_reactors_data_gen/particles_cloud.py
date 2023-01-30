@@ -370,15 +370,21 @@ class ParticlesCloud(object):
                     part_1 = part
                 if part.num_part==pair[1]:
                     part_2 = part
+
+            # Initial values
+            Y1_ini = part_1.Y.copy()
+            h1_ini = part_1.hs
+            Y2_ini = part_2.Y.copy()
+            h2_ini = part_2.hs
                     
             if self.mixing_model=="CURL":
                 
                 # Update particles states
-                part_1.Y = 0.5 * (part_2.Y + part_1.Y)
-                part_1.hs = 0.5 * (part_2.hs + part_1.hs)
+                part_1.Y = 0.5 * (Y2_ini + Y1_ini)
+                part_1.hs = 0.5 * (h2_ini + h1_ini)
                 #
-                part_2.Y = 0.5 * (part_1.Y + part_2.Y)   # WE USE part_1.Y => BUG ??
-                part_2.hs = 0.5 * (part_1.hs + part_2.hs)
+                part_2.Y = 0.5 * (Y2_ini + Y1_ini)
+                part_2.hs = 0.5 * (h2_ini + h1_ini)
                 
             elif self.mixing_model=="CURL_MODIFIED":
                     
@@ -386,11 +392,11 @@ class ParticlesCloud(object):
                 a = np.random.random()
                         
                 # Update particles states
-                part_1.Y += 0.5 * a * (part_2.Y - part_1.Y)
-                part_1.hs += 0.5 * a * (part_2.hs - part_1.hs)
+                part_1.Y += 0.5 * a * (Y2_ini - Y1_ini)
+                part_1.hs += 0.5 * a * (h2_ini - h1_ini)
                 #
-                part_2.Y += 0.5 * a * (part_1.Y - part_2.Y)   # WE USE part_1.Y => BUG ??
-                part_2.hs += 0.5 * a * (part_1.hs - part_2.hs)
+                part_2.Y += 0.5 * a * (Y1_ini - Y2_ini)
+                part_2.hs += 0.5 * a * (h1_ini - h2_ini)
             
             
             # Updating variables associated to particles
