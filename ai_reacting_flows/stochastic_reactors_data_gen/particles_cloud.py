@@ -460,7 +460,18 @@ class ParticlesCloud(object):
             part_2.mass_k += 0.5 * (alpha/self.Le_k) * (mass_k_1_ini - part_2.mass_k)
             part_2.Hs += 0.5 * alpha * (Hs_1_ini - part_2.Hs)
 
-            
+            # Dealing with negative masses (we put them in the other particle)
+            for j in range(len(part_1.mass_k)):
+                
+                if part_1.mass_k[j] < 0.0:
+                    part_2.mass_k[j] += part_1.mass_k[j]
+                    part_1.mass_k[j] = 0.0
+
+                elif part_2.mass_k[j] < 0.0:
+                    part_1.mass_k[j] += part_2.mass_k[j]
+                    part_2.mass_k[j] = 0.0
+
+
             
             # Updating variables associated to particles
             for part in [part_1, part_2]:
