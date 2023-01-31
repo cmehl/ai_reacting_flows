@@ -442,11 +442,12 @@ class ParticlesCloud(object):
             # Compute Lewis numbers of mixing particles only (saves costs)
             part_1.compute_lewis_numbers()
             part_2.compute_lewis_numbers()
+            Le_k_m = 0.5*(part_1.Le_k + part_2.Le_k)   # To conserve mass we need one Lewis, we take the average as a test
             
             # Random value between 0 and min(Le_k) -> to avoid overshooting
-            min_Le_1 = np.min(part_1.Le_k)
-            min_Le_2 = np.min(part_2.Le_k)
-            alpha = min(min_Le_1,min_Le_2) * np.random.random()
+            # min_Le_1 = np.min(part_1.Le_k)
+            # min_Le_2 = np.min(part_2.Le_k)
+            alpha = np.min(Le_k_m) * np.random.random()
 
             # Recording initial enthalpy and mass of particle 1 (which will be updated first)
             mass_k_1_ini = part_1.mass_k.copy()
@@ -470,11 +471,11 @@ class ParticlesCloud(object):
             part_1.Hs += 0.5 * alpha * (part_2.Hs - part_1.Hs)
 
             # Species masses updated using alpha weighted by lewis numbers
-            part_1.mass_k += 0.5 * (alpha/part_1.Le_k) * (part_2.mass_k - part_1.mass_k)
+            part_1.mass_k += 0.5 * (alpha/Le_k_m) * (part_2.mass_k - part_1.mass_k)
 
             # Particle 2 update
             part_2.Hs += 0.5 * alpha * (Hs_1_ini - part_2.Hs)
-            part_2.mass_k += 0.5 * (alpha/part_2.Le_k) * (mass_k_1_ini - part_2.mass_k)
+            part_2.mass_k += 0.5 * (alpha/Le_k_m) * (mass_k_1_ini - part_2.mass_k)
 
             # Dealing with negative masses (we put them in the other particle)
             for j in range(len(part_1.mass_k)):
