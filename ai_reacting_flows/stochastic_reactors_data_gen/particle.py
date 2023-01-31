@@ -358,3 +358,18 @@ class Particle(object):
         # Temperature
         self.T = gas.T
   
+
+    def compute_lewis_numbers(self):
+
+        gas = ct.Solution(self.mech_file)
+        gas.TPY = self.T, self.P, self.Y
+
+        # Lewis numbers
+        cond = gas.thermal_conductivity
+        cp = gas.cp_mass
+        Dk =  gas.mix_diff_coeffs_mass
+        rho = gas.density
+        # mu = gas.viscosity
+        #
+        self.Le_k = cond / (rho*cp*Dk)
+

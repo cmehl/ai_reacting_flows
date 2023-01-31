@@ -129,9 +129,9 @@ class ParticlesCloud(object):
 
         # If differential diffusion, we need to calculate lewis numbers and diffusion times
         if self.mixing_model=="CURL_MODIFIED_DD":
-            self._calc_lewis_numbers(self.state_per_inlet[1]) # By default, state of inlet 1 selected for Lewis number -> TO ADAPT 
+            # self._calc_lewis_numbers(self.state_per_inlet[1]) # By default, state of inlet 1 selected for Lewis number -> TO ADAPT 
             # self.tau_k = self.mixing_time * self.Le_k
-            self.tau_min =  self.mixing_time * np.min(self.Le_k) #np.min(self.tau_k)
+            self.tau_min =  self.mixing_time #* np.min(self.Le_k) #np.min(self.tau_k)
 
             # List of particle pairs
             self.particle_pairs = list(itertools.product(np.arange(self.nb_parts_tot), np.arange(self.nb_parts_tot)))
@@ -437,10 +437,16 @@ class ParticlesCloud(object):
                     part_1 = part
                 if part.num_part==pair[1]:
                     part_2 = part
+
+
+            # Compute Lewis numbers of mixing particles only (saves costs)
+            part_1.compute_lewis_numbers()
+            part_2.compute_lewis_numbers()
             
-            
-            # Random value between 0 and 1
-            alpha = np.min(self.Le_k) * np.random.random()
+            # Random value between 0 and min(Le_k) -> to avoid overshooting
+            min_Le_1 = np.min(part_1.Le_k)
+            min_Le_2 = np.min(part_2.Le_k)
+            alpha = min(min_Le_1,min_Le_2) * np.random.random()
 
             # Recording initial enthalpy and mass of particle 1 (which will be updated first)
             mass_k_1_ini = part_1.mass_k.copy()
@@ -464,11 +470,11 @@ class ParticlesCloud(object):
             part_1.Hs += 0.5 * alpha * (part_2.Hs - part_1.Hs)
 
             # Species masses updated using alpha weighted by lewis numbers
-            part_1.mass_k += 0.5 * (alpha/self.Le_k) * (part_2.mass_k - part_1.mass_k)
+            part_1.mass_k += 0.5 * (alpha/part_1.Le_k) * (part_2.mass_k - part_1.mass_k)
 
             # Particle 2 update
             part_2.Hs += 0.5 * alpha * (Hs_1_ini - part_2.Hs)
-            part_2.mass_k += 0.5 * (alpha/self.Le_k) * (mass_k_1_ini - part_2.mass_k)
+            part_2.mass_k += 0.5 * (alpha/part_2.Le_k) * (mass_k_1_ini - part_2.mass_k)
 
             # Dealing with negative masses (we put them in the other particle)
             for j in range(len(part_1.mass_k)):
@@ -501,36 +507,6 @@ class ParticlesCloud(object):
                 # Temperature
                 part.compute_T_from_hs()
 
-
-    def _calc_lewis_numbers(self, state):
-        
-        # Get temperature and mass fractions from state
-        T = state[0]
-        P = state[1]
-        Y = state[2:]
-
-        gas_equil = ct.Solution(self.mech_file)
-        gas_equil.TPY = T, P, Y
-        gas_equil.equilibrate('HP')
-
-        # Lewis numbers
-        cond = gas_equil.thermal_conductivity
-        cp = gas_equil.cp_mass
-        Dk =  gas_equil.mix_diff_coeffs_mass
-        rho = gas_equil.density
-        mu = gas_equil.viscosity
-        #
-        self.Le_k = cond / (rho*cp*Dk)
-        self.Sc_k =  mu / (rho*Dk)
-
-        # Write Schmidt numbers in a file (converge use)
-        file_schmidt = self.results_folder + "/schmidt.dat"
-        with open(file_schmidt, 'w') as f:
-            for i,spec in enumerate(gas_equil.species_names):
-                f.write(f"{spec}      {self.Sc_k[i]}\n")
-        
-                
-                
                 
     # # EMST model: initialization
     # def _init_EMST(self):
