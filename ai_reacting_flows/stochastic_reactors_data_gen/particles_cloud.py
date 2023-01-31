@@ -130,8 +130,8 @@ class ParticlesCloud(object):
         # If differential diffusion, we need to calculate lewis numbers and diffusion times
         if self.mixing_model=="CURL_MODIFIED_DD":
             self._calc_lewis_numbers(self.state_per_inlet[1]) # By default, state of inlet 1 selected for Lewis number -> TO ADAPT 
-            self.tau_k = self.mixing_time * self.Le_k
-            self.tau_min = np.min(self.tau_k)
+            # self.tau_k = self.mixing_time * self.Le_k
+            self.tau_min =  self.mixing_time * np.min(self.Le_k) #np.min(self.tau_k)
 
             # List of particle pairs
             self.particle_pairs = list(itertools.product(np.arange(self.nb_parts_tot), np.arange(self.nb_parts_tot)))
@@ -440,14 +440,14 @@ class ParticlesCloud(object):
             
             
             # Random value between 0 and 1
-            alpha = np.random.random()
+            alpha = np.min(self.Le_k) * np.random.random()
 
             # Recording initial enthalpy and mass of particle 1 (which will be updated first)
             mass_k_1_ini = part_1.mass_k.copy()
             Hs_1_ini = part_1.Hs
 
-            # REN ET AL MODEL -> NOR WORKING WELL
-            # # Variables needed to update particles
+            # REN ET AL MODEL
+            # Variables needed to update particles
             # Y_12 = (part_1.mass_k + part_2.mass_k)/(part_1.mass + part_2.mass)
             # hs_12 = (part_1.Hs + part_2.Hs)/(part_1.mass + part_2.mass)
             # theta_k = (3.0-(9.0-8.0*self.tau_k)**0.5)/2
@@ -457,17 +457,18 @@ class ParticlesCloud(object):
             # part_1.mass_k = (1.0-alpha*theta_k)*part_1.mass_k + alpha*theta_k*part_1.mass*Y_12
             # part_1.Hs = (1.0-alpha*theta_hs)*part_1.Hs + alpha*theta_hs*part_1.mass*hs_12
 
+            # part_2.mass_k = part_2.mass_k - (part_1.mass_k - mass_k_1_ini)
+            # part_2.Hs = part_2.Hs - (part_1.Hs - Hs_1_ini)
+
             # Total enthalpy updated using alpha as a coefficient
             part_1.Hs += 0.5 * alpha * (part_2.Hs - part_1.Hs)
 
             # Species masses updated using alpha weighted by lewis numbers
             part_1.mass_k += 0.5 * (alpha/self.Le_k) * (part_2.mass_k - part_1.mass_k)
-            # part_1.mass_k += 0.5 * alpha * (part_2.mass_k - part_1.mass_k)
 
-
-            # part_2.mass_k += 0.5 * alpha * (mass_k_1_ini - part_2.mass_k)
-            part_2.mass_k += 0.5 * (alpha/self.Le_k) * (mass_k_1_ini - part_2.mass_k)
+            # Particle 2 update
             part_2.Hs += 0.5 * alpha * (Hs_1_ini - part_2.Hs)
+            part_2.mass_k += 0.5 * (alpha/self.Le_k) * (mass_k_1_ini - part_2.mass_k)
 
             # Dealing with negative masses (we put them in the other particle)
             for j in range(len(part_1.mass_k)):
@@ -481,7 +482,6 @@ class ParticlesCloud(object):
                     part_2.mass_k[j] = 0.0
 
 
-            
             # Updating variables associated to particles
             for part in [part_1, part_2]:
 

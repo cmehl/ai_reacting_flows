@@ -126,8 +126,12 @@ class Particle(object):
             self.Y = self.state[2:]
             self.X = self.compute_mol_frac()
             self.T = gas.T
+
+            # We need to update masses of species and enthalpies (total mass in reactor is preserved)
+            self.mass_k = self.mass * self.Y
+            self.Hs = self.mass * self.hs
     
-    
+
     def react_NN_wrapper(self, ML_models, prog_var_thresholds, dt, T_threshold):
                     
         # Single model
