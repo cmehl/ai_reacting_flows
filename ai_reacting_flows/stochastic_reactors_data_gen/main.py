@@ -22,7 +22,7 @@ def generate_stochastic_database(data_gen_parameters, comm):
 
     if rank==0:
 
-        if (data_gen_parameters["mixing_model"] not in ["CURL","CURL_MODIFIED","EMST"]):
+        if (data_gen_parameters["mixing_model"] not in ["CURL","CURL_MODIFIED","CURL_MODIFIED_DD","EMST"]):
             # Mixing model choice
             try:
                 raise ValueError("Input error.")
@@ -31,6 +31,7 @@ def generate_stochastic_database(data_gen_parameters, comm):
                 print(">> case_type entry should be one of the following:")
                 print("     - CURL")
                 print("     - CURL_MODIFIED")
+                print("     - CURL_MODIFIED_DD")
                 print("     - EMST")
                 print("")
                 raise

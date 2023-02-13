@@ -172,7 +172,7 @@ class StochDatabase(object):
             
             # Canonical flame structures
             if self.add_1D_premixed_archetype:
-                ax.plot(self.T_cano, self.Y_cano_dict[spec], color='r', lw=3, ls='--', label="Laminar")
+                ax.plot(self.T_cano_1D, self.Y_cano_dict_1D[spec], color='r', lw=3, ls='--', label="Laminar")
                 
             if self.add_0D_ignition_archetype:
                 ax.plot(self.T_cano_0D, self.Y_cano_dict_0D[spec], color='b', lw=3, ls='--', label="Ignition")

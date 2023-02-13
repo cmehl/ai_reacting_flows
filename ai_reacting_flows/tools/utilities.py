@@ -332,11 +332,11 @@ def compute_adiabatic(fuel, mech_file, phi, T0, p, diffusion_model="Mix"):
     f.energy_enabled = True
     f.set_refine_criteria(ratio=3, slope=0.1, curve=0.5)
     f.solve(loglevel=loglevel, refine_grid=True)
-    print('Flamespeed = {0:7f} m/s'.format(f.u[0]))
+    print('Flamespeed = {0:7f} m/s'.format(f.velocity[0]))
     
     f.set_refine_criteria(ratio=3, slope=0.05, curve=0.2)
     f.solve(loglevel=loglevel, refine_grid=True)
-    print('Flamespeed = {0:7f} m/s'.format(f.u[0]))
+    print('Flamespeed = {0:7f} m/s'.format(f.velocity[0]))
     
     f.set_refine_criteria(ratio=3, slope=0.05, curve=0.1, prune=0.03)
     #f.transport_model = 'Multi'

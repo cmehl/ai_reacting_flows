@@ -41,6 +41,13 @@ class Particle(object):
         
         # Get initial sensible enthalpy
         self.compute_hs_from_T()
+
+        # We associate a mass to the particle, and initialize it to 1, by convention
+        self.mass = 1.0
+        # We can then deduce mass for each chemical species in the particle
+        self.mass_k = self.mass * self.Y
+        # We can then also define a total sensible enthalpy
+        self.Hs = self.mass * self.hs
         
         # Particle state: sensible enthalpy + pressure + mass fractions
         self.state = np.empty(self.nb_state_vars)
@@ -119,8 +126,12 @@ class Particle(object):
             self.Y = self.state[2:]
             self.X = self.compute_mol_frac()
             self.T = gas.T
+
+            # We need to update masses of species and enthalpies (total mass in reactor is preserved)
+            self.mass_k = self.mass * self.Y
+            self.Hs = self.mass * self.hs
     
-    
+
     def react_NN_wrapper(self, ML_models, prog_var_thresholds, dt, T_threshold):
                     
         # Single model
@@ -347,3 +358,18 @@ class Particle(object):
         # Temperature
         self.T = gas.T
   
+
+    def compute_lewis_numbers(self):
+
+        gas = ct.Solution(self.mech_file)
+        gas.TPY = self.T, self.P, self.Y
+
+        # Lewis numbers
+        cond = gas.thermal_conductivity
+        cp = gas.cp_mass
+        Dk =  gas.mix_diff_coeffs_mass
+        rho = gas.density
+        # mu = gas.viscosity
+        #
+        self.Le_k = cond / (rho*cp*Dk)
+
