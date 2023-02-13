@@ -127,11 +127,17 @@ class ParticlesCloud(object):
         # Chemistry temperature threshold
         self.T_threshold = data_gen_parameters["T_threshold"]
 
-        # If differential diffusion, we need to calculate lewis numbers and diffusion times
+        # CURL with differential diffusion
         if self.mixing_model=="CURL_MODIFIED_DD":
-            # self._calc_lewis_numbers(self.state_per_inlet[1]) # By default, state of inlet 1 selected for Lewis number -> TO ADAPT 
-            # self.tau_k = self.mixing_time * self.Le_k
-            self.tau_min =  self.mixing_time #* np.min(self.Le_k) #np.min(self.tau_k)
+            
+            # Ren DD model needs mixing times to estimate number of particles pairs mixing
+            # We arbitrarily take particle 0, assuming Lewis numbers do not vary a lot
+            part = self.particles_list[0]
+            part.compute_lewis_numbers()
+
+            self.tau_k = self.mixing_time * part.Le_k
+            self.tau_min = np.min(self.tau_k)  #* np.min(self.Le_k) #np.min(self.tau_k)
+            # self.tau_min =  self.mixing_time
 
             # List of particle pairs
             self.particle_pairs = list(itertools.product(np.arange(self.nb_parts_tot), np.arange(self.nb_parts_tot)))
@@ -147,7 +153,10 @@ class ParticlesCloud(object):
         # Number of particles pair to use for CURL model
         if self.mixing_model=="CURL" or self.mixing_model=="CURL_MODIFIED" or self.mixing_model=="CURL_MODIFIED_DD":
             # Estimating number of pairs (float)
-            N_pairs = self.nb_parts_tot * self.dt/self.tau_min
+            if self.mixing_model=="CURL_MODIFIED_DD":  # 1.5 factor used in Ren et al. paper
+                N_pairs = 1.5 * self.nb_parts_tot * self.dt/self.tau_min
+            else:
+                N_pairs = self.nb_parts_tot * self.dt/self.tau_min
             
             # Number of mixed particle
             self.Npairs_curl = int(round(N_pairs))
@@ -423,31 +432,27 @@ class ParticlesCloud(object):
         # Randomly select mixing pairs
         pairs_index = np.random.choice(len(self.particle_pairs), size=self.Npairs_curl, p=prob_of_pairs,replace=False)
         
-        # Going back to pairs
-        pairs = []
-        for i in pairs_index:
-            pairs.append(self.particle_pairs[i])
-        
         # Carrying out diffusion
-        for pair in pairs:
+        for i in pairs_index:
             
-            # Finding particles
-            for part in self.particles_list:
-                if part.num_part==pair[0]:
-                    part_1 = part
-                if part.num_part==pair[1]:
-                    part_2 = part
-
+            # Particles in the pair
+            part_1 = self.particles_list[self.particle_pairs[i][0]]
+            part_2 = self.particles_list[self.particle_pairs[i][1]]
 
             # Compute Lewis numbers of mixing particles only (saves costs)
             part_1.compute_lewis_numbers()
             part_2.compute_lewis_numbers()
             Le_k_m = 0.5*(part_1.Le_k + part_2.Le_k)   # To conserve mass we need one Lewis, we take the average as a test
+
+            # Updating mixing times using current particles' Lewis numbers
+            self.tau_k = self.mixing_time * Le_k_m
+            self.tau_min = np.min(self.tau_k)
             
             # Random value between 0 and min(Le_k) -> to avoid overshooting
             # min_Le_1 = np.min(part_1.Le_k)
             # min_Le_2 = np.min(part_2.Le_k)
-            alpha = np.min(Le_k_m) * np.random.random()
+            # alpha = np.min(Le_k_m) * np.random.random()   # SIMPLE MODEL
+            alpha = np.random.random()   # REN MODEL
 
             # Recording initial enthalpy and mass of particle 1 (which will be updated first)
             mass_k_1_ini = part_1.mass_k.copy()
@@ -455,27 +460,28 @@ class ParticlesCloud(object):
 
             # REN ET AL MODEL
             # Variables needed to update particles
-            # Y_12 = (part_1.mass_k + part_2.mass_k)/(part_1.mass + part_2.mass)
-            # hs_12 = (part_1.Hs + part_2.Hs)/(part_1.mass + part_2.mass)
-            # theta_k = (3.0-(9.0-8.0*self.tau_k)**0.5)/2
-            # theta_hs = (3.0-(9.0-8.0*self.mixing_time)**0.5)/2
+            Y_12 = (part_1.mass_k + part_2.mass_k)/(part_1.mass + part_2.mass)
+            hs_12 = (part_1.Hs + part_2.Hs)/(part_1.mass + part_2.mass)
+            theta_k = (3.0-(9.0-8.0*(self.tau_min/self.tau_k))**0.5)/2
+            theta_hs = (3.0-(9.0-8.0*(self.tau_min/self.mixing_time))**0.5)/2
 
-            # # Updating mass and total enthalpy of particle 1
-            # part_1.mass_k = (1.0-alpha*theta_k)*part_1.mass_k + alpha*theta_k*part_1.mass*Y_12
-            # part_1.Hs = (1.0-alpha*theta_hs)*part_1.Hs + alpha*theta_hs*part_1.mass*hs_12
+            # Updating mass and total enthalpy of particle 1
+            part_1.mass_k = (1.0-alpha*theta_k)*part_1.mass_k + alpha*theta_k*part_1.mass*Y_12
+            part_1.Hs = (1.0-alpha*theta_hs)*part_1.Hs + alpha*theta_hs*part_1.mass*hs_12
 
-            # part_2.mass_k = part_2.mass_k - (part_1.mass_k - mass_k_1_ini)
-            # part_2.Hs = part_2.Hs - (part_1.Hs - Hs_1_ini)
+            part_2.mass_k = part_2.mass_k - (part_1.mass_k - mass_k_1_ini)
+            part_2.Hs = part_2.Hs - (part_1.Hs - Hs_1_ini)
 
-            # Total enthalpy updated using alpha as a coefficient
-            part_1.Hs += 0.5 * alpha * (part_2.Hs - part_1.Hs)
+            # # SIMPLE MODEL
+            # # Total enthalpy updated using alpha as a coefficient
+            # part_1.Hs += 0.5 * alpha * (part_2.Hs - part_1.Hs)
 
-            # Species masses updated using alpha weighted by lewis numbers
-            part_1.mass_k += 0.5 * (alpha/Le_k_m) * (part_2.mass_k - part_1.mass_k)
+            # # Species masses updated using alpha weighted by lewis numbers
+            # part_1.mass_k += 0.5 * (alpha/Le_k_m) * (part_2.mass_k - part_1.mass_k)
 
-            # Particle 2 update
-            part_2.Hs += 0.5 * alpha * (Hs_1_ini - part_2.Hs)
-            part_2.mass_k += 0.5 * (alpha/Le_k_m) * (mass_k_1_ini - part_2.mass_k)
+            # # Particle 2 update
+            # part_2.Hs += 0.5 * alpha * (Hs_1_ini - part_2.Hs)
+            # part_2.mass_k += 0.5 * (alpha/Le_k_m) * (mass_k_1_ini - part_2.mass_k)
 
             # Dealing with negative masses (we put them in the other particle)
             for j in range(len(part_1.mass_k)):
