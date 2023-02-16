@@ -14,7 +14,7 @@ class Particle(object):
 #     INITIALIZATION
 # =============================================================================    
 
-    def __init__(self, state_ini, species_names, num_inlet, num_part, data_gen_parameters):
+    def __init__(self, state_ini, species_names, num_inlet, num_part, data_gen_parameters, parent):
         
         # Inlet number from which it is issued
         self.num_inlet = num_inlet
@@ -24,7 +24,7 @@ class Particle(object):
         
         # Chemical mechanism
         self.mech_file = data_gen_parameters["mech_file"]
-        
+
         # species names
         self.species_names = species_names
         
@@ -40,7 +40,7 @@ class Particle(object):
         self.Y = state_ini[2:]
         
         # Get initial sensible enthalpy
-        self.compute_hs_from_T()
+        self.compute_hs_from_T(parent)
 
         # We associate a mass to the particle, and initialize it to 1, by convention
         self.mass = 1.0
@@ -75,13 +75,12 @@ class Particle(object):
             #
             #: int: list of progress variable species indices
             self.pv_ind = []
-            gas = ct.Solution(self.mech_file)
             for i in range(self.npvspec):
-                self.pv_ind.append(gas.species_index(self.pv_species[i]))
+                self.pv_ind.append(parent.gas.species_index(self.pv_species[i]))
         #
-        self.compute_progress_variable()
+        self.compute_progress_variable(parent)
         #
-        self.compute_heat_release_rate()
+        self.compute_heat_release_rate(parent)
 
         
 
@@ -91,21 +90,18 @@ class Particle(object):
 # =============================================================================
     
     # Standard (Cantera) function to update chemistry
-    def react(self, dt, T_threshold):
+    def react(self, dt, parent):
         
         # Unsolved pb: if Yk from NN is inputed here; 
         # it may become negative and mass is lost (output from CVODE is always positive)
         
-        if self.T>T_threshold:
-        
-            # Cantera gas phase object
-            gas = ct.Solution(self.mech_file)
+        if self.T>parent.T_threshold:
             
             # Initial value are current's particle state
-            gas.HPY = self.hs, self.P, self.Y
+            parent.gas.HPY = self.hs, self.P, self.Y
             
             # Constant pressure reactor
-            r = ct.IdealGasConstPressureReactor(gas)
+            r = ct.IdealGasConstPressureReactor(parent.gas)
             
             # Initializing reactor
             sim = ct.ReactorNet([r])
@@ -115,9 +111,9 @@ class Particle(object):
             
             # Updated state
             state_new = np.empty(self.nb_state_vars)
-            state_new[0] = gas.HP[0]
-            state_new[1] = gas.P
-            state_new[2:] = gas.Y
+            state_new[0] = parent.gas.HP[0]
+            state_new[1] = parent.gas.P
+            state_new[2:] = parent.gas.Y
             self.state = state_new
             
             # Variables from state
@@ -125,7 +121,7 @@ class Particle(object):
             self.P = self.state[1]
             self.Y = self.state[2:]
             self.X = self.compute_mol_frac()
-            self.T = gas.T
+            self.T = parent.gas.T
 
             # We need to update masses of species and enthalpies (total mass in reactor is preserved)
             self.mass_k = self.mass * self.Y
@@ -150,12 +146,12 @@ class Particle(object):
     
     
     # NN-based function to update chemistry
-    def react_NN(self, ML_model, dt, T_threshold):
+    def react_NN(self, parent):
         
-        if self.T>T_threshold:
+        if self.T>parent.T_threshold:
             
             # Initializing ANN model
-            ann_model = ModelANN(ML_model)
+            ann_model = ModelANN(parent.ML_model)
             
             # Loading model
             ann_model.load_ann_model()
@@ -164,14 +160,11 @@ class Particle(object):
             ann_model.load_scalers()
             
             
-            # Cantera gas phase object
-            gas = ct.Solution(self.mech_file)
-            
             # Storing initial values
             Y_old = self.Y
                     
             # Gas object modification
-            gas.TPY= self.T, self.P, self.Y
+            parent.gas.TPY= self.T, self.P, self.Y
             #        
             # State vector for NN (temperature + mass fractions => different than in self.state)
             state_NN = np.append(self.T,self.Y)
@@ -215,7 +208,7 @@ class Particle(object):
                     
             # Deducing T from energy conservation
             # Explicit update
-            T_new = state_NN[0] - (1/gas.cp)*np.sum(gas.partial_molar_enthalpies/self.spec_mol_weights*(Y_new-Y_old))
+            T_new = state_NN[0] - (1/parent.gas.cp)*np.sum(parent.gas.partial_molar_enthalpies/self.spec_mol_weights*(Y_new-Y_old))
     
     
             
@@ -280,7 +273,7 @@ class Particle(object):
         
     
     # Equivalence ratio based on atomic balance
-    def compute_progress_variable(self):
+    def compute_progress_variable(self, parent):
 
         # Initializing
         self.prog_var = 0.0
@@ -289,30 +282,27 @@ class Particle(object):
         if self.calc_progvar==True:
             
             # Equilibrium state in present conditions
-            gas = ct.Solution(self.mech_file)
-            gas.TPX = self.T, self.P, self.X
-            gas.equilibrate('HP')
+            parent.gas.TPX = self.T, self.P, self.X
+            parent.gas.equilibrate('HP')
 
             Yc_eq = 0.0
             Yc = 0.0
             for i in self.pv_ind:
-                Yc_eq += gas.Y[i]
+                Yc_eq += parent.gas.Y[i]
                 Yc += self.Y[i]
             
             self.prog_var = Yc/Yc_eq
 
 
     # Heat release rate
-    def compute_heat_release_rate(self):
+    def compute_heat_release_rate(self, parent):
 
-        # We need CANTERA solution object
-        gas = ct.Solution(self.mech_file)
-        gas.TPX = self.T, self.P, self.X
+        parent.gas.TPX = self.T, self.P, self.X
 
         self.hrr = 0.0       
-        for spec in gas.species_names:
-            standard_enthalpy_spec = gas.standard_enthalpies_RT[gas.species_index(spec)] * ct.gas_constant * gas.T
-            self.hrr += -gas.net_production_rates[gas.species_index(spec)] * standard_enthalpy_spec
+        for spec in parent.gas.species_names:
+            standard_enthalpy_spec = parent.gas.standard_enthalpies_RT[parent.gas.species_index(spec)] * ct.gas_constant * parent.gas.T
+            self.hrr += -parent.gas.net_production_rates[parent.gas.species_index(spec)] * standard_enthalpy_spec
 
 
     
@@ -334,42 +324,35 @@ class Particle(object):
 # =============================================================================
     
     # Sensible enthalpy from temperature
-    def compute_hs_from_T(self):
-        
-        # Cantera gas phase object
-        gas = ct.Solution(self.mech_file)
+    def compute_hs_from_T(self, parent):
 
         # Initial value are current's particle state
-        gas.TPY = self.T, self.P, self.Y
+        parent.gas.TPY = self.T, self.P, self.Y
         
         # Enthalpy
-        self.hs = gas.HP[0]
+        self.hs = parent.gas.HP[0]
         
         
     # Temperature from sensible enthalpy
-    def compute_T_from_hs(self):
-        
-        # Cantera gas phase object
-        gas = ct.Solution(self.mech_file)
-        
+    def compute_T_from_hs(self, parent):
+                
         # Initial value are current's particle state
-        gas.HPY = self.hs, self.P, self.Y
+        parent.gas.HPY = self.hs, self.P, self.Y
         
         # Temperature
-        self.T = gas.T
+        self.T = parent.gas.T
   
 
-    def compute_lewis_numbers(self):
+    def compute_lewis_numbers(self, parent):
 
-        gas = ct.Solution(self.mech_file)
-        gas.TPY = self.T, self.P, self.Y
+        parent.gas.TPY = self.T, self.P, self.Y
 
         # Lewis numbers
-        cond = gas.thermal_conductivity
-        cp = gas.cp_mass
-        Dk =  gas.mix_diff_coeffs_mass
-        rho = gas.density
-        # mu = gas.viscosity
+        cond = parent.gas.thermal_conductivity
+        cp = parent.gas.cp_mass
+        Dk =  parent.gas.mix_diff_coeffs_mass
+        rho = parent.gas.density
+        # mu = parent.gas.viscosity
         #
         self.Le_k = cond / (rho*cp*Dk)
 

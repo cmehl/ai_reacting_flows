@@ -62,6 +62,7 @@ class ParticlesCloud(object):
 
         # Mechanism file
         self.mech_file  = data_gen_parameters["mech_file"]
+        self.gas = ct.Solution(self.mech_file)
 
         # Dabatase building
         self.build_ml_dtb = data_gen_parameters["build_ml_dtb"]
@@ -112,7 +113,7 @@ class ParticlesCloud(object):
         for i in range(1,self.nb_inlets+1):  # Loop on inlet
             for j in range(self.nb_parts_per_inlet[i]):  # creating Ni particles for inlet i
                 state_ini = self.state_per_inlet[i]
-                particle_current = Particle(state_ini, self.species_names, i, num_part, data_gen_parameters)
+                particle_current = Particle(state_ini, self.species_names, i, num_part, data_gen_parameters, self)
                 self.particles_list.append(particle_current)
                 num_part += 1
         
@@ -133,7 +134,7 @@ class ParticlesCloud(object):
             # Ren DD model needs mixing times to estimate number of particles pairs mixing
             # We arbitrarily take particle 0, assuming Lewis numbers do not vary a lot
             part = self.particles_list[0]
-            part.compute_lewis_numbers()
+            part.compute_lewis_numbers(self)
 
             self.tau_k = self.mixing_time * part.Le_k
             self.tau_min = np.min(self.tau_k)  #* np.min(self.Le_k) #np.min(self.tau_k)
@@ -332,9 +333,9 @@ class ParticlesCloud(object):
         # We perform chemical reactions -> each processor computes on its chunks
         for part in lists_particles:
             if self.ML_inference_flag:
-                part.react_NN_wrapper(self.ML_models, self.pg_thresholds, dt, self.T_threshold)
+                part.react_NN_wrapper(self)
             else:
-                part.react(dt, self.T_threshold)
+                part.react(dt, self)
 
         # Allgather regroups the chunks and give the whole list to all the processors (<=> gather + broadcast)
         result = self.comm.allgather(lists_particles)
@@ -416,7 +417,7 @@ class ParticlesCloud(object):
                 part.state[2:] = part.Y
                 
                 # Temperature
-                part.compute_T_from_hs()
+                part.compute_T_from_hs(self)
 
 
 
@@ -625,9 +626,9 @@ class ParticlesCloud(object):
         for part in lists_particles:
             part.compute_mol_frac()
             part.compute_equiv_ratio()
-            part.compute_progress_variable()
+            part.compute_progress_variable(self)
             part.compute_mixture_fraction()
-            part.compute_heat_release_rate()
+            part.compute_heat_release_rate(self)
 
         # Allgather regroups the chunks and give the whole list to all the processors (<=> gather + broadcast)
         result = self.comm.allgather(lists_particles)
