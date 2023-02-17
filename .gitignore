@@ -128,6 +128,7 @@ dmypy.json
 # ai_reacting_flow related
 /scripts/STOCH_DTB_*
 /scripts/inlets*
+/scripts/*.pkl
 /notebooks/MODEL_*
 /notebooks/inlets*
 /notebooks/plots*
