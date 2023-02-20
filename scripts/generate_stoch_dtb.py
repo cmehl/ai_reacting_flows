@@ -24,6 +24,7 @@ data_gen_parameters["time_max"] = 4e-6          # Simulation end time
 # Modeling parameters
 data_gen_parameters["mixing_model"] = "CURL_MODIFIED"         # Mixing model (CURL or CURL_MODIFIED)
 data_gen_parameters["mixing_time"] = 0.4e-3                 # Mixing time-scale
+data_gen_parameters["read_mixing"] = True                 # Use pre-computed mixing pairs
 data_gen_parameters["T_threshold"] = 200.0                  # Temperature threshold for database
 data_gen_parameters["calc_progvar"] = True                  # Flag to decide if progress variable is computed
 data_gen_parameters["pv_species"] = ["CO", "CO2"]                 # Species used to define progress variable
