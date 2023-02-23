@@ -6,6 +6,7 @@ import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
 import pandas as pd
+import pickle
 import h5py
 import seaborn as sns
 sns.set()
@@ -161,6 +162,33 @@ class ParticlesCloud(object):
             
             # Number of mixed particle
             self.Npairs_curl = int(round(N_pairs))
+
+        if self.mixing_model!="CURL_MODIFIED_DD":  
+            # Do or read mixing
+            read_mixing = data_gen_parameters["read_mixing"]
+            do_CURL_rate = True if "CURL_MODIFIED" in self.mixing_model else False
+            if read_mixing:
+                with open("pairs_list.pkl", "rb") as f:
+                    self.pairs_list = pickle.load(f)
+                if do_CURL_rate:
+                    with open("CURL_rate_list.pkl", "rb") as f:
+                        self.CURL_rate_list = pickle.load(f)
+            else:
+                n_ite = int(self.time_max / self.dt) + 1
+                self.pairs_list = []
+                self.CURL_rate_list = []
+                for i in range(n_ite): # DAK: vectorize pair generation ?
+                    self.pairs_list.append(utils.sample_comb2((self.nb_parts_tot,self.nb_parts_tot), self.Npairs_curl))
+                    if do_CURL_rate:
+                        self.CURL_rate_list.append(np.random.random())
+                
+                with open(self.results_folder + "/pairs_list.pkl", 'wb') as f:
+                    pickle.dump(self.pairs_list, f)
+                if do_CURL_rate:
+                    with open(self.results_folder + "/CURL_rate_list.pkl", 'wb') as f:
+                        pickle.dump(self.CURL_rate_list, f)
+            
+            
             
             # If number is very small, N_pairs_curl might be 0, in this case we set it
             # to 1 and perform diffusion every round(1/N_pairs) time steps
@@ -369,17 +397,19 @@ class ParticlesCloud(object):
     def _mix_curl(self):
 
         # Randomly select mixing pairs
-        pairs = utils.sample_comb2((self.nb_parts_tot,self.nb_parts_tot), self.Npairs_curl)
+        pairs = self.pairs_list[self.iteration]
         
         # Carrying out diffusion
         for pair in pairs:
             
             # Finding particles
-            for part in self.particles_list:
-                if part.num_part==pair[0]:
-                    part_1 = part
-                if part.num_part==pair[1]:
-                    part_2 = part
+            part_1 = self.particles_list[pair[0]]
+            part_2 = self.particles_list[pair[1]]
+            # for part in self.particles_list:
+            #     if part.num_part==pair[0]:
+            #         part_1 = part
+            #     if part.num_part==pair[1]:
+            #         part_2 = part
 
             # Initial values
             Y1_ini = part_1.Y.copy()
@@ -399,7 +429,7 @@ class ParticlesCloud(object):
             elif self.mixing_model=="CURL_MODIFIED":
                     
                 # Random value between 0 and 1
-                a = np.random.random()
+                a = self.CURL_rate_list[self.iteration]
                         
                 # Update particles states
                 part_1.Y += 0.5 * a * (Y2_ini - Y1_ini)
@@ -409,15 +439,13 @@ class ParticlesCloud(object):
                 part_2.hs += 0.5 * a * (h1_ini - h2_ini)
             
             
-            # Updating variables associated to particles
-            for part in [part_1, part_2]:
-                
-                # Main state
-                part.state[0] = part.hs
-                part.state[2:] = part.Y
-                
-                # Temperature
-                part.compute_T_from_hs(self)
+            part_1.state[0] = part_1.hs
+            part_1.state[2:] = part_1.Y
+            part_1.compute_T_from_hs(self)
+            
+            part_2.state[0] = part_2.hs
+            part_2.state[2:] = part_2.Y
+            part_2.compute_T_from_hs(self)
 
 
 
