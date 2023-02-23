@@ -441,8 +441,8 @@ class ParticlesCloud(object):
             part_2 = self.particles_list[self.particle_pairs[i][1]]
 
             # Compute Lewis numbers of mixing particles only (saves costs)
-            part_1.compute_lewis_numbers()
-            part_2.compute_lewis_numbers()
+            part_1.compute_lewis_numbers(self)
+            part_2.compute_lewis_numbers(self)
             Le_k_m = 0.5*(part_1.Le_k + part_2.Le_k)   # To conserve mass we need one Lewis, we take the average as a test
 
             # Updating mixing times using current particles' Lewis numbers
@@ -470,6 +470,11 @@ class ParticlesCloud(object):
             part_1.mass_k = (1.0-alpha*theta_k)*part_1.mass_k + alpha*theta_k*part_1.mass*Y_12
             part_1.Hs = (1.0-alpha*theta_hs)*part_1.Hs + alpha*theta_hs*part_1.mass*hs_12
 
+            flux_sum = - np.sum(part_1.mass_k - mass_k_1_ini)
+            flux = (part_1.mass_k - mass_k_1_ini) + flux_sum * part_1.Y
+            part_1.Y += flux
+            part_2.Y -= flux
+            
             part_2.mass_k = part_2.mass_k - (part_1.mass_k - mass_k_1_ini)
             part_2.Hs = part_2.Hs - (part_1.Hs - Hs_1_ini)
 
@@ -513,7 +518,7 @@ class ParticlesCloud(object):
                 part.state[2:] = part.Y
                 
                 # Temperature
-                part.compute_T_from_hs()
+                part.compute_T_from_hs(self)
 
                 
     # # EMST model: initialization

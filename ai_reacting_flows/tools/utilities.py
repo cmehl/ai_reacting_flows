@@ -84,7 +84,7 @@ def Phi_from_Yk_HC(n, m, Y_HC, Y_O2, Y_N2):
 
 
 # Function to compute composition from equivalence ratio
-def Phi_from_Yk_HC(fuel, phi):
+def Yk_from_phi_HC(fuel, phi):
         
     # Parse fuel species (Remark: might include oxygen)
     x, y, z, _= parse_species(fuel)
@@ -302,7 +302,7 @@ def compute_adiabatic(fuel, mech_file, phi, T0, p, diffusion_model="Mix"):
     #           FLAME COMPUTATION
     #-----------------------------------------------
     
-    initial_grid = np.linspace(0.0, 0.01, 10)  # m
+    initial_grid = np.linspace(0.0, 0.03, 10)  # m
     tol_ss = [1.0e-4, 1.0e-9]  # [rtol atol] for steady-state problem
     tol_ts = [1.0e-5, 1.0e-5]  # [rtol atol] for time stepping
     loglevel = 1  # amount of diagnostic output (0 to 8)
@@ -319,29 +319,36 @@ def compute_adiabatic(fuel, mech_file, phi, T0, p, diffusion_model="Mix"):
     # Flame object
     gas.TPX = T0, p, reactants
     f = ct.FreeFlame(gas, initial_grid)
-    
+
     f.flame.set_steady_tolerances(default=tol_ss)
     f.flame.set_transient_tolerances(default=tol_ts)
-    
+    f.inlet.set_steady_tolerances(default=tol_ss)
+    f.inlet.set_transient_tolerances(default=tol_ts)
+    f.outlet.set_steady_tolerances(default=tol_ss)
+    f.outlet.set_transient_tolerances(default=tol_ts)
+        
     # Mixing model and Jacobian
     f.transport_model = diffusion_model
     f.set_max_jac_age(10, 10)
     f.set_time_step(1e-5, [2, 5, 10, 20])
     
-    # Solve with the energy equation enabled
-    f.energy_enabled = True
-    f.set_refine_criteria(ratio=3, slope=0.1, curve=0.5)
-    f.solve(loglevel=loglevel, refine_grid=True)
-    print('Flamespeed = {0:7f} m/s'.format(f.velocity[0]))
+    # # Solve with the energy equation enabled
+    # f.energy_enabled = True
+    # f.set_refine_criteria(ratio=3, slope=0.1, curve=0.5)
+    # f.solve(loglevel=loglevel, refine_grid=True)
+    # print('Flamespeed = {0:7f} m/s'.format(f.velocity[0]))
     
-    f.set_refine_criteria(ratio=3, slope=0.05, curve=0.2)
-    f.solve(loglevel=loglevel, refine_grid=True)
-    print('Flamespeed = {0:7f} m/s'.format(f.velocity[0]))
+    # f.set_refine_criteria(ratio=3, slope=0.05, curve=0.2)
+    # f.solve(loglevel=loglevel, refine_grid=True)
+    # print('Flamespeed = {0:7f} m/s'.format(f.velocity[0]))
     
-    f.set_refine_criteria(ratio=3, slope=0.05, curve=0.1, prune=0.03)
-    #f.transport_model = 'Multi'
-    f.solve(loglevel=loglevel, refine_grid=True)
+    # f.set_refine_criteria(ratio=3, slope=0.05, curve=0.1, prune=0.03)
+    # #f.transport_model = 'Multi'
+    # f.solve(loglevel=loglevel, refine_grid=True)
 
+    f.set_refine_criteria(ratio=2, slope=0.06, curve=0.12, prune=0.04)
+        
+    f.solve(loglevel=loglevel, auto=True)
 
     # Getting needed variables
     T = f.T

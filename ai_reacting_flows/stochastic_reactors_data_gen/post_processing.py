@@ -104,11 +104,6 @@ class StochDatabase(object):
 
         self.add_1D_premixed_archetype = True
 
-        # Conditions of flame
-        phi = 0.4
-        p = 101325.0
-        T0 = 300.0
-
         # Compute flame
         self.T_cano_1D, self.Y_cano_dict_1D = utils.compute_adiabatic(fuel, mech_file, phi, T0, p, diffusion_model)
 
