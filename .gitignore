@@ -135,4 +135,6 @@ dmypy.json
 /notebooks/postpro*
 /notebooks/*.png
 
-
+# VSCode
+*.code-workspace
+.vscode
