@@ -189,10 +189,14 @@ class LearningDatabase(object):
                 
 
         elif clusterization_method=="kmeans":
+            
+            spec_list = self.species_names.to_list()
+            spec_list.insert(0,"Temperature")
+            if self.with_N_chemistry is False:
+                spec_list.remove("N2")
 
             # Get states only (temperature and Yk's)
-            cols = [0] + [2+i for i in range(self.nb_species)]
-            data = self.X.values[:,cols]
+            data = self.X[spec_list].values
 
             # If log transform, we also apply it when clustering
             if self.log_transform_X>0:
@@ -220,6 +224,11 @@ class LearningDatabase(object):
 
             # Saving scaler
             joblib.dump(Xscaler, self.dtb_folder + "/" + self.database_name + "/Xscaler_kmeans.pkl")
+
+            # Saving normalization parameters and centroids
+            np.savetxt(self.dtb_folder + "/" + self.database_name + '/kmeans_norm.dat', np.vstack([Xscaler.mean_, Xscaler.var_]).T)
+            list_index = np.array([i for i in range(nb_clusters)]).reshape(1,-1)
+            np.savetxt(self.dtb_folder + "/" + self.database_name + '/km_centroids.dat', np.vstack([list_index, kmeans.cluster_centers_.T]))
 
 
 
@@ -255,7 +264,7 @@ class LearningDatabase(object):
 
 
     # Re-sampling based on heat release rate
-    def undersample_HRR(self, jpdf_var_1, jpdf_var_2, hrr_func, keep_low_c, n_samples=None, n_bins=100):
+    def undersample_HRR(self, jpdf_var_1, jpdf_var_2, hrr_func, keep_low_c, n_samples=None, n_bins=100, plot_distrib=False):
         
         # Save initial states for later use
         self.X_old = self.X.copy()
@@ -349,34 +358,35 @@ class LearningDatabase(object):
         # fig.tight_layout()
         # fig.savefig("fm.png", dpi=400, bbox_inches="tight")
 
-        fig, (ax1,ax2,ax3) = plt.subplots(nrows=3)
-        fig.set_size_inches(18.5, 10.5)
+        if plot_distrib:
+            fig, (ax1,ax2,ax3) = plt.subplots(nrows=3)
+            fig.set_size_inches(18.5, 10.5)
 
-        plt.set_cmap('plasma')
-        im = ax1.scatter(x, y, c=data_interp, s=4, vmin=0, vmax=0.1)
-        cbar = fig.colorbar(im, ax=ax1)
-        cbar.ax.set_ylabel(r'$f_s$ $[-]$', fontsize=16)
-        fig.tight_layout()
+            plt.set_cmap('plasma')
+            im = ax1.scatter(x, y, c=data_interp, s=4, vmin=0, vmax=0.1)
+            cbar = fig.colorbar(im, ax=ax1)
+            cbar.ax.set_ylabel(r'$f_s$ $[-]$', fontsize=16)
+            fig.tight_layout()
 
-        im = ax2.scatter(x, y, c=np.log(data_hrr_interp), s=4, vmin=-10, vmax=np.log(0.00004))
-        cbar = fig.colorbar(im, ax=ax2)
-        cbar.ax.set_ylabel(r'$\log(f_q)$ $[-]$', fontsize=16)
-        fig.tight_layout()
+            im = ax2.scatter(x, y, c=np.log(data_hrr_interp), s=4, vmin=-10, vmax=np.log(0.00004))
+            cbar = fig.colorbar(im, ax=ax2)
+            cbar.ax.set_ylabel(r'$\log(f_q)$ $[-]$', fontsize=16)
+            fig.tight_layout()
 
-        im = ax3.scatter(x, y, c=np.log(p), s=4, vmin=-20, vmax=-5)
-        cbar = fig.colorbar(im, ax=ax3)
-        cbar.ax.set_ylabel(r'$\log(f_m)$ $[-]$', fontsize=16)
-        fig.tight_layout()
+            im = ax3.scatter(x, y, c=np.log(p), s=4, vmin=-20, vmax=-5)
+            cbar = fig.colorbar(im, ax=ax3)
+            cbar.ax.set_ylabel(r'$\log(f_m)$ $[-]$', fontsize=16)
+            fig.tight_layout()
 
-        ax1.xaxis.set_ticklabels([])
-        ax2.xaxis.set_ticklabels([])
-        for ax in [ax1,ax2,ax3]:
-            ax.set_box_aspect(1)
-            ax.set_ylabel(r"$Y_{H_{2}O}$ $[-]$", fontsize=16)
-        ax3.set_xlabel(r"$T$ $[K]$", fontsize=16)
+            ax1.xaxis.set_ticklabels([])
+            ax2.xaxis.set_ticklabels([])
+            for ax in [ax1,ax2,ax3]:
+                ax.set_box_aspect(1)
+                ax.set_ylabel(r"$Y_{H_{2}O}$ $[-]$", fontsize=16)
+            ax3.set_xlabel(r"$T$ $[K]$", fontsize=16)
 
-        fig.tight_layout()
-        fig.savefig("resampling_analysis.png", dpi=400, bbox_inches="tight")
+            fig.tight_layout()
+            fig.savefig("resampling_analysis.png", dpi=400, bbox_inches="tight")
 
         # -------------------------------------------------------------------------------------------------
 

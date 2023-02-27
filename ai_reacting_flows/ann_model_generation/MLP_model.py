@@ -43,7 +43,7 @@ import cantera as ct
 tf.keras.backend.set_floatx('float64')
 
 
-tf.random.set_seed(24)
+tf.random.set_seed(2022)
 
 class MLPModel(object):
 
@@ -166,6 +166,8 @@ class MLPModel(object):
             elif self.clustering_type=="kmeans":
                 shutil.copy(self.dataset_path + "/kmeans_model.pkl", self.directory)
                 shutil.copy(self.dataset_path + "/Xscaler_kmeans.pkl", self.directory)
+                shutil.copy(self.dataset_path + "/kmeans_norm.dat", self.directory)
+                shutil.copy(self.dataset_path + "/km_centroids.dat", self.directory)
 
 
         # Defining mechanism file (either detailed or reduced)

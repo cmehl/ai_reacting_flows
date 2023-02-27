@@ -234,6 +234,8 @@ class ModelTesting(object):
         state = np.append(T_ann, Y_k_ann)
         for i in range(nb_ite):
 
+            print(f"ITERATION {i} \n")
+
             # Old state
             T_old = state[0]
             Y_old = state[1:]
@@ -655,10 +657,26 @@ class ModelTesting(object):
 
     
     def attribute_cluster(self, state_vector=None, progvar=None):
+        
+        log_state = state_vector.copy()
 
         if self.clustering_method=="kmeans":
+            
+            # We remove N2 if necessary
+            if self.remove_N2:
+                n2_index = self.spec_list_ANN.index("N2")
+                log_state = np.delete(log_state, n2_index+1)
+
+            # Transformation
+            if self.log_transform_X>0:
+                log_state[log_state < self.threshold] = self.threshold
+                if self.log_transform_X==1:
+                    log_state[1:] = np.log(log_state[1:])
+                elif self.log_transform_X==2:
+                    log_state[1:] = (log_state[:, 1:]**self.lambda_bct - 1.0)/self.lambda_bct
+
             # Scaling vector
-            vect_scaled = self.kmeans_scaler.transform(state_vector.reshape(1, -1))
+            vect_scaled = self.kmeans_scaler.transform(log_state.reshape(1, -1))
             # Applying k-means
             self.cluster = self.kmeans.predict(vect_scaled)[0]
 
