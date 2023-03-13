@@ -1,5 +1,5 @@
-AI FOR REACTING FLOWS
-=====================
+AI FOR REACTING FLOWS (ARF)
+===========================
 
 The project *ai_for_reacting_flows* is a tool enabling to replace complex chemical kinetics calculations in a CFD code by a machine learning model. The idea is that typical exact solvers used to resolve such problems (such as [CVODE](https://computing.llnl.gov/projects/sundials/cvode)) are very expensive. Using fitted models, such as Artificial Neural Networks (ANN), enables to speed-up calculations by a significant factor. 
 
