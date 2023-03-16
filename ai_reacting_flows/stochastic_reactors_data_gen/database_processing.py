@@ -22,6 +22,7 @@ import seaborn as sns
 sns.set_style("darkgrid")
 
 from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 
@@ -95,6 +96,8 @@ class LearningDatabase(object):
 
         self.is_reduced = False
         self.is_resampled = False
+
+        self.is_pca_computed = False
 
         self.check_inputs()
 
@@ -232,15 +235,20 @@ class LearningDatabase(object):
 
 
 
-    def visualize_clusters(self, species):
+    def visualize_clusters(self, var1, var2):
+
+        # If variables are PC1 and PC2, we compute the PCA
+        if var1=="PC1" and var2=="PC2":
+            if not self.is_pca_computed:
+                self.compute_pca()
 
         fig, ax = plt.subplots()
-        im = ax.scatter(self.X["Temperature"], self.X[species], c = self.X["cluster"])
+        im = ax.scatter(self.X[var1], self.X[var2], c = self.X["cluster"])
         fig.colorbar(im, ax=ax)
-        ax.set_xlabel("T [K]")
-        ax.set_ylabel("Y H2 [-]")
+        ax.set_xlabel(var1, fontsize=16)
+        ax.set_ylabel(var2, fontsize=16)
         fig.tight_layout()
-        fig.savefig(self.dtb_folder + "/" + self.database_name + f"/cluster_T_{species}.png")
+        fig.savefig(self.dtb_folder + "/" + self.database_name + f"/cluster_{var1}_{var2}.png")
 
 
 
@@ -269,6 +277,11 @@ class LearningDatabase(object):
         # Save initial states for later use
         self.X_old = self.X.copy()
         self.Y_old = self.Y.copy()
+
+        # If variables are PC1 and PC2, the re-sampling is done in (normalized) PC-space and we need to perform the PA
+        if jpdf_var_1=="PC1" and jpdf_var_2=="PC2":
+            if not self.is_pca_computed:
+                self.compute_pca()
 
         # Dataset size
         n = self.X.shape[0]
@@ -382,8 +395,10 @@ class LearningDatabase(object):
             ax2.xaxis.set_ticklabels([])
             for ax in [ax1,ax2,ax3]:
                 ax.set_box_aspect(1)
-                ax.set_ylabel(r"$Y_{H_{2}O}$ $[-]$", fontsize=16)
-            ax3.set_xlabel(r"$T$ $[K]$", fontsize=16)
+                # ax.set_ylabel(r"$Y_{H_{2}O}$ $[-]$", fontsize=16)
+                ax.set_ylabel(jpdf_var_2, fontsize=16)
+            # ax3.set_xlabel(r"$T$ $[K]$", fontsize=16)
+            ax3.set_xlabel(jpdf_var_1, fontsize=16)
 
             fig.tight_layout()
             fig.savefig("resampling_analysis.png", dpi=400, bbox_inches="tight")
@@ -417,6 +432,10 @@ class LearningDatabase(object):
 
         self.is_resampled = True
 
+        # We recompute PCA because database has changed
+        if jpdf_var_1=="PC1" and jpdf_var_2=="PC2":
+            self.compute_pca()
+    
         print(f"\n Number of points in undersampled dataset: {self.X.shape[0]} \n")
         print(f"    >> {100*self.X.shape[0]/n} % of the database is retained")
     
@@ -595,6 +614,9 @@ class LearningDatabase(object):
             list_to_remove = ["Prog_var", "HRR", "cluster"]
             if remove_pressure_X:
                 list_to_remove.append('Pressure')
+            if self.is_pca_computed:
+                list_to_remove.append("PC1")
+                list_to_remove.append("PC2")
             #
             [X_cols.remove(elt) for elt in list_to_remove]   
             X_p = X_p[X_cols] 
@@ -606,6 +628,7 @@ class LearningDatabase(object):
             #
             [Y_cols.remove(elt) for elt in list_to_remove]   
             Y_p = Y_p[Y_cols] 
+
 
 
             # Clip if logarithm transformation
@@ -767,6 +790,11 @@ class LearningDatabase(object):
     def density_scatter(self, var_x , var_y, sort = True, bins = 100):
         # Functions from https://stackoverflow.com/questions/20105364/how-can-i-make-a-scatter-plot-colored-by-density-in-matplotlib
 
+        # If variables are PC1 and PC2, we compute the PCA
+        if var_x=="PC1" and var_y=="PC2":
+            if not self.is_pca_computed:
+                self.compute_pca()
+            
         x = self.X[var_x]
         y = self.X[var_y]
 
@@ -793,7 +821,11 @@ class LearningDatabase(object):
 
 
     # Marginal PDF of a given variable in the dataframe
-    def plot_pdf_var(self, var): 
+    def plot_pdf_var(self, var):
+
+        if var=="PC1" or var=="PC2":
+            if not self.is_pca_computed:
+                self.compute_pca()
             
         # Temperature histogram
         fig, ax = plt.subplots()
@@ -817,6 +849,10 @@ class LearningDatabase(object):
     # Compare
     def compare_resampled_pdfs(self, var): 
 
+        if var=="PC1" or var=="PC2":
+            if not self.is_pca_computed:
+                self.compute_pca()
+
         if self.is_resampled is False:
             sys.exit("Data has not been resampled, this function is not accessible")
             
@@ -839,4 +875,44 @@ class LearningDatabase(object):
 
         fig.tight_layout()
         fig.savefig("comparison_distribution.png", dpi=400)
+
+
+
+    # Compute PCA of database
+    def compute_pca(self):
+
+        # Number of PCA dimensions here forced to 2
+        k = 2
+
+        features = self.species_names.to_list()
+        features.insert(0,"Temperature")
+        if self.with_N_chemistry is False:
+            features.remove("N2")
+
+        # Get states only (temperature and Yk's)
+        data = self.X[features].values
+
+        # # If log transform, we also apply it for pca
+        # if self.log_transform_X>0:
+        #     data[data < self.threshold] = self.threshold
+        #     if self.log_transform_X==1:
+        #         data[:, 1:] = np.log(data[:, 1:])
+        #     elif self.log_transform_X==2:
+        #         data[:, 1:] = (data[:, 1:]**self.lambda_bct - 1.0)/self.lambda_bct
+
+        # Scaling data
+        pca_scaler = StandardScaler()
+        pca_scaler.fit(data)
+        data = pca_scaler.transform(data)
+
+        # Performing PCA
+        pca_algo = PCA(n_components=k, svd_solver="full")
+        pca_algo.fit(data)
+        PCs = pca_algo.transform(data)
+
+        self.X["PC1"] = PCs[:,0]
+        self.X["PC2"] = PCs[:,1]
+
+        self.is_pca_computed = True
+
 
