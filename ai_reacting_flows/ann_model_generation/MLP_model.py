@@ -31,7 +31,7 @@ from tensorflow.keras import initializers
 from tensorflow.keras.utils import plot_model
 
 from ai_reacting_flows.ann_model_generation.tensorflow_custom import sum_species_metric
-from ai_reacting_flows.ann_model_generation.tensorflow_custom import AtomicConservation, AtomicConservation_RR, AtomicConservation_RR_lsq
+# from ai_reacting_flows.ann_model_generation.tensorflow_custom import AtomicConservation, AtomicConservation_RR, AtomicConservation_RR_lsq
 from ai_reacting_flows.ann_model_generation.tensorflow_custom import GetN2Layer, ZerosLayer, GetLeftPartLayer, GetRightPartLayer
 from ai_reacting_flows.ann_model_generation.tensorflow_custom import ResidualBlock
 
@@ -627,52 +627,52 @@ class MLPModel(object):
             
             #=========================== model's output definition ( constrained or not )=====================================
             
-        if self.hard_constraints_model==0:
+        # if self.hard_constraints_model==0:
 
-            # layers_dict['output_layer'] = layers.Dense(units=Y_train.shape[1], kernel_regularizer=regularizers.l2(alpha_reg), kernel_initializer=initializers.GlorotUniform(),name='output_layer')(layers_dict[f"activation_layer_{len(nb_units_in_layers)}"])
-            output_layer = layers.Dense(units=n_Y-1, kernel_regularizer=regularizers.l2(self.alpha_reg), kernel_initializer=initializers.GlorotUniform(),name='output_layer')(layers_dict[f"hidden_layer_{len(nb_units_in_layers)}"]) 
+        # layers_dict['output_layer'] = layers.Dense(units=Y_train.shape[1], kernel_regularizer=regularizers.l2(alpha_reg), kernel_initializer=initializers.GlorotUniform(),name='output_layer')(layers_dict[f"activation_layer_{len(nb_units_in_layers)}"])
+        output_layer = layers.Dense(units=n_Y-1, kernel_regularizer=regularizers.l2(self.alpha_reg), kernel_initializer=initializers.GlorotUniform(),name='output_layer')(layers_dict[f"hidden_layer_{len(nb_units_in_layers)}"]) 
 
-            # We recreate whole vector with correct ordering 
-            output_layer_1 = GetLeftPartLayer(self._left_n2, self._n2_index, kernel_initializer=initializers.GlorotUniform())(output_layer)
-            output_layer_2 = GetRightPartLayer(self._right_n2, self._n2_index, kernel_initializer=initializers.GlorotUniform())(output_layer)
-            if self.output_omegas==True: 
-                layers_dict['output_layer'] = layers.Concatenate(axis=1)([output_layer_1, zero_layer,output_layer_2])
-            else:
-                layers_dict['output_layer'] = layers.Concatenate(axis=1)([output_layer_1, n2_layer, output_layer_2])
+        # We recreate whole vector with correct ordering 
+        output_layer_1 = GetLeftPartLayer(self._left_n2, self._n2_index, kernel_initializer=initializers.GlorotUniform())(output_layer)
+        output_layer_2 = GetRightPartLayer(self._right_n2, self._n2_index, kernel_initializer=initializers.GlorotUniform())(output_layer)
+        if self.output_omegas==True: 
+            layers_dict['output_layer'] = layers.Concatenate(axis=1)([output_layer_1, zero_layer,output_layer_2])
+        else:
+            layers_dict['output_layer'] = layers.Concatenate(axis=1)([output_layer_1, n2_layer, output_layer_2])
 
-        elif self.hard_constraints_model>0:
+        # elif self.hard_constraints_model>0:
                 
-            # Intermediate dense layer
-            # layers_dict["output_layer_interm"] = layers.Dense(units=Y_train.shape[1],kernel_regularizer=regularizers.l2(alpha_reg),kernel_initializer=initializers.GlorotUniform(), name="output_layer_interm")(layers_dict[f"activation_layer_{len(nb_units_in_layers)}"])
+        #     # Intermediate dense layer
+        #     # layers_dict["output_layer_interm"] = layers.Dense(units=Y_train.shape[1],kernel_regularizer=regularizers.l2(alpha_reg),kernel_initializer=initializers.GlorotUniform(), name="output_layer_interm")(layers_dict[f"activation_layer_{len(nb_units_in_layers)}"])
                 
-            output_layer_interm = layers.Dense(units=n_Y-1, kernel_regularizer=regularizers.l2(self.alpha_reg), kernel_initializer=initializers.GlorotUniform(),name='output_layer_interm')(layers_dict[f"hidden_layer_{len(nb_units_in_layers)}"]) 
+        #     output_layer_interm = layers.Dense(units=n_Y-1, kernel_regularizer=regularizers.l2(self.alpha_reg), kernel_initializer=initializers.GlorotUniform(),name='output_layer_interm')(layers_dict[f"hidden_layer_{len(nb_units_in_layers)}"]) 
 
 
-            output_layer_1 = GetLeftPartLayer(self._left_n2, self._n2_index, kernel_initializer=initializers.GlorotUniform())(output_layer_interm)
-            output_layer_2 = GetRightPartLayer(self._right_n2, self._n2_index, kernel_initializer=initializers.GlorotUniform())(output_layer_interm)
+        #     output_layer_1 = GetLeftPartLayer(self._left_n2, self._n2_index, kernel_initializer=initializers.GlorotUniform())(output_layer_interm)
+        #     output_layer_2 = GetRightPartLayer(self._right_n2, self._n2_index, kernel_initializer=initializers.GlorotUniform())(output_layer_interm)
                 
-            if self.output_omegas==True: 
-                layers_dict['output_layer_interm'] = layers.Concatenate(axis=1)([output_layer_1, zero_layer, output_layer_2])
-            else:
-                layers_dict['output_layer_interm'] = layers.Concatenate(axis=1)([output_layer_1, n2_layer, output_layer_2])
+        #     if self.output_omegas==True: 
+        #         layers_dict['output_layer_interm'] = layers.Concatenate(axis=1)([output_layer_1, zero_layer, output_layer_2])
+        #     else:
+        #         layers_dict['output_layer_interm'] = layers.Concatenate(axis=1)([output_layer_1, n2_layer, output_layer_2])
                 
 
-            if self.hard_constraints_model==1:
-                # Layer enforcing physical constraint
-                # Atomic conservation
-                if self.output_omegas==True:
-                    layers_dict["output_layer"] = AtomicConservation_RR(n_Y, self._param1_Y, self._param2_Y, self._param2_Y_scale, 
-                                                                            self.A_atomic_t, self.A_inv_final_t,kernel_initializer=initializers.GlorotUniform())(layers_dict["output_layer_interm"])
-                else:
-                    layers_dict["output_layer"] = AtomicConservation(n_Y, self._param1_X, self._param2_X, self._param1_Y, 
-                                                            self._param2_Y, self.log_transform_Y, self.threshold, self.A_atomic_t, self.A_inv_final_t,kernel_initializer=initializers.GlorotUniform())([layers_dict["output_layer_interm"],layers_dict["input_layer"]])
+        #     if self.hard_constraints_model==1:
+        #         # Layer enforcing physical constraint
+        #         # Atomic conservation
+        #         if self.output_omegas==True:
+        #             layers_dict["output_layer"] = AtomicConservation_RR(n_Y, self._param1_Y, self._param2_Y, self._param2_Y_scale, 
+        #                                                                     self.A_atomic_t, self.A_inv_final_t,kernel_initializer=initializers.GlorotUniform())(layers_dict["output_layer_interm"])
+        #         else:
+        #             layers_dict["output_layer"] = AtomicConservation(n_Y, self._param1_X, self._param2_X, self._param1_Y, 
+        #                                                     self._param2_Y, self.log_transform_Y, self.threshold, self.A_atomic_t, self.A_inv_final_t,kernel_initializer=initializers.GlorotUniform())([layers_dict["output_layer_interm"],layers_dict["input_layer"]])
                                 
-            elif self.hard_constraints_model==2:
+        #     elif self.hard_constraints_model==2:
 
-                # Layer enforcing physical constraint
-                # Atomic conservation
-                layers_dict["output_layer"] = AtomicConservation_RR_lsq(n_Y, self._param1_Y, self._param2_Y, self._param2_Y_scale, 
-                                                                        self.L, kernel_initializer=initializers.GlorotUniform())(layers_dict["output_layer_interm"])
+        #         # Layer enforcing physical constraint
+        #         # Atomic conservation
+        #         layers_dict["output_layer"] = AtomicConservation_RR_lsq(n_Y, self._param1_Y, self._param2_Y, self._param2_Y_scale, 
+        #                                                                 self.L, kernel_initializer=initializers.GlorotUniform())(layers_dict["output_layer_interm"])
         
         # ================                Define model   ==========================================================
         
@@ -723,30 +723,30 @@ class MLPModel(object):
          
         #=========================== model's output definition ( constrained or not )=====================================
             
-        if self.hard_constraints_model==0:
-            layers_dict['output_layer'] = layers.Dense(units=n_Y, kernel_regularizer=regularizers.l2(self.alpha_reg), kernel_initializer=initializers.GlorotUniform(),name='output_layer')(layers_dict[f"hidden_layer_{len(nb_units_in_layers)}"]) 
+        # if self.hard_constraints_model==0:
+        layers_dict['output_layer'] = layers.Dense(units=n_Y, kernel_regularizer=regularizers.l2(self.alpha_reg), kernel_initializer=initializers.GlorotUniform(),name='output_layer')(layers_dict[f"hidden_layer_{len(nb_units_in_layers)}"]) 
 
-        elif self.hard_constraints_model>0:
+        # elif self.hard_constraints_model>0:
                 
-            # Intermediate dense layer   
-            layers_dict['output_layer_interm'] = layers.Dense(units=n_Y, kernel_regularizer=regularizers.l2(self.alpha_reg), kernel_initializer=initializers.GlorotUniform(),name='output_layer_interm')(layers_dict[f"hidden_layer_{len(nb_units_in_layers)}"])
+        #     # Intermediate dense layer   
+        #     layers_dict['output_layer_interm'] = layers.Dense(units=n_Y, kernel_regularizer=regularizers.l2(self.alpha_reg), kernel_initializer=initializers.GlorotUniform(),name='output_layer_interm')(layers_dict[f"hidden_layer_{len(nb_units_in_layers)}"])
 
-            if self.hard_constraints_model==1:
-                # Layer enforcing physical constraint
-                # Atomic conservation
-                if self.output_omegas==True:
-                    layers_dict["output_layer"] = AtomicConservation_RR(n_Y, self._param1_Y, self._param2_Y, self._param2_Y_scale, 
-                                                                            self.A_atomic_t, self.A_inv_final_t,kernel_initializer=initializers.GlorotUniform())(layers_dict["output_layer_interm"])
-                else:
-                    layers_dict["output_layer"] = AtomicConservation(n_Y, self._param1_X, self._param2_X, self._param1_Y, 
-                                                            self._param2_Y, self.log_transform_Y, self.threshold, self.A_atomic_t, self.A_inv_final_t,kernel_initializer=initializers.GlorotUniform())([layers_dict["output_layer_interm"],layers_dict["input_layer"]])
+        #     if self.hard_constraints_model==1:
+        #         # Layer enforcing physical constraint
+        #         # Atomic conservation
+        #         if self.output_omegas==True:
+        #             layers_dict["output_layer"] = AtomicConservation_RR(n_Y, self._param1_Y, self._param2_Y, self._param2_Y_scale, 
+        #                                                                     self.A_atomic_t, self.A_inv_final_t,kernel_initializer=initializers.GlorotUniform())(layers_dict["output_layer_interm"])
+        #         else:
+        #             layers_dict["output_layer"] = AtomicConservation(n_Y, self._param1_X, self._param2_X, self._param1_Y, 
+        #                                                     self._param2_Y, self.log_transform_Y, self.threshold, self.A_atomic_t, self.A_inv_final_t,kernel_initializer=initializers.GlorotUniform())([layers_dict["output_layer_interm"],layers_dict["input_layer"]])
                                 
-            elif self.hard_constraints_model==2:
+        #     elif self.hard_constraints_model==2:
 
-                # Layer enforcing physical constraint
-                # Atomic conservation
-                layers_dict["output_layer"] = AtomicConservation_RR_lsq(n_Y, self._param1_Y, self._param2_Y, self._param2_Y_scale, 
-                                                                        self.L, kernel_initializer=initializers.GlorotUniform())(layers_dict["output_layer_interm"])
+        #         # Layer enforcing physical constraint
+        #         # Atomic conservation
+        #         layers_dict["output_layer"] = AtomicConservation_RR_lsq(n_Y, self._param1_Y, self._param2_Y, self._param2_Y_scale, 
+        #                                                                 self.L, kernel_initializer=initializers.GlorotUniform())(layers_dict["output_layer_interm"])
         
         # ================                Define model   ==========================================================
         

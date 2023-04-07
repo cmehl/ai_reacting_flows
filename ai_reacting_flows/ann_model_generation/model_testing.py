@@ -15,9 +15,9 @@ from tensorflow.keras.losses import MeanSquaredError
 
 import cantera as ct
 
-from ai_reacting_flows.ann_model_generation.tensorflow_custom import AtomicConservation
-from ai_reacting_flows.ann_model_generation.tensorflow_custom import AtomicConservation_RR
-from ai_reacting_flows.ann_model_generation.tensorflow_custom import AtomicConservation_RR_lsq
+# from ai_reacting_flows.ann_model_generation.tensorflow_custom import AtomicConservation
+# from ai_reacting_flows.ann_model_generation.tensorflow_custom import AtomicConservation_RR
+# from ai_reacting_flows.ann_model_generation.tensorflow_custom import AtomicConservation_RR_lsq
 from ai_reacting_flows.ann_model_generation.tensorflow_custom import GetN2Layer, ZerosLayer, GetLeftPartLayer, GetRightPartLayer
 from ai_reacting_flows.ann_model_generation.tensorflow_custom import ResidualBlock
 
@@ -587,36 +587,36 @@ class ModelTesting(object):
             # Model reconstruction from JSON file
             with open(self.models_folder + f'/model_architecture_cluster{i}.json', 'r') as f:
 
-                if self.hard_constraints_model==1:
-                    if self.output_omegas==True:
-                        model = model_from_json(f.read(), custom_objects={'AtomicConservation_RR': AtomicConservation_RR,
-                                                                           'GetN2Layer' : GetN2Layer,
-                                                                           'ZerosLayer': ZerosLayer,
-                                                                           'GetLeftPartLayer': GetLeftPartLayer,
-                                                                           'GetRightPartLayer': GetRightPartLayer,
-                                                                            'ResidualBlock': ResidualBlock})
-                    else:
-                        model = model_from_json(f.read(), custom_objects={'AtomicConservation': AtomicConservation,
-                                                                           'GetN2Layer' : GetN2Layer,
-                                                                           'GetLeftPartLayer': GetLeftPartLayer,
-                                                                           'GetRightPartLayer': GetRightPartLayer,
-                                                                            'ResidualBlock': ResidualBlock})
-                elif self.hard_constraints_model==2:
-                    if self.output_omegas==True:
-                        model = model_from_json(f.read(), custom_objects={'AtomicConservation_RR_lsq': AtomicConservation_RR_lsq,
-                                                                           'GetN2Layer' : GetN2Layer,
-                                                                           'ZerosLayer': ZerosLayer,
-                                                                           'GetLeftPartLayer': GetLeftPartLayer,
-                                                                           'GetRightPartLayer': GetRightPartLayer,
-                                                                            'ResidualBlock': ResidualBlock})
-                    else:
-                        sys.exit("hard_constraints_model=2 not written for output_omegas=False")
-                else:
-                    model = model_from_json(f.read(), custom_objects={'GetN2Layer' : GetN2Layer,
-                                                                           'ZerosLayer': ZerosLayer,
-                                                                           'GetLeftPartLayer': GetLeftPartLayer,
-                                                                            'GetRightPartLayer': GetRightPartLayer,
-                                                                            'ResidualBlock': ResidualBlock})
+                # if self.hard_constraints_model==1:
+                #     if self.output_omegas==True:
+                #         model = model_from_json(f.read(), custom_objects={'AtomicConservation_RR': AtomicConservation_RR,
+                #                                                            'GetN2Layer' : GetN2Layer,
+                #                                                            'ZerosLayer': ZerosLayer,
+                #                                                            'GetLeftPartLayer': GetLeftPartLayer,
+                #                                                            'GetRightPartLayer': GetRightPartLayer,
+                #                                                             'ResidualBlock': ResidualBlock})
+                #     else:
+                #         model = model_from_json(f.read(), custom_objects={'AtomicConservation': AtomicConservation,
+                #                                                            'GetN2Layer' : GetN2Layer,
+                #                                                            'GetLeftPartLayer': GetLeftPartLayer,
+                #                                                            'GetRightPartLayer': GetRightPartLayer,
+                #                                                             'ResidualBlock': ResidualBlock})
+                # elif self.hard_constraints_model==2:
+                #     if self.output_omegas==True:
+                #         model = model_from_json(f.read(), custom_objects={'AtomicConservation_RR_lsq': AtomicConservation_RR_lsq,
+                #                                                            'GetN2Layer' : GetN2Layer,
+                #                                                            'ZerosLayer': ZerosLayer,
+                #                                                            'GetLeftPartLayer': GetLeftPartLayer,
+                #                                                            'GetRightPartLayer': GetRightPartLayer,
+                #                                                             'ResidualBlock': ResidualBlock})
+                #     else:
+                #         sys.exit("hard_constraints_model=2 not written for output_omegas=False")
+                # else:
+                model = model_from_json(f.read(), custom_objects={'GetN2Layer' : GetN2Layer,
+                                                                        'ZerosLayer': ZerosLayer,
+                                                                        'GetLeftPartLayer': GetLeftPartLayer,
+                                                                        'GetRightPartLayer': GetRightPartLayer,
+                                                                        'ResidualBlock': ResidualBlock})
             
             # Load weights into the new model
             model.load_weights(self.models_folder + f'/model_weights_cluster{i}.h5')

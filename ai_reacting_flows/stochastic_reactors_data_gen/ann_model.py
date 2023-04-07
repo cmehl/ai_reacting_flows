@@ -16,9 +16,9 @@ import joblib
 from tensorflow.keras.models import model_from_json
 
 
-from ai_reacting_flows.ann_model_generation.tensorflow_custom import AtomicConservation
-from ai_reacting_flows.ann_model_generation.tensorflow_custom import AtomicConservation_RR
-from ai_reacting_flows.ann_model_generation.tensorflow_custom import AtomicConservation_RR_lsq
+# from ai_reacting_flows.ann_model_generation.tensorflow_custom import AtomicConservation
+# from ai_reacting_flows.ann_model_generation.tensorflow_custom import AtomicConservation_RR
+# from ai_reacting_flows.ann_model_generation.tensorflow_custom import AtomicConservation_RR_lsq
 
 
 class ModelANN(object):
@@ -76,18 +76,18 @@ class ModelANN(object):
         
         # Model reconstruction from JSON file
         with open(self.model_folder + self.model_name + '/model_architecture.json', 'r') as f:
-            if self.hard_constraints_model==1:
-                if self.output_omegas==True:
-                    self.model = model_from_json(f.read(), custom_objects={'AtomicConservation_RR': AtomicConservation_RR})
-                else:
-                    self.model = model_from_json(f.read(), custom_objects={'AtomicConservation': AtomicConservation})
-            elif self.hard_constraints_model==2:
-                if self.output_omegas==True:
-                    self.model = model_from_json(f.read(), custom_objects={'AtomicConservation_RR_lsq': AtomicConservation_RR_lsq})
-                else:
-                    sys.exit('Not implemented yet')
-            else:
-                self.model = model_from_json(f.read())
+            # if self.hard_constraints_model==1:
+            #     if self.output_omegas==True:
+            #         self.model = model_from_json(f.read(), custom_objects={'AtomicConservation_RR': AtomicConservation_RR})
+            #     else:
+            #         self.model = model_from_json(f.read(), custom_objects={'AtomicConservation': AtomicConservation})
+            # elif self.hard_constraints_model==2:
+            #     if self.output_omegas==True:
+            #         self.model = model_from_json(f.read(), custom_objects={'AtomicConservation_RR_lsq': AtomicConservation_RR_lsq})
+            #     else:
+            #         sys.exit('Not implemented yet')
+            # else:
+            self.model = model_from_json(f.read())
         
         # Load weights into the new model
         self.model.load_weights(self.model_folder + self.model_name + '/model_weights.h5')
