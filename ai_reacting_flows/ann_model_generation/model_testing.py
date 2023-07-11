@@ -841,6 +841,7 @@ class ModelTesting(object):
         # Computing current progress variable
         state = np.append(T_old, Y_old)
         progvar = self.compute_progvar(state, pressure, self.mechanism_type)
+        self.progvar = progvar
         #
         if self.nb_clusters>0:
             self.attribute_cluster(state, progvar)
@@ -903,8 +904,11 @@ class ModelTesting(object):
         diff_log_Y_ann_norm = diff_log_Y_ann_norm.reshape(-1)
 
         # Error (MSE)
-        mse = MeanSquaredError()
-        err_Yk = mse(diff_log_Y_cvode_norm, diff_log_Y_ann)  
+        # mse = MeanSquaredError()
+        # err_Yk = mse(diff_log_Y_cvode_norm, diff_log_Y_ann)  
+
+        # Test: we compute error on actual mass fractions
+        err_Yk = (Y_cvode-Y_ann)**2
 
         err_T = 100.0*np.abs((T_ann-T_cvode)/T_cvode)
 

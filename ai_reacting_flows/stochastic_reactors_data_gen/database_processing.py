@@ -23,7 +23,7 @@ sns.set_style("darkgrid")
 
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.model_selection import train_test_split
 
 import ai_reacting_flows.tools.utilities as utils
@@ -230,8 +230,7 @@ class LearningDatabase(object):
 
             # Saving normalization parameters and centroids
             np.savetxt(self.dtb_folder + "/" + self.database_name + '/kmeans_norm.dat', np.vstack([Xscaler.mean_, Xscaler.var_]).T)
-            list_index = np.array([i for i in range(nb_clusters)]).reshape(1,-1)
-            np.savetxt(self.dtb_folder + "/" + self.database_name + '/km_centroids.dat', np.vstack([list_index, kmeans.cluster_centers_.T]))
+            np.savetxt(self.dtb_folder + "/" + self.database_name + '/km_centroids.dat', kmeans.cluster_centers_.T)
 
 
 
@@ -860,10 +859,10 @@ class LearningDatabase(object):
         fig, ax1 = plt.subplots()
         
         sns.histplot(data=self.X_old, x=var, ax=ax1, color="black", stat="density",
-                     binwidth=10, kde=False, label="Before re-sampling")
+                     binwidth=10, kde=False, label="Before under-sampling")
 
         sns.histplot(data=self.X, x=var, ax=ax1, color="blue", stat="density",
-                     binwidth=10, kde=False, alpha=0.4, label="After re-sampling")
+                     binwidth=10, kde=False, alpha=0.4, label="After under-sampling")
         
         ax1.set_box_aspect(1)
         
@@ -909,6 +908,7 @@ class LearningDatabase(object):
         pca_algo = PCA(n_components=k, svd_solver="full")
         pca_algo.fit(data)
         PCs = pca_algo.transform(data)
+
 
         self.X["PC1"] = PCs[:,0]
         self.X["PC2"] = PCs[:,1]
