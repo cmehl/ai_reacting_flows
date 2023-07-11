@@ -17,7 +17,7 @@ from ai_reacting_flows.stochastic_reactors_data_gen.particle import Particle
 import ai_reacting_flows.tools.utilities as utils
 from ai_reacting_flows.tools.utilities import PRINT
 
-# import ai_reacting_flows.stochastic_reactors_data_gen.EMST.emst_mixing as emst_mixing
+import ai_reacting_flows.stochastic_reactors_data_gen.EMST.emst_mixing as emst_mixing
 
 from ai_reacting_flows.stochastic_reactors_data_gen.ann_model import ModelANN
 
@@ -153,7 +153,7 @@ class ParticlesCloud(object):
             self.tau_min = self.mixing_time
         
         # Number of particles pair to use for CURL model
-        if self.mixing_model=="CURL" or self.mixing_model=="CURL_MODIFIED" or self.mixing_model=="CURL_MODIFIED_DD":
+        if self.mixing_model in ["CURL","CURL_MODIFIED","CURL_MODIFIED_DD"]:
             # Estimating number of pairs (float)
             # if self.mixing_model=="CURL_MODIFIED_DD":  # 1.5 factor used in Ren et al. paper
             #     N_pairs = 1.5 * self.nb_parts_tot * self.dt/self.tau_min
@@ -164,7 +164,7 @@ class ParticlesCloud(object):
             # Number of mixed particle
             self.Npairs_curl = int(round(N_pairs))
 
-        if self.mixing_model!="CURL_MODIFIED_DD":  
+        if self.mixing_model!="CURL_MODIFIED_DD" and self.mixing_model!="EMST":  
             # Do or read mixing
             read_mixing = data_gen_parameters["read_mixing"]
             do_CURL_rate = True if "CURL_MODIFIED" in self.mixing_model else False
@@ -200,9 +200,9 @@ class ParticlesCloud(object):
                 self.diffusion_freq = 1
             
             
-        # # Initializing particles age in EMST model
-        # if data_gen_parameters["mixing_model"]=="EMST":
-        #     self._init_EMST()
+        # Initializing particles age in EMST model
+        if data_gen_parameters["mixing_model"]=="EMST":
+            self._init_EMST()
             
         
         # =====================================================================
@@ -386,8 +386,8 @@ class ParticlesCloud(object):
             if self.iteration%self.diffusion_freq==0:
                 self._mix_curl_dd()
 
-        # elif self.mixing_model=="EMST":
-        #     self._mix_EMST()
+        elif self.mixing_model=="EMST":
+            self._mix_EMST()
 
 
 # =============================================================================
@@ -550,95 +550,95 @@ class ParticlesCloud(object):
                 part.compute_T_from_hs(self)
 
                 
-    # # EMST model: initialization
-    # def _init_EMST(self):
+    # EMST model: initialization
+    def _init_EMST(self):
         
-    #     nparts = len(self.particles_list)
-    #     ncompo = len(self.particles_list[0].state) - 1  # particle 0 arbitrary (pressure not considered)
+        nparts = len(self.particles_list)
+        ncompo = len(self.particles_list[0].state) - 1  # particle 0 arbitrary (pressure not considered)
         
-    #     state = np.zeros(nparts, order='F', dtype='float32')
-    #     wt = np.empty(nparts, order='F', dtype='float32')
-    #     fscale = np.empty(ncompo, order='F', dtype='float32')
-    #     f = np.empty((nparts, ncompo), order='F', dtype='float32')
-    #     for part in self.particles_list:
-    #         i = part.num_part
-    #         wt[i] = 1.0/nparts
-    #         state_part = np.append([part.hs], part.Y)
-    #         f[i, :] = state_part
+        state = np.zeros(nparts, order='F', dtype='float32')
+        wt = np.empty(nparts, order='F', dtype='float32')
+        fscale = np.empty(ncompo, order='F', dtype='float32')
+        f = np.empty((nparts, ncompo), order='F', dtype='float32')
+        for part in self.particles_list:
+            i = part.num_part
+            wt[i] = 1.0/nparts
+            state_part = np.append([part.hs], part.Y)
+            f[i, :] = state_part
             
         
-    #     # Scaling factor (to be defined better)
-    #     fscale[0] = 1.0e16
-    #     fscale[1:] = 0.1
+        # Scaling factor (to be defined better)
+        fscale[0] = 1.0e16
+        fscale[1:] = 0.1
         
-    #     # control vars for expert users
-    #     cvars = np.zeros(6, order='F', dtype='float32')
+        # control vars for expert users
+        cvars = np.zeros(6, order='F', dtype='float32')
         
-    #     # Normalized time scale
-    #     C_phi = 2.0  # model constant
-    #     omdt = self.dt / (C_phi*self.mixing_time)
+        # Normalized time scale
+        C_phi = 2.0  # model constant
+        omdt = self.dt / (C_phi*self.mixing_time)
         
-    #     # Using EMST routine to initialize age of particles
-    #     status = emst_mixing.emst(mode=1,f=f,state=state,wt=wt,omdt=omdt,fscale=fscale,cvars=cvars,np=nparts,nc=ncompo)
+        # Using EMST routine to initialize age of particles
+        status = emst_mixing.emst(mode=1,f=f,state=state,wt=wt,omdt=omdt,fscale=fscale,cvars=cvars,np=nparts,nc=ncompo)
         
-    #     # Checking EMST error status
-    #     assert status == 0, "EMST mixing failure"
+        # Checking EMST error status
+        assert status == 0, "EMST mixing failure"
         
-    #     # Dispatching age of particles
-    #     for part in self.particles_list:
-    #         i = part.num_part
-    #         part.age = state[i]
+        # Dispatching age of particles
+        for part in self.particles_list:
+            i = part.num_part
+            part.age = state[i]
         
         
         
-    # # EMST model: mixing
-    # def _mix_EMST(self):
+    # EMST model: mixing
+    def _mix_EMST(self):
         
-    #     nparts = len(self.particles_list)
-    #     ncompo = len(self.particles_list[0].state) - 1  # particle 0 arbitrary (pressure not considered)
+        nparts = len(self.particles_list)
+        ncompo = len(self.particles_list[0].state) - 1  # particle 0 arbitrary (pressure not considered)
         
-    #     state = np.empty(nparts, order='F', dtype='float32')
-    #     wt = np.empty(nparts, order='F', dtype='float32')
-    #     fscale = np.empty(ncompo, order='F', dtype='float32')
-    #     f = np.empty((nparts, ncompo), order='F', dtype='float32')
-    #     for part in self.particles_list:
-    #         i = part.num_part
-    #         state[i] = part.age
-    #         wt[i] = 1.0/nparts
-    #         state_part = np.append([part.hs], part.Y)
-    #         f[i, :] = state_part
+        state = np.empty(nparts, order='F', dtype='float32')
+        wt = np.empty(nparts, order='F', dtype='float32')
+        fscale = np.empty(ncompo, order='F', dtype='float32')
+        f = np.empty((nparts, ncompo), order='F', dtype='float32')
+        for part in self.particles_list:
+            i = part.num_part
+            state[i] = part.age
+            wt[i] = 1.0/nparts
+            state_part = np.append([part.hs], part.Y)
+            f[i, :] = state_part
             
         
-    #     # Scaling factor (to be defined better)
-    #     fscale[0] = 1.0e16
-    #     fscale[1:] = 0.1
+        # Scaling factor (to be defined better)
+        fscale[0] = 1.0e16
+        fscale[1:] = 0.1
         
-    #     # control vars for expert users
-    #     cvars = np.zeros(6, order='F', dtype='float32')
+        # control vars for expert users
+        cvars = np.zeros(6, order='F', dtype='float32')
         
-    #     # Normalized time scale
-    #     C_phi = 2.0  # model constant
-    #     omdt = self.dt / (C_phi*self.mixing_time)
+        # Normalized time scale
+        C_phi = 2.0  # model constant
+        omdt = self.dt / (C_phi*self.mixing_time)
         
-    #     # Using EMST routine to initialize age of particles
-    #     status = emst_mixing.emst(mode=2,f=f,state=state,wt=wt,omdt=omdt,fscale=fscale,cvars=cvars,np=nparts,nc=ncompo)
+        # Using EMST routine to initialize age of particles
+        status = emst_mixing.emst(mode=2,f=f,state=state,wt=wt,omdt=omdt,fscale=fscale,cvars=cvars,np=nparts,nc=ncompo)
         
-    #     # Checking EMST error status
-    #     assert status == 0, "EMST mixing failure" 
+        # Checking EMST error status
+        assert status == 0, "EMST mixing failure" 
         
-    #     # Updating particle associated variables
-    #     for part in self.particles_list:
+        # Updating particle associated variables
+        for part in self.particles_list:
             
-    #         # Main characteristics
-    #         i = part.num_part
-    #         part.age = state[i]
-    #         part.hs = f[i, 0]
-    #         part.Y = f[i, 1:]
-    #         part.state[0] = part.hs
-    #         part.state[2:] = part.Y
+            # Main characteristics
+            i = part.num_part
+            part.age = state[i]
+            part.hs = f[i, 0]
+            part.Y = f[i, 1:]
+            part.state[0] = part.hs
+            part.state[2:] = part.Y
             
-    #         # Temperature
-    #         part.compute_T_from_hs()
+            # Temperature
+            part.compute_T_from_hs(self)
 
 
 # =============================================================================
