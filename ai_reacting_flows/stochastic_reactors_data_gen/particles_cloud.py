@@ -155,10 +155,11 @@ class ParticlesCloud(object):
         # Number of particles pair to use for CURL model
         if self.mixing_model=="CURL" or self.mixing_model=="CURL_MODIFIED" or self.mixing_model=="CURL_MODIFIED_DD":
             # Estimating number of pairs (float)
-            if self.mixing_model=="CURL_MODIFIED_DD":  # 1.5 factor used in Ren et al. paper
-                N_pairs = 1.5 * self.nb_parts_tot * self.dt/self.tau_min
-            else:
-                N_pairs = self.nb_parts_tot * self.dt/self.tau_min
+            # if self.mixing_model=="CURL_MODIFIED_DD":  # 1.5 factor used in Ren et al. paper
+            #     N_pairs = 1.5 * self.nb_parts_tot * self.dt/self.tau_min
+            # else:
+            #     N_pairs = self.nb_parts_tot * self.dt/self.tau_min
+            N_pairs = 1.5 * self.nb_parts_tot * self.dt/self.tau_min # 1.5 factor used in Ren et al. paper
             
             # Number of mixed particle
             self.Npairs_curl = int(round(N_pairs))
