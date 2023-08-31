@@ -129,6 +129,7 @@ dmypy.json
 /scripts/STOCH_DTB_*
 /scripts/inlets*
 /scripts/*.pkl
+/scripts/MODEL_*
 /notebooks/MODEL_*
 /notebooks/inlets*
 /notebooks/plots*
