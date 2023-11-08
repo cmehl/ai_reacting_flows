@@ -11,7 +11,6 @@ This package features the following functionalities:
 
 + A module to generate machine learning models to advance the chemical state of a mixture
 
-This package is made by a very ugly man.
 
 # Package installation
 
