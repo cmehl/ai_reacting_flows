@@ -28,7 +28,7 @@ from tensorflow.keras import metrics
 #from tensorflow.keras import callbacks
 from tensorflow.keras import regularizers
 from tensorflow.keras import initializers
-from tensorflow.keras.utils import plot_model
+# from tensorflow.keras.utils import plot_model
 
 from ai_reacting_flows.ann_model_generation.tensorflow_custom import sum_species_metric
 # from ai_reacting_flows.ann_model_generation.tensorflow_custom import AtomicConservation, AtomicConservation_RR, AtomicConservation_RR_lsq
@@ -443,7 +443,7 @@ class MLPModel(object):
         model.save(self.directory + f'/my_model_cluster{i_cluster}')
         
         # Saving a representation of the model
-        plot_model(model, to_file=self.directory+ f'/model_plot{i_cluster}.png', show_shapes=True, show_layer_names=True)
+        # plot_model(model, to_file=self.directory+ f'/model_plot{i_cluster}.png', show_shapes=True, show_layer_names=True)
 
         # Storing model
         self.models_dict[i_cluster] = model
