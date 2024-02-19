@@ -1,23 +1,13 @@
-# %% [markdown]
-# # Testing of ANN models for combustion
-# 
-# Simple tests for the generated ANN models are made possible on python. These include:
-# 
-# + Test on 0D ignition simulations
-# + Test on the prediction of reaction rate of stationary 1D flames (*a priori* testing)
+from ai_reacting_flows.ann_model_generation.model_testing_mk import ModelTesting
 
-# %%
-from ai_reacting_flows.ann_model_generation.model_testing import ModelTesting
 
-# %% [markdown]
-# Parameters for the testing:
-
-# %%
 # Dictionary with parameters
 testing_parameters = {}
 
-testing_parameters["models_folder"] = "./MODEL_H2_HOTSPOT_TEST"     # Folder for the ML model
- 
+testing_parameters["models_folder"] = "/work/kotlarcm/WORK/AI/ENER/ai_reacting_flows_tensorflow/scripts/ENER/MODEL_LEARNING_TENSORFLOW_H2_HOTSPOT_MARTIN"     # Folder for the ML model
+
+
+testing_parameters["input_weight"] = False # Import Weight to pytorch or other framework 
 testing_parameters["fuel"] = "H2"            # Considered fuel
 testing_parameters["with_N_chemistry"] = False         # Nitrogen chemistry considered or not
 
@@ -44,7 +34,7 @@ phi = 0.4
 T0 = 1200.0
 pressure = 101325.0
 dt = 0.5e-6
-nb_ite = 500
+nb_ite = 10
 
 test.test_0D_ignition(phi, T0, pressure, dt, nb_ite)
 
@@ -56,12 +46,12 @@ test.test_0D_ignition(phi, T0, pressure, dt, nb_ite)
 # where $Y_k(dt)$ is the solution $Y_k$ advanced by a time increment $dt$, estimated using either CVODE or ANN.
 
 # %%
-phi = 0.4
-T0 = 300.0
-pressure = 101325.0
-dt = 0.5e-6
-T_threshold = 600.0
+#phi = 0.4
+#T0 = 300.0
+#pressure = 101325.0
+#dt = 0.5e-6
+#T_threshold = 600.0
 
-test.test_1D_premixed(phi, T0, pressure, dt, T_threshold)
+#test.test_1D_premixed(phi, T0, pressure, dt, T_threshold)
 
 

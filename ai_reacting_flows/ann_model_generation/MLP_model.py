@@ -6,6 +6,7 @@ import sys
 
 import matplotlib.pyplot as plt
 
+import time
 import shelve
 import shutil
 
@@ -28,7 +29,7 @@ from tensorflow.keras import metrics
 #from tensorflow.keras import callbacks
 from tensorflow.keras import regularizers
 from tensorflow.keras import initializers
-# from tensorflow.keras.utils import plot_model
+from tensorflow.keras.utils import plot_model
 
 from ai_reacting_flows.ann_model_generation.tensorflow_custom import sum_species_metric
 # from ai_reacting_flows.ann_model_generation.tensorflow_custom import AtomicConservation, AtomicConservation_RR, AtomicConservation_RR_lsq
@@ -443,7 +444,7 @@ class MLPModel(object):
         model.save(self.directory + f'/my_model_cluster{i_cluster}')
         
         # Saving a representation of the model
-        # plot_model(model, to_file=self.directory+ f'/model_plot{i_cluster}.png', show_shapes=True, show_layer_names=True)
+        plot_model(model, to_file=self.directory+ f'/model_plot{i_cluster}.png', show_shapes=True, show_layer_names=True)
 
         # Storing model
         self.models_dict[i_cluster] = model
@@ -457,7 +458,7 @@ class MLPModel(object):
         
         # defining the metrics to plot 
         targets = spec_names.copy()
-        targets[targets=='Temperature']='T'
+        targets[targets=='Temperature']='T' 
         
         targets.remove('T')
         
@@ -569,7 +570,11 @@ class MLPModel(object):
 
         # Loop on clusters
         for i_cluster in range(self.nb_clusters):
+            time_start = time.perf_counter()
             self.train_model_cluster_i(i_cluster)
+            print(50*"-")
+            print(f"Temps cluster {i_cluster} = {time.perf_counter()-time_start}")
+            print(50*"-")
             
 
     #------------------------------------------------------------------------------------

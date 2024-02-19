@@ -34,6 +34,10 @@ class ModelTesting(object):
         # Model folder name
         self.models_folder = testing_parameters["models_folder"]
 
+        #Output Weight = To import Weight from pytorch
+        self.output_weight = testing_parameters["output_weight"]
+
+    
         # Chemistry (maybe an information to get from model folder ?)
         self.fuel = testing_parameters["fuel"]
         self.with_N_chemistry = testing_parameters["with_N_chemistry"]
@@ -50,6 +54,8 @@ class ModelTesting(object):
         self.hard_constraints_model = shelfFile["hard_constraints_model"]
         self.mechanism_type = shelfFile["mechanism_type"]
         shelfFile.close()
+
+    
 
         # Chemical mechanisms
         self.mech = self.models_folder + "/mech_detailed.yaml"
@@ -311,7 +317,10 @@ class ModelTesting(object):
         ftsize = 14
         
         # Create directory with plots
-        folder = f'./plots_0D_T0#{T0}_phi#{phi}'
+        if self.output_weight == False : 
+            folder = f'./plots_0D_T0#{T0}_phi#{phi}_Tensorflow'
+        if self.output_weight == True : 
+            folder = f'./plots_0D_T0#{T0}_phi#{phi}_Converti'
         if os.path.isdir(folder):
             shutil.rmtree(folder)
         os.makedirs(folder)
@@ -550,7 +559,10 @@ class ModelTesting(object):
         #-------------------- PLOTTING --------------------------- 
         
         # Create directory with plots
-        folder = f'./plots_1D_prem_T0#{T0}_phi#{phi}'
+        if self.output_weight == False : 
+            folder = f'./plots_1D_prem_T0#{T0}_phi#{phi}_Tensorflow'
+        if self.output_weight == True : 
+            folder = f'./plots_1D_prem_T0#{T0}_phi#{phi}_converti'
         if os.path.isdir(folder):
             shutil.rmtree(folder)
         os.makedirs(folder)
@@ -619,7 +631,18 @@ class ModelTesting(object):
                                                                         'ResidualBlock': ResidualBlock})
             
             # Load weights into the new model
-            model.load_weights(self.models_folder + f'/model_weights_cluster{i}.h5')
+            if self.output_weight == False : 
+                model.load_weights(self.models_folder + f'/model_weights_cluster{i}.h5')
+
+            if self.output_weight== True : 
+                model.load_weights(f'/ifpengpfs/scratch/ifpen/kotlarcm/AI_2/ai_reacting_flows/scripts/Convert_pkl_Tensorflow/Model_pytorch_{i}_converti_tensorflow.h5')
+
+            
+            print(f"cluster =  {i}\n")
+            
+
+            
+            
 
             # Add to list
             self.models_list.append(model)
