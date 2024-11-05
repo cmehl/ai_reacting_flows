@@ -19,16 +19,16 @@ from sklearn.preprocessing import StandardScaler
 import joblib
 
 import tensorflow as tf
-import tensorflow.keras.backend as K
-from tensorflow.keras import models
-from tensorflow.keras import layers
-from tensorflow.keras import optimizers
-from tensorflow.keras import losses
-from tensorflow.keras import metrics
-#from tensorflow.keras import callbacks
-from tensorflow.keras import regularizers
-from tensorflow.keras import initializers
-# from tensorflow.keras.utils import plot_model
+import keras._tf_keras.keras.backend as K
+from keras._tf_keras.keras import models
+from keras._tf_keras.keras import layers
+from keras._tf_keras.keras import optimizers
+from keras._tf_keras.keras import losses
+from keras._tf_keras.keras import metrics
+#from keras._tf_keras.keras import callbacks
+from keras._tf_keras.keras import regularizers
+from keras._tf_keras.keras import initializers
+# from keras._tf_keras.keras.utils import plot_model
 
 from ai_reacting_flows.ann_model_generation.tensorflow_custom import sum_species_metric
 # from ai_reacting_flows.ann_model_generation.tensorflow_custom import AtomicConservation, AtomicConservation_RR, AtomicConservation_RR_lsq

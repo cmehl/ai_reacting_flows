@@ -9,8 +9,8 @@ import shelve
 import numpy as np
 import matplotlib.pyplot as plt
 
-from tensorflow.keras.models import model_from_json
-from tensorflow.keras.losses import MeanSquaredError
+from keras._tf_keras.keras.models import model_from_json
+from keras._tf_keras.keras.losses import MeanSquaredError
 
 
 import cantera as ct
