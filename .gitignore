@@ -135,6 +135,7 @@ dmypy.json
 /notebooks/plots*
 /notebooks/postpro*
 /notebooks/*.png
+/notebooks/*.ipynb
 
 # VSCode
 *.code-workspace

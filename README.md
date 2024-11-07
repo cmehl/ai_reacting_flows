@@ -14,12 +14,6 @@ This package features the following functionalities:
 
 # Package installation
 
-In the current version of the code, Python 3.9.5 is used. The installation of the Python libraries necessary for this project can be performed using pip and the *requirements.txt* file:
-
-```
-pip install -r requirements.txt
-```
-
 The project itself must be installed as a package, which can be done by going in the root folder and using the following command:
 
 ```
@@ -30,6 +24,19 @@ Additional details on how to install a home-made package can be found [here](htt
 
 In order to run the database generation, an MPI distribution is also necessary. In the current version of the code, the preconized version is OpenMPI/4.1.1.
 
+# Notebooks
+
+Notebooks used as examples are in the "notebooks" folder. They are versionned in Git as .py files to ease their tracking. To create notebooks from the .py file, simply prompt the following command from the root folder:
+
+```
+jupytext --to notebook notebooks/*.py
+```
+
+Note 1: these .py files are in a format where cells can be executed by some IDE (VScode for instance).
+Note 2: if you want to commit modifications from your work on some notebooks, you can use:
+```
+jupytext --set-formats ipynb,py:percent notebooks/*.ipynb
+```
 
 # Database generation
 
