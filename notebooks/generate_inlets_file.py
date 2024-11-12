@@ -36,7 +36,7 @@ from ai_reacting_flows.stochastic_reactors_data_gen.pre_processing import Inlet
 
 # %%
 # Chemical mechanism
-mech_file = "/work/mehlc/2_IA_KINETICS/ai_reacting_flows/data/chemical_mechanisms/mech_H2.cti"
+mech_file = "../data/chemical_mechanisms/mech_H2.yaml"
 
 # Fuel
 fuel = "H2"

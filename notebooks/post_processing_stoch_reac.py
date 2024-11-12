@@ -43,7 +43,7 @@ stoch_dtb = StochDatabase(stoch_dtb_folder, save_folder)
 # Function to scatter plot $Y_k=f(T)$ for all time steps on a list on specified species: (here $H_2$ and $H$)
 
 # %%
-stoch_dtb.compute_1D_premixed(0.4, 101325.0, 300.0, "H2", "/work/mehlc/2_IA_KINETICS/ai_reacting_flows/data/chemical_mechanisms/mech_H2.yaml", "Mix")
+stoch_dtb.compute_1D_premixed(0.4, 101325.0, 300.0, "H2", "../data/chemical_mechanisms/mech_H2.yaml", "Mix")
 
 # %%
 stoch_dtb.plot_T_Yk(["H2", "H", "H2O", "O2"])

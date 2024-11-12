@@ -27,7 +27,7 @@ sns.set_style("darkgrid")
 # Path to the database:
 
 # %%
-dtb_path = "/work/mehlc/2_IA_KINETICS/ai_reacting_flows/scripts/STOCH_DTB_PREMIXED_CH4/database_3"
+dtb_path = "../scripts/STOCH_DTB_PREMIXED_CH4/database_3"
 
 # %% [markdown]
 # We can count the number of clusters:

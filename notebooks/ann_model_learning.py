@@ -35,7 +35,7 @@ training_parameters = {}
 
 training_parameters["model_name_suffix"] = "TO_REMOVE"    # Name of the resulting model folder (as a suffix of MODEL)
     
-training_parameters["dataset_path"] = "/work/mehlc/2_IA_KINETICS/ai_reacting_flows/scripts/STOCH_DTB_HOTSPOT_H2_HRR/database_test"    # path of the database
+training_parameters["dataset_path"] = "../scripts/STOCH_DTB_HOTSPOT_H2_HRR/database_test"    # path of the database
 
 training_parameters["new_model_folder"] = False      # New model folders are training models inside existing folder
 

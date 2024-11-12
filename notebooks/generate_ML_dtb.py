@@ -54,7 +54,7 @@ dtb_processing_parameters["log_transform_X"] = 1              # 0: no transform,
 dtb_processing_parameters["log_transform_Y"] = 1              # 0: no transform, 1: Logarithm transform, 2: Box-Cox transform
 dtb_processing_parameters["threshold"] = 1.0e-10            # Threshold to be applied in case of logarithm transform
 dtb_processing_parameters["output_omegas"] = True          # True: output differences, False: output mass fractions
-dtb_processing_parameters["detailed_mechanism"] = "/work/mehlc/2_IA_KINETICS/ai_reacting_flows/data/chemical_mechanisms/mech_H2.yaml"        # Mechanism used for the database generation (/!\ YAML format)
+dtb_processing_parameters["detailed_mechanism"] = "../data/chemical_mechanisms/mech_H2.yaml"        # Mechanism used for the database generation (/!\ YAML format)
 dtb_processing_parameters["fuel"] = "H2"           # Fuel name
 dtb_processing_parameters["with_N_chemistry"] = False        # Considering Nitrogen chemistry or not (if not, N not considered in atom balance for reduction). In MLP, it will change treatment of N2.
 
