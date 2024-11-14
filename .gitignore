@@ -136,6 +136,8 @@ dmypy.json
 /notebooks/postpro*
 /notebooks/*.png
 /notebooks/*.ipynb
+/tests/STOCH_DTB_*
+/tests/test_gen_dtb.py
 
 # VSCode
 *.code-workspace
