@@ -69,7 +69,7 @@ def generate_stochastic_database(data_gen_parameters, comm):
         os.mkdir(results_folder)
 
         # Copying input files to results folder to document run
-        shutil.copy("./" + data_gen_parameters["inlets_file"], results_folder)
+        shutil.copy(data_gen_parameters["inlets_file"], results_folder)
         shutil.copy(data_gen_parameters["mech_file"], results_folder)
 
 

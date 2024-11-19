@@ -17,8 +17,6 @@ from ai_reacting_flows.stochastic_reactors_data_gen.particle import Particle
 import ai_reacting_flows.tools.utilities as utils
 from ai_reacting_flows.tools.utilities import PRINT
 
-import ai_reacting_flows.stochastic_reactors_data_gen.EMST.emst_mixing as emst_mixing
-
 from ai_reacting_flows.stochastic_reactors_data_gen.ann_model import ModelANN
 
 matplotlib.use('Agg')
@@ -43,7 +41,8 @@ class ParticlesCloud(object):
         # =====================================================================
         
         # Folder where result are stored
-        self.results_folder = "STOCH_DTB_" + data_gen_parameters["results_folder_suffix"]
+        self.run_folder = os.getcwd()
+        self.results_folder = f"{self.run_folder:s}/STOCH_DTB_" + data_gen_parameters["results_folder_suffix"]
         
         # Methodology to solve chemistry: Cantera or NN
         self.ML_inference_flag = data_gen_parameters["ML_inference_flag"]
@@ -125,6 +124,9 @@ class ParticlesCloud(object):
         # Mixing model
         self.mixing_model = data_gen_parameters["mixing_model"]
         self.mixing_time = data_gen_parameters["mixing_time"]
+        if self.mixing_model == "EMST":
+            import ai_reacting_flows.stochastic_reactors_data_gen.EMST.emst_mixing as emst_mixing
+            self.emst = emst_mixing
         
         # Chemistry temperature threshold
         self.T_threshold = data_gen_parameters["T_threshold"]
@@ -169,10 +171,10 @@ class ParticlesCloud(object):
             read_mixing = data_gen_parameters["read_mixing"]
             do_CURL_rate = True if "CURL_MODIFIED" in self.mixing_model else False
             if read_mixing:
-                with open("pairs_list.pkl", "rb") as f:
+                with open(f"{self.run_folder:s}/pairs_list.pkl", "rb") as f:
                     self.pairs_list = pickle.load(f)
                 if do_CURL_rate:
-                    with open("CURL_rate_list.pkl", "rb") as f:
+                    with open(f"{self.run_folder:s}/CURL_rate_list.pkl", "rb") as f:
                         self.CURL_rate_list = pickle.load(f)
             else:
                 n_ite = int(self.time_max / self.dt) + 1
@@ -579,7 +581,7 @@ class ParticlesCloud(object):
         omdt = self.dt / (C_phi*self.mixing_time)
         
         # Using EMST routine to initialize age of particles
-        status = emst_mixing.emst(mode=1,f=f,state=state,wt=wt,omdt=omdt,fscale=fscale,cvars=cvars,np=nparts,nc=ncompo)
+        status = self.emst.emst(mode=1,f=f,state=state,wt=wt,omdt=omdt,fscale=fscale,cvars=cvars,np=nparts,nc=ncompo)
         
         # Checking EMST error status
         assert status == 0, "EMST mixing failure"
@@ -621,7 +623,7 @@ class ParticlesCloud(object):
         omdt = self.dt / (C_phi*self.mixing_time)
         
         # Using EMST routine to initialize age of particles
-        status = emst_mixing.emst(mode=2,f=f,state=state,wt=wt,omdt=omdt,fscale=fscale,cvars=cvars,np=nparts,nc=ncompo)
+        status = self.emst.emst(mode=2,f=f,state=state,wt=wt,omdt=omdt,fscale=fscale,cvars=cvars,np=nparts,nc=ncompo)
         
         # Checking EMST error status
         assert status == 0, "EMST mixing failure" 

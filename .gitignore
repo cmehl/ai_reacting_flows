@@ -126,6 +126,7 @@ env_ia
 dmypy.json
 
 # ai_reacting_flow related
+/ai_reacting_flows/stochastic_reactors_data_gen/EMST/*.o
 /scripts/STOCH_DTB_*
 /scripts/inlets*
 /scripts/*.pkl
@@ -136,6 +137,8 @@ dmypy.json
 /notebooks/postpro*
 /notebooks/*.png
 /notebooks/*.ipynb
+/tests/STOCH_DTB_*
+/tests/test_gen_dtb.py
 
 # VSCode
 *.code-workspace
