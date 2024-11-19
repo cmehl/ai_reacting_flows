@@ -13,7 +13,7 @@ import shelve
 
 import joblib
 
-from tensorflow.keras.models import model_from_json
+from keras._tf_keras.keras.models import model_from_json
 
 
 # from ai_reacting_flows.ann_model_generation.tensorflow_custom import AtomicConservation

@@ -11,7 +11,7 @@ import sys
 import numpy as np
 from scipy.stats.kde import gaussian_kde
 import cantera as ct
-import oyaml as yaml
+import ruamel.yaml as yaml
 import copy
 
 #==============================================================================

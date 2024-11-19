@@ -8,9 +8,9 @@ Created on Thu May 14 10:24:33 2020
 
 import tensorflow as tf
 from tensorflow.python import ops
-from tensorflow.keras import backend as K
-from tensorflow.keras.layers import Layer, Dense
-from tensorflow.keras import initializers, regularizers
+from keras._tf_keras.keras import backend as K
+from keras._tf_keras.keras.layers import Layer, Dense
+from keras._tf_keras.keras import initializers, regularizers
 from tensorflow.python.framework import dtypes
 from tensorflow.python.framework import tensor_shape
 from tensorflow.python.keras.engine.input_spec import InputSpec
@@ -22,8 +22,8 @@ from tensorflow.python.ops import gen_math_ops
 from tensorflow.python.ops import math_ops
 
 
-from tensorflow.keras.callbacks import *
-from tensorflow.keras import backend as K
+from keras._tf_keras.keras.callbacks import *
+from keras._tf_keras.keras import backend as K
 
 
 # =============================================================================
