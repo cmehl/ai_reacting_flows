@@ -660,7 +660,6 @@ class ParticlesCloud(object):
 
         # We perform variable updates of particles
         for part in lists_particles:
-            part.compute_mol_frac()
             part.compute_equiv_ratio()
             part.compute_progress_variable(self)
             part.compute_mixture_fraction()

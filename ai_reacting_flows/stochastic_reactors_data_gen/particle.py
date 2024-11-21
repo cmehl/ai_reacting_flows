@@ -1,3 +1,18 @@
+#
+# Allow intellisense in VSCode without having cyclic import (TYPE_CHECKING is False at runtime)
+#
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from ai_reacting_flows.stochastic_reactors_data_gen.particles_cloud import ParticlesCloud
+
+#
+# Removes potential warning from sklearn (like feature names related messages)
+#
+def warn(*args, **kwargs):
+    pass
+import warnings
+warnings.warn = warn
+
 import tensorflow as tf
 import numpy as np
 
@@ -5,16 +20,12 @@ import cantera as ct
 
 import ai_reacting_flows.tools.utilities as utils
 
-from ai_reacting_flows.stochastic_reactors_data_gen.ann_model import ModelANN
-
-
 class Particle(object):
-    
 # =============================================================================
 #     INITIALIZATION
 # =============================================================================    
 
-    def __init__(self, state_ini, species_names, num_inlet, num_part, data_gen_parameters, parent):
+    def __init__(self, state_ini, species_names, num_inlet, num_part, data_gen_parameters, parent : 'ParticlesCloud'):
         
         # Inlet number from which it is issued
         self.num_inlet = num_inlet
@@ -39,8 +50,10 @@ class Particle(object):
         self.P = state_ini[1]
         self.Y = state_ini[2:]
         
-        # Get initial sensible enthalpy
-        self.compute_hs_from_T(parent)
+        # Get initial conditions
+        parent.gas.TPY = self.T, self.P, self.Y
+        self.X = parent.gas.X # Species mole fractions
+        self.hs = parent.gas.HP[0] # Sensible enthalpy
 
         # We associate a mass to the particle, and initialize it to 1, by convention
         self.mass = 1.0
@@ -56,10 +69,12 @@ class Particle(object):
         self.state[2:] = self.Y
         
         # Species molecular weights
-        self.spec_mol_weights = utils.get_molecular_weights(self.species_names)
+        self.spec_mol_weights = parent.gas.molecular_weights
         
-        # Species mole fractions
-        self.compute_mol_frac()
+        self.species_atoms = utils.parse_species_names(self.species_names)
+
+        self.W_atoms = np.array([parent.gas.atomic_weight("C"), parent.gas.atomic_weight("H"), parent.gas.atomic_weight("O"), parent.gas.atomic_weight("N")]) # Order: C, H, O, N
+        
         
         # Compute initial equivalence ratio
         self.compute_equiv_ratio()
@@ -81,16 +96,13 @@ class Particle(object):
         self.compute_progress_variable(parent)
         #
         self.compute_heat_release_rate(parent)
-
-        
-
         
 # =============================================================================
 #     PARTICLE CHEMICAL EVOLUTION
 # =============================================================================
     
     # Standard (Cantera) function to update chemistry
-    def react(self, dt, parent):
+    def react(self, dt, parent : 'ParticlesCloud'):
         
         # Unsolved pb: if Yk from NN is inputed here; 
         # it may become negative and mass is lost (output from CVODE is always positive)
@@ -120,7 +132,7 @@ class Particle(object):
             self.hs = self.state[0]
             self.P = self.state[1]
             self.Y = self.state[2:]
-            self.X = self.compute_mol_frac()
+            self.X = parent.gas.X
             self.T = parent.gas.T
 
             # We need to update masses of species and enthalpies (total mass in reactor is preserved)
@@ -236,22 +248,6 @@ class Particle(object):
 # =============================================================================
 #     FUNCTIONS TO COMPUTE COMPOSITION-DERIVED QUANTITIES
 # =============================================================================
-
-
-    # Compute molar fraction from mass fraction
-    def compute_mol_frac(self):
-        # Total molecular weights
-        self.compute_mol_weight_from_Y()
-        self.X = self.Y * (self.mol_weight/self.spec_mol_weights)
-        
-        
-    # Compute global molecular weigh from species mass fractions    
-    def compute_mol_weight_from_Y(self):
-        sum_Yk_Wk = np.sum(self.Y/self.spec_mol_weights)
-        self.mol_weight = 1.0 / sum_Yk_Wk
-        
-    
-    
     
     # Equivalence ratio based on atomic balance
     def compute_equiv_ratio(self):
@@ -270,10 +266,9 @@ class Particle(object):
         o_stoich = 2.0*local_c+0.5*local_h
         
         self.equiv_ratio = o_stoich/(local_o+1.0e-20)
-        
     
     # Equivalence ratio based on atomic balance
-    def compute_progress_variable(self, parent):
+    def compute_progress_variable(self, parent : 'ParticlesCloud'):
 
         # Initializing
         self.prog_var = 0.0
@@ -293,9 +288,8 @@ class Particle(object):
             
             self.prog_var = Yc/Yc_eq
 
-
     # Heat release rate
-    def compute_heat_release_rate(self, parent):
+    def compute_heat_release_rate(self, parent : 'ParticlesCloud'):
 
         parent.gas.TPX = self.T, self.P, self.X
 
@@ -304,8 +298,6 @@ class Particle(object):
             standard_enthalpy_spec = parent.gas.standard_enthalpies_RT[parent.gas.species_index(spec)] * ct.gas_constant * parent.gas.T
             self.hrr += -parent.gas.net_production_rates[parent.gas.species_index(spec)] * standard_enthalpy_spec
 
-
-    
     # Mixture fraction based on atomic balance
     def compute_mixture_fraction(self):
         
@@ -313,8 +305,8 @@ class Particle(object):
         for spec in self.species_names:
             idx = self.species_names.index(spec)
             n_C, n_H, _, _ = utils.parse_species(spec)
-            mix_frac_local += n_C * 12.011 * self.Y[idx] / self.spec_mol_weights[idx];
-            mix_frac_local += n_H * 1.008  * self.Y[idx] / self.spec_mol_weights[idx];
+            mix_frac_local += n_C * 12.011 * self.Y[idx] / self.spec_mol_weights[idx]
+            mix_frac_local += n_H * 1.008  * self.Y[idx] / self.spec_mol_weights[idx]
         
         self.mix_frac = mix_frac_local
         
@@ -324,7 +316,7 @@ class Particle(object):
 # =============================================================================
     
     # Sensible enthalpy from temperature
-    def compute_hs_from_T(self, parent):
+    def compute_hs_from_T(self, parent : 'ParticlesCloud'):
 
         # Initial value are current's particle state
         parent.gas.TPY = self.T, self.P, self.Y
@@ -332,18 +324,15 @@ class Particle(object):
         # Enthalpy
         self.hs = parent.gas.HP[0]
         
-        
     # Temperature from sensible enthalpy
-    def compute_T_from_hs(self, parent):
-                
+    def compute_T_from_hs(self, parent : 'ParticlesCloud'):
         # Initial value are current's particle state
         parent.gas.HPY = self.hs, self.P, self.Y
         
         # Temperature
         self.T = parent.gas.T
-  
 
-    def compute_lewis_numbers(self, parent):
+    def compute_lewis_numbers(self, parent : 'ParticlesCloud'):
 
         parent.gas.TPY = self.T, self.P, self.Y
 
@@ -352,7 +341,7 @@ class Particle(object):
         cp = parent.gas.cp_mass
         Dk =  parent.gas.mix_diff_coeffs_mass
         rho = parent.gas.density
-        # mu = parent.gas.viscosity
+        # mu = parent.parent.gas.viscosity
         #
         self.Le_k = cond / (rho*cp*Dk)
 
