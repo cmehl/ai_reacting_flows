@@ -12,6 +12,8 @@ This package features the following functionalities:
 + A module to generate machine learning models to advance the chemical state of a mixture
 
 
++ Test forcepush
+
 # Package installation
 
 The project itself must be installed as a package, which can be done by going in the root folder and using the following command:
