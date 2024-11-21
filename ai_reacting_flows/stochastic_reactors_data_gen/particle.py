@@ -248,7 +248,7 @@ class Particle(object):
 # =============================================================================
 #     FUNCTIONS TO COMPUTE COMPOSITION-DERIVED QUANTITIES
 # =============================================================================
-    
+
     # Equivalence ratio based on atomic balance
     def compute_equiv_ratio(self):
         
@@ -324,13 +324,14 @@ class Particle(object):
         # Enthalpy
         self.hs = parent.gas.HP[0]
         
-    # Temperature from sensible enthalpy
-    def compute_T_from_hs(self, parent : 'ParticlesCloud'):
+    # Update states from H/Y after diffusion
+    def update_ThermoStates(self, parent : 'ParticlesCloud'):
         # Initial value are current's particle state
         parent.gas.HPY = self.hs, self.P, self.Y
         
-        # Temperature
+        # Add required states if needed
         self.T = parent.gas.T
+        self.X = parent.gas.X
 
     def compute_lewis_numbers(self, parent : 'ParticlesCloud'):
 

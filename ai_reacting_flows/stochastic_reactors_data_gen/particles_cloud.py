@@ -281,7 +281,7 @@ class ParticlesCloud(object):
     def advance_time(self, dt):
         
         # Initial time
-        t1 = perf_counter()
+        t0 = perf_counter()
 
         # Write current iteration solution
         if self.rank==0:
@@ -334,7 +334,7 @@ class ParticlesCloud(object):
         
         # Store computation timings
         last_loc = self.timings.shape[0]
-        self.timings.loc[last_loc] = np.array([t6-t1, t2-t1, t3-t2, t4-t3, t5-t4, t6-t5])
+        self.timings.loc[last_loc] = np.array([t6-t0, t2-t1, t3-t2, t4-t3, t1-t0, t6-t5])
         
         # Print
         if self.rank==0:
@@ -444,11 +444,11 @@ class ParticlesCloud(object):
             
             part_1.state[0] = part_1.hs
             part_1.state[2:] = part_1.Y
-            part_1.compute_T_from_hs(self)
+            part_1.update_ThermoStates(self)
             
             part_2.state[0] = part_2.hs
             part_2.state[2:] = part_2.Y
-            part_2.compute_T_from_hs(self)
+            part_2.update_ThermoStates(self)
 
 
 
@@ -549,7 +549,7 @@ class ParticlesCloud(object):
                 part.state[2:] = part.Y
                 
                 # Temperature
-                part.compute_T_from_hs(self)
+                part.update_ThermoStates(self)
 
                 
     # EMST model: initialization
@@ -640,7 +640,7 @@ class ParticlesCloud(object):
             part.state[2:] = part.Y
             
             # Temperature
-            part.compute_T_from_hs(self)
+            part.update_ThermoStates(self)
 
 
 # =============================================================================
