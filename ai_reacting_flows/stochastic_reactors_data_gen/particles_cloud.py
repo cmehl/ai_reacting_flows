@@ -1,4 +1,5 @@
-import sys, os
+import sys
+import os
 from time import perf_counter
 import itertools
 
@@ -9,8 +10,6 @@ import pandas as pd
 import pickle
 import h5py
 import seaborn as sns
-sns.set()
-
 import cantera as ct
 
 from ai_reacting_flows.stochastic_reactors_data_gen.particle import Particle
@@ -20,7 +19,7 @@ from ai_reacting_flows.tools.utilities import PRINT
 from ai_reacting_flows.stochastic_reactors_data_gen.ann_model import ModelANN
 
 matplotlib.use('Agg')
-
+sns.set()
 
 class ParticlesCloud(object):
     
@@ -269,9 +268,6 @@ class ParticlesCloud(object):
         if self.rank == 0:
             self.check_species()
     
-
-            
-                          
 # =============================================================================
 #   TIME MARCHING FUNCTIONS
 # =============================================================================
@@ -347,8 +343,6 @@ class ParticlesCloud(object):
         self.time += dt
         self.iteration += 1
         
-        
-        
     # Apply reaction rate to particles
     def _apply_reactions(self, dt):
 
@@ -374,7 +368,6 @@ class ParticlesCloud(object):
         # As we have a list of lists of particles we need to concatenate
         self.particles_list = list(itertools.chain.from_iterable(result))
 
-            
     # Apply diffusion to particles
     def _apply_diffusion(self):
         
@@ -390,7 +383,6 @@ class ParticlesCloud(object):
 
         elif self.mixing_model=="EMST":
             self._mix_EMST()
-
 
 # =============================================================================
 #   MIXING MODELING
@@ -449,9 +441,6 @@ class ParticlesCloud(object):
             part_2.state[0] = part_2.hs
             part_2.state[2:] = part_2.Y
             part_2.update_ThermoStates(self)
-
-
-
 
     # CURL model: with differential diffusion => we work with species masses
     def _mix_curl_dd(self):
@@ -551,7 +540,6 @@ class ParticlesCloud(object):
                 # Temperature
                 part.update_ThermoStates(self)
 
-                
     # EMST model: initialization
     def _init_EMST(self):
         
@@ -590,8 +578,6 @@ class ParticlesCloud(object):
         for part in self.particles_list:
             i = part.num_part
             part.age = state[i]
-        
-        
         
     # EMST model: mixing
     def _mix_EMST(self):
@@ -642,11 +628,9 @@ class ParticlesCloud(object):
             # Temperature
             part.update_ThermoStates(self)
 
-
 # =============================================================================
 #   MISC
 # =============================================================================
-    
 
     def _update_vars(self):
 
@@ -671,7 +655,6 @@ class ParticlesCloud(object):
         # As we have a list of lists of particles we need to concatenate
         self.particles_list = list(itertools.chain.from_iterable(result))
 
-
 # =============================================================================
 #   MACHINE LEARNING RELATED FUNCTIONS
 # =============================================================================        
@@ -686,7 +669,6 @@ class ParticlesCloud(object):
 
         # Load scalers
         self.ann_model.load_scalers()
-
 
 # =============================================================================
 #   MEAN TRAJECTORIES
@@ -716,13 +698,9 @@ class ParticlesCloud(object):
         for inlet in range(1, self.nb_inlets+1):
             self.mean_states[0, inlet-1, 0] = self.time
 
-
-        
-        
     def _append_means_to_trajectory(self):
         
         self.mean_trajectories = np.concatenate([self.mean_trajectories, self.mean_states], axis=0)
-        
         
     # Export trajectories in HDF5 format
     def write_trajectories(self):
@@ -738,7 +716,6 @@ class ParticlesCloud(object):
         
         # Closing file
         f.close()
-
 
 # =============================================================================
 #   DATABASE HANDLING
@@ -765,13 +742,11 @@ class ParticlesCloud(object):
             arr[i,part.nb_state_vars+11] = part.mass
 
         # Store initial solution in h5 file
-        f = h5py.File(self.results_folder +  f"/solutions.h5","a")
+        f = h5py.File(self.results_folder +  "/solutions.h5","a")
         grp = f.create_group(f"ITERATION_{self.iteration:05d}")    # Group created because this function is called first
         dset = grp.create_dataset("all_states",data=arr)
         dset.attrs["cols"] = self.cols_all_states
         f.close()
-
-
 
     def _update_dtb_states(self, which_state):
         
@@ -794,7 +769,6 @@ class ParticlesCloud(object):
         dset.attrs["cols"] = cols
         f.close()
 
-
 # =============================================================================
 #   PARTICLES STATISTICS COMPUTATION 
 # =============================================================================
@@ -812,8 +786,6 @@ class ParticlesCloud(object):
         self.mean_T_vect.append(self.mean_T)
         self.stdev_T_vect.append(self.stdev_T)
         self.ratio_T_stdev = self.stdev_T / self.mean_T
-
-
 
     def plot_stats(self):
             
@@ -855,7 +827,6 @@ class ParticlesCloud(object):
 #   DISPLAYING
 # =============================================================================
 
-
     def print_initial(self):
         
         PRINT("")
@@ -866,7 +837,6 @@ class ParticlesCloud(object):
             PRINT(f">> Number of particles pair used for CURL diffusion is: {self.Npairs_curl}")
             PRINT(f">> Curl diffusion performed every {self.diffusion_freq} iterations \n")
         PRINT("")
-
 
     def print_iteration(self):
         
@@ -891,7 +861,6 @@ class ParticlesCloud(object):
         PRINT(f"  >> Total CPU time: {last_line['Total']:5.4f} s")
         PRINT("")      
         
-        
     def check_termination(self):
         
         # Termination based on temperature standard deviation
@@ -899,7 +868,6 @@ class ParticlesCloud(object):
         if self.ratio_T_stdev<threshold:
             self.stats_converged = True
             print("-----------LOW TEMPERATURE VARIANCE: END OF COMPUTATION-----------")
-        
         
 # =============================================================================
 #   INPUT CHECKING
@@ -920,18 +888,3 @@ class ParticlesCloud(object):
         except:
             print("Species list in mech file and inlet file are not the same !")
             sys.exit(1)
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        

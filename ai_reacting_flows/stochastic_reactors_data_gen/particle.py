@@ -5,20 +5,19 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from ai_reacting_flows.stochastic_reactors_data_gen.particles_cloud import ParticlesCloud
 
+import tensorflow as tf
+import numpy as np
+import cantera as ct
+import ai_reacting_flows.tools.utilities as utils
+import warnings
+
 #
 # Removes potential warning from sklearn (like feature names related messages)
 #
 def warn(*args, **kwargs):
     pass
-import warnings
+
 warnings.warn = warn
-
-import tensorflow as tf
-import numpy as np
-
-import cantera as ct
-
-import ai_reacting_flows.tools.utilities as utils
 
 class Particle(object):
 # =============================================================================
@@ -138,7 +137,6 @@ class Particle(object):
             # We need to update masses of species and enthalpies (total mass in reactor is preserved)
             self.mass_k = self.mass * self.Y
             self.Hs = self.mass * self.hs
-    
 
     def react_NN_wrapper(self, ML_models, prog_var_thresholds, dt, T_threshold):
                     
@@ -155,8 +153,6 @@ class Particle(object):
             else:  # self.prog_var>prog_var_thresholds[1]
                 self.react_NN(ML_models[2], dt, T_threshold)
                         
-    
-    
     # NN-based function to update chemistry
     def react_NN(self, parent):
         
@@ -242,8 +238,6 @@ class Particle(object):
             
             # Clear memory to avoid overflow
             tf.keras.backend.clear_session()
-
-        
 
 # =============================================================================
 #     FUNCTIONS TO COMPUTE COMPOSITION-DERIVED QUANTITIES
