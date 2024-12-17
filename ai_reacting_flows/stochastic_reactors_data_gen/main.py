@@ -165,7 +165,7 @@ def GenerateVariable_dt(params, comm : 'MPI.Comm'):
     T_thresh = params['T_threshold']
 
     dt_simu = params['time_step']
-    if params['variable_time_step_type'] == 'set':
+    if params['time_step_type'] == 'set':
         dt_list = params['time_step_range']
         if dt_simu not in dt_list:
             dt_list.append(dt_simu)
@@ -207,14 +207,14 @@ def GenerateVariable_dt(params, comm : 'MPI.Comm'):
 
     if rank ==0:
 
-        f = h5py.File(params['file_path'] +  params['new_file_name'],"w")
+        f = h5py.File(f"{stoch_results_folder:s}/{params['new_file_name']:s}","w")
 
     comm.Barrier()
     
     for i in range(size):
         if rank == i:
             print('WRITING', rank)
-            f = h5py.File(params['file_path'] +  params['new_file_name'],"a")
+            f = h5py.File(f"{stoch_results_folder:s}/{params['new_file_name']:s}","a")
             grp = f.create_group(f"ITERATION_{(rank):05d}") 
             dset_X = grp.create_dataset('X', data = X_new)
             dset_Y = grp.create_dataset('Y', data = Y_new)
