@@ -44,6 +44,10 @@ class LearningDatabase(object):
         self.detailed_mechanism  = dtb_processing_parameters["detailed_mechanism"]
         self.fuel  = dtb_processing_parameters["fuel"]
         self.with_N_chemistry = dtb_processing_parameters["with_N_chemistry"]
+        self.dt_var = dtb_processing_parameters['dt_var']
+        self.input_dtb_file = dtb_processing_parameters['input_dtb_file']
+        self.clusterize_on = dtb_processing_parameters['clusterize_on']
+        self.train_set_size = dtb_processing_parameters['train_set_size']
 
         # Check if mechanism is in YAML format
         if self.detailed_mechanism.endswith("yaml") is False:
@@ -57,7 +61,10 @@ class LearningDatabase(object):
         self.get_database_from_h5()
 
         # Extracting some information
-        self.species_names = self.X.columns[2:-2]
+        if self.dt_var:
+            self.species_names = self.X.columns[2:-1]
+        else:
+            self.species_names = self.X.columns[2:-2]
         self.nb_species = len(self.species_names)
 
         # Saving folder: by default the model is saved in cluster0
@@ -76,6 +83,7 @@ class LearningDatabase(object):
         shelfFile["output_omegas"] = self.output_omegas
         shelfFile["with_N_chemistry"] = self.with_N_chemistry
         shelfFile["clusterization_method"] = None   # Default value, erased if clustering is done
+        shelfFile["clustered_on"] = self.clusterize_on
         #
         shelfFile.close()
 
@@ -104,7 +112,7 @@ class LearningDatabase(object):
     def get_database_from_h5(self):
 
         # Opening h5 file
-        h5file_r = h5py.File(self.dtb_folder + "/solutions.h5", 'r')
+        h5file_r = h5py.File(self.dtb_folder + '/' + self.input_dtb_file, 'r')
 
         # Solution 0 read to get columns names
         col_names_X = h5file_r["ITERATION_00000/X"].attrs["cols"]
@@ -133,6 +141,33 @@ class LearningDatabase(object):
 
         print("End of concatenation ! \n")
 
+    def database_to_h5(self, file_path, file_name):
+
+        # Opening h5 file
+        
+        h5file_r = h5py.File(self.dtb_folder + '/' + self.input_dtb_file, 'r')
+
+
+        # Solution 0 read to get columns names
+        col_names_X = h5file_r["ITERATION_00000/X"].attrs["cols"]
+
+        col_names_Y = h5file_r["ITERATION_00000/Y"].attrs["cols"]
+
+        h5file_w = h5py.File(file_path + file_name, 'w')
+        # Loop on solutions        
+
+        grp = h5file_w.create_group(f"ITERATION_{0:05d}")
+        dset_X = grp.create_dataset('X', data = self.X.drop(columns = ['cluster', 'PC1', 'PC2']))
+        dset_X.attrs['cols'] = col_names_X
+        
+        dset_Y = grp.create_dataset('Y', data = self.Y)
+        dset_Y.attrs['cols'] = col_names_Y
+
+        h5file_r.close()
+
+        print("\n H5PY dataset created")
+
+
     def apply_temperature_threshold(self, T_threshold):
 
         if self.clusterized_dataset:
@@ -151,6 +186,11 @@ class LearningDatabase(object):
 
     def clusterize_dataset(self, clusterization_method, nb_clusters, c_bounds = []):
 
+        if self.clusterize_on == 'double':
+            nb_clusters_phys, nb_clusters_time = nb_clusters
+            nb_clusters_tot = nb_clusters_phys * nb_clusters_time
+        else :
+            nb_clusters_tot = nb_clusters
         # Saving clustering method
         shelfFile = shelve.open(self.dtb_folder + "/" + self.database_name + "/dtb_params")
         #
@@ -163,21 +203,22 @@ class LearningDatabase(object):
         self.clusterized_dataset = True
 
         # Creating empty folders for storing datasets
-        for i in range(1, nb_clusters):
+        for i in range(1, nb_clusters_tot):
             os.mkdir(self.dtb_folder + "/" + self.database_name + f"/cluster{i}")
 
-        self.nb_clusters = nb_clusters
+        self.nb_clusters_tot = nb_clusters_tot
 
         if clusterization_method=="progvar":
 
-            assert nb_clusters == len(c_bounds) - 1
+            assert self.clusterize_on != 'double'
+            assert nb_clusters_tot == len(c_bounds) - 1
 
             # Saving bounds for progress variables
             with open(self.dtb_folder + "/" + self.database_name + "/c_bounds.pkl", 'wb') as f:
                 pickle.dump(c_bounds, f)
 
             # Attributing cluster
-            for i in range(nb_clusters):
+            for i in range(nb_clusters_tot):
 
                 #TODO Painful loop, must be written using pandas functions
                 for index, row in self.X.iterrows():
@@ -190,12 +231,25 @@ class LearningDatabase(object):
             
             spec_list = self.species_names.to_list()
             spec_list.insert(0,"Temperature")
+            if self.dt_var and (self.clusterize_on == 'dt' or self.clusterize_on == 'all' or self.clusterize_on == 'double'):
+                spec_list.append("dt")
             if self.with_N_chemistry is False:
                 spec_list.remove("N2")
 
-            # Get states only (temperature and Yk's)
-            data = self.X[spec_list].values
-
+            # Get states only (temperature and Yk's and dt if nedded)
+            if self.dt_var and self.clusterize_on == 'dt':
+                data = self.X[spec_list].values
+                data[:, :-1] = 0 
+                print(data)
+                # If log transform, we also apply it when clustering
+                if self.log_transform_X>0:
+                    data[data < self.threshold] = self.threshold
+                    if self.log_transform_X==1:
+                        data[:, -1] = np.log(data[:, -1])
+                    elif self.log_transform_X==2:
+                        data[:, -1] = (data[:, -1]**self.lambda_bct - 1.0)/self.lambda_bct
+            else:
+                data = self.X[spec_list].values
             # If log transform, we also apply it when clustering
             if self.log_transform_X>0:
                 data[data < self.threshold] = self.threshold
@@ -211,21 +265,62 @@ class LearningDatabase(object):
 
             # Applying k-means clustering
             print(">> Performing k-means clustering")
-            kmeans = KMeans(n_clusters=nb_clusters, random_state=42).fit(data)
+            print('shape' , data.shape)
+            
+            if self.dt_var and self.clusterize_on == 'double':
+                data_phys = data.copy()
+                data_phys[:, -1] = 0 
+                data_time = data.copy()
+                data_time[:, :-1] = 0
+                kmeans_phys = KMeans(n_clusters=nb_clusters_phys, random_state=42).fit(data_phys)
+                kmeans_time = KMeans(n_clusters=nb_clusters_time, random_state=42).fit(data_time)
+            else :
+                kmeans = KMeans(n_clusters=nb_clusters_tot, random_state=42).fit(data)
+            if self.clusterize_on == 'double':
+                print(kmeans_phys.labels_)
+                print('KMeans Phys Score : ', kmeans_phys.score(data_phys))
+                print('KMeans Time Score : ', kmeans_time.score(data_time))
+            else:
+                print('KMeans Score : ', kmeans.score(data))
 
             # Attributing cluster to data points
-            self.X["cluster"] = kmeans.labels_
+            if self.clusterize_on == 'double':
+                self.X["cluster_phys"] = kmeans_phys.labels_
+                self.X["cluster_time"] = kmeans_time.labels_
+                combined_labels = []
+                for bit1, bit2 in zip(kmeans_phys.labels_, kmeans_time.labels_):
+                    combined_labels.append(bit1 * nb_clusters_time + bit2)
+                self.X["cluster"] = combined_labels
+            else:
+                self.X["cluster"] = kmeans.labels_
 
             # Saving K-means model
-            with open(self.dtb_folder + "/" + self.database_name + "/kmeans_model.pkl", "wb") as f:
-                pickle.dump(kmeans, f)
+            if self.clusterize_on == 'double':
+                with open(self.dtb_folder + "/" + self.database_name + "/kmeans_model_phys.pkl", "wb") as f:
+                    pickle.dump(kmeans_phys, f)
+                with open(self.dtb_folder + "/" + self.database_name + "/kmeans_model_time.pkl", "wb") as f:
+                    pickle.dump(kmeans_time, f)
+            else:
+                with open(self.dtb_folder + "/" + self.database_name + "/kmeans_model.pkl", "wb") as f:
+                    pickle.dump(kmeans, f)
 
             # Saving scaler
             joblib.dump(Xscaler, self.dtb_folder + "/" + self.database_name + "/Xscaler_kmeans.pkl")
 
             # Saving normalization parameters and centroids
             np.savetxt(self.dtb_folder + "/" + self.database_name + '/kmeans_norm.dat', np.vstack([Xscaler.mean_, Xscaler.var_]).T)
-            np.savetxt(self.dtb_folder + "/" + self.database_name + '/km_centroids.dat', kmeans.cluster_centers_.T)
+            if self.clusterize_on == 'double':
+                centroids_phys = kmeans_phys.cluster_centers_
+                centroids_time = kmeans_time.cluster_centers_
+                centroids = np.zeros((nb_clusters_tot, len(centroids_phys[0])))
+                k = 0
+                for i in range(nb_clusters_phys):
+                    for j in range(nb_clusters_time):
+                        centroids[k, :] = np.append(centroids_phys[i, :-1], centroids_time[j, -1])
+                        k += 1
+                np.savetxt(self.dtb_folder + "/" + self.database_name + '/km_centroids.dat', centroids.T)
+            else:
+                np.savetxt(self.dtb_folder + "/" + self.database_name + '/km_centroids.dat', kmeans.cluster_centers_.T)
 
     def visualize_clusters(self, var1, var2):
 
@@ -576,7 +671,7 @@ class LearningDatabase(object):
         self.list_Y_p_train = []
         self.list_Y_p_val = []
 
-        for i_cluster in range(self.nb_clusters):
+        for i_cluster in range(self.nb_clusters_tot):
             
             print("")
             print(f"CLUSTER {i_cluster}:")
@@ -591,7 +686,14 @@ class LearningDatabase(object):
 
             # Removing useless columns
             X_cols = X_p.columns.to_list()
-            list_to_remove = ["Prog_var", "HRR", "cluster"]
+            if self.dt_var: 
+                if self.clusterize_on == 'double':
+                    list_to_remove = ["cluster", "cluster_phys", "cluster_time"]
+                else :
+                    list_to_remove = ["cluster"]
+            else:
+                list_to_remove = ["Prog_var", "HRR", "cluster"]
+            
             if remove_pressure_X:
                 list_to_remove.append('Pressure')
             if self.is_pca_computed:
@@ -602,7 +704,11 @@ class LearningDatabase(object):
             X_p = X_p[X_cols] 
             #
             Y_cols = Y_p.columns.to_list()
-            list_to_remove = ["Temperature", "Prog_var", "HRR"]
+            if self.dt_var:
+                list_to_remove = ["Temperature"]
+            else:
+                list_to_remove = ["Temperature", "Prog_var", "HRR"]
+            
             if remove_pressure_Y:
                 list_to_remove.append('Pressure')
             #
@@ -642,7 +748,7 @@ class LearningDatabase(object):
             Y_p.columns = [str(col) + '_Y' for col in Y_p.columns]
 
             # Train validation split
-            X_train, X_val, Y_train, Y_val = train_test_split(X_p, Y_p, test_size=0.25, random_state=42)
+            X_train, X_val, Y_train, Y_val = train_test_split(X_p, Y_p, train_size=self.train_set_size, random_state=42)
 
             # Forcing constant N2
             n2_cte = True # By default -> To make more general
@@ -677,14 +783,25 @@ class LearningDatabase(object):
 
         # Printing number of elements for each class
         size_total = 0
-        for i in range(self.nb_clusters):
+        if self.clusterize_on == 'phys':
+            for i in range(self.nb_clusters):
 
-            size_cluster_i = self.X[self.X["cluster"]==i].shape[0]
-            size_total += size_cluster_i
+                size_cluster_i = self.X[self.X["cluster"]==i].shape[0]
+                size_total += size_cluster_i
 
-            print(f">> There are {size_cluster_i} points in cluster{i}")
+                print(f">> There are {size_cluster_i} points in cluster{i}")
 
-        print(f"\n => There are {size_total} points overall")
+            print(f"\n => There are {size_total} points overall")
+        else:
+            for i in range(self.nb_clusters_tot):
+
+                size_cluster_i = self.X[self.X["cluster"]==i].shape[0]
+                size_total += size_cluster_i
+
+                print(f">> There are {size_cluster_i} points in cluster{i}")
+
+            print(f"\n => There are {size_total} points overall")
+
 
     # Distribution plotting function
     def plot_distributions(self, X_train, X_val, Y_train, Y_val, species, i_cluster):
@@ -804,7 +921,12 @@ class LearningDatabase(object):
         ax.legend(fontsize=10)
 
         fig.tight_layout()
-        fig.savefig(f"distribution_{var}.png", dpi=400)
+        if self.is_resampled:
+            fig.savefig(self.dtb_folder + f'distribution_{var}_resampled.png', dpi=400)
+        else:
+            fig.savefig(self.dtb_folder + f'distribution_{var}.png', dpi=400)
+
+
 
     # Compare
     def compare_resampled_pdfs(self, var): 
@@ -820,10 +942,10 @@ class LearningDatabase(object):
         fig, ax1 = plt.subplots()
         
         sns.histplot(data=self.X_old, x=var, ax=ax1, color="black", stat="density",
-                     binwidth=10, kde=False, label="Before under-sampling")
+                     binwidth=10, kde=False, label="Before re-sampling")
 
         sns.histplot(data=self.X, x=var, ax=ax1, color="blue", stat="density",
-                     binwidth=10, kde=False, alpha=0.4, label="After under-sampling")
+                     binwidth=10, kde=False, alpha=0.4, label="After re-sampling")
         
         ax1.set_box_aspect(1)
         
