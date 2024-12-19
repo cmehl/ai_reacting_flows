@@ -268,7 +268,7 @@ class Particle(object):
         self.prog_var = 0.0
         
         # Progress variable computed using true equilibrium
-        if self.calc_progvar==True:
+        if self.calc_progvar:
             
             # Equilibrium state in present conditions
             parent.gas.TPX = self.T, self.P, self.X
