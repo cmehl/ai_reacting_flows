@@ -1,4 +1,5 @@
-import os, sys
+import os
+import sys
 import shutil
 import pickle
 import shelve
@@ -8,26 +9,26 @@ import joblib
 import pandas as pd
 import numpy as np
 from scipy.interpolate import interpn
-from scipy.interpolate import interp1d
-from scipy.stats.kde import gaussian_kde
+# from scipy.interpolate import interp1d
+# from scipy.stats.kde import gaussian_kde
 import h5py
 import cantera as ct
 
-import matplotlib as mpl
+# import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize 
 from matplotlib import cm
 
 import seaborn as sns
-sns.set_style("darkgrid")
 
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from sklearn.preprocessing import StandardScaler #, MinMaxScaler
 from sklearn.model_selection import train_test_split
 
 import ai_reacting_flows.tools.utilities as utils
 
+sns.set_style("darkgrid")
 
 class LearningDatabase(object):
 
@@ -48,9 +49,8 @@ class LearningDatabase(object):
         if self.detailed_mechanism.endswith("yaml") is False:
             sys.exit("ERROR: chemical mechanism should be in yaml format !")
 
-
         # Read H5 files to get databases in pandas format
-        h5file_r = h5py.File(self.dtb_folder + f"/solutions.h5", 'r')
+        h5file_r = h5py.File(self.dtb_folder + "/solutions.h5", 'r')
         names = h5file_r.keys()
         self.nb_solutions = len(names)
         h5file_r.close()
@@ -100,7 +100,6 @@ class LearningDatabase(object):
         self.is_pca_computed = False
 
         self.check_inputs()
-
     
     def get_database_from_h5(self):
 
@@ -127,13 +126,12 @@ class LearningDatabase(object):
 
         h5file_r.close()
 
-        print(f"\n Performing concatenation of dataframes...")
+        print("\n Performing concatenation of dataframes...")
 
         self.X = pd.concat(list_df_X, ignore_index=True)
         self.Y = pd.concat(list_df_Y, ignore_index=True)
 
         print("End of concatenation ! \n")
-
 
     def apply_temperature_threshold(self, T_threshold):
 
@@ -151,10 +149,7 @@ class LearningDatabase(object):
         self.X = self.X.reset_index(drop=True)
         self.Y = self.Y.reset_index(drop=True)
 
-
-
     def clusterize_dataset(self, clusterization_method, nb_clusters, c_bounds = []):
-
 
         # Saving clustering method
         shelfFile = shelve.open(self.dtb_folder + "/" + self.database_name + "/dtb_params")
@@ -163,7 +158,7 @@ class LearningDatabase(object):
         #
         shelfFile.close()
 
-        assert self.is_processed == False
+        assert (not self.is_processed)
 
         self.clusterized_dataset = True
 
@@ -232,8 +227,6 @@ class LearningDatabase(object):
             np.savetxt(self.dtb_folder + "/" + self.database_name + '/kmeans_norm.dat', np.vstack([Xscaler.mean_, Xscaler.var_]).T)
             np.savetxt(self.dtb_folder + "/" + self.database_name + '/km_centroids.dat', kmeans.cluster_centers_.T)
 
-
-
     def visualize_clusters(self, var1, var2):
 
         # If variables are PC1 and PC2, we compute the PCA
@@ -248,8 +241,6 @@ class LearningDatabase(object):
         ax.set_ylabel(var2, fontsize=16)
         fig.tight_layout()
         fig.savefig(self.dtb_folder + "/" + self.database_name + f"/cluster_{var1}_{var2}.png")
-
-
 
     # Very basic re-sampling
     def undersample_cluster(self, i_cluster, ratio_to_keep):
@@ -267,8 +258,6 @@ class LearningDatabase(object):
         # Delete the rows in X and Y dataframes
         self.X.drop(rows, axis=0, inplace=True)
         self.Y.drop(rows, axis=0, inplace=True)
-
-
 
     # Re-sampling based on heat release rate
     def undersample_HRR(self, jpdf_var_1, jpdf_var_2, hrr_func, keep_low_c, n_samples=None, n_bins=100, plot_distrib=False):
@@ -404,7 +393,6 @@ class LearningDatabase(object):
 
         # -------------------------------------------------------------------------------------------------
 
-
         # Copying X to manipulate weights
         X_save = self.X.copy()
         X_save["p"] = p
@@ -437,8 +425,6 @@ class LearningDatabase(object):
     
         print(f"\n Number of points in undersampled dataset: {self.X.shape[0]} \n")
         print(f"    >> {100*self.X.shape[0]/n} % of the database is retained")
-    
-
 
     # Function to reduce the species in the database. A closure based on fictive species is here selected
     def reduce_species_set(self, species_subset, fictive_species):
@@ -469,17 +455,14 @@ class LearningDatabase(object):
         h_in = np.sum(gas.partial_molar_enthalpies/gas.molecular_weights*Yk_in, axis=1)
         h_out = np.sum(gas.partial_molar_enthalpies/gas.molecular_weights*Yk_out, axis=1)
 
-
         # Removing unwanted species
         to_keep = ["Temperature", "Pressure"] + species_subset + ["Prog_var", "HRR", "cluster"]
         self.X = self.X[to_keep]
         to_keep = ["Temperature", "Pressure"] + species_subset + ["Prog_var", "HRR"]
         self.Y = self.Y[to_keep]
 
-
         # Flag is changed here because databases have been changed
         self.is_reduced = True
-
 
         # Getting atomic mass fractions of the reduced set of mass fractions
         A_atomic_reduced = utils.get_molar_mass_atomic_matrix(species_subset, self.fuel, self.with_N_chemistry)
@@ -546,7 +529,6 @@ class LearningDatabase(object):
         mechanism.reduce_mechanism_and_add_fictive_species(species_subset, fictive_species, "_F")
         mechanism.export_to_yaml(self.dtb_folder + "/" + self.database_name + "/mech_reduced.yaml")
 
-
         # Updating species names for later consistency
         self.species_names = self.X.columns[2:-2]
         self.nb_species = len(self.species_names)
@@ -579,7 +561,6 @@ class LearningDatabase(object):
         assert res_rel_Ya_out.max() < 1.0e-10
         assert res_rel_h_in.max() < 1.0e-10
         assert res_rel_h_out.max() < 1.0e-10
-
 
     # Database final processing
     def process_database(self, plot_distributions = False, distribution_species=[]):
@@ -628,8 +609,6 @@ class LearningDatabase(object):
             [Y_cols.remove(elt) for elt in list_to_remove]   
             Y_p = Y_p[Y_cols] 
 
-
-
             # Clip if logarithm transformation
             if self.log_transform_X>0:
                 X_p[X_p < self.threshold] = self.threshold
@@ -637,9 +616,8 @@ class LearningDatabase(object):
                 Y_p[Y_p < self.threshold] = self.threshold
 
             # If log transform at input and not at output and output_omega, we need to save un-transformed data
-            if self.log_transform_X>0 and self.log_transform_Y==0 and self.output_omegas==True:
+            if self.log_transform_X>0 and self.log_transform_Y==0 and self.output_omegas:
                 X_p_save = X_p.loc[:, X_cols[1:]]
-
 
             #Applying transformation (log of BCT)
             if self.log_transform_X==1:
@@ -652,9 +630,8 @@ class LearningDatabase(object):
             elif self.log_transform_Y==2:
                 Y_p.loc[:, Y_cols] = (Y_p[Y_cols]**self.lambda_bct - 1.0)/self.lambda_bct
 
-
             # If differences are considered
-            if self.output_omegas==True:
+            if self.output_omegas:
                 if self.log_transform_X>0 and self.log_transform_Y==0:  # Case where X has been logged but not Y
                     Y_p = Y_p.subtract(X_p_save.reset_index(drop=True))
                 else:
@@ -696,8 +673,6 @@ class LearningDatabase(object):
                 for spec in distribution_species:
                    self.plot_distributions(X_train, X_val, Y_train, Y_val, spec, i_cluster)
 
-        
-
     def print_data_size(self):
 
         # Printing number of elements for each class
@@ -710,8 +685,6 @@ class LearningDatabase(object):
             print(f">> There are {size_cluster_i} points in cluster{i}")
 
         print(f"\n => There are {size_total} points overall")
-
-
 
     # Distribution plotting function
     def plot_distributions(self, X_train, X_val, Y_train, Y_val, species, i_cluster):
@@ -733,7 +706,6 @@ class LearningDatabase(object):
             y_val = np.linspace(Y_val[species + "_Y"].min(), Y_val[species + "_Y"].max(), n)
             pdf_Y_val = utils.compute_pdf(y_val, Y_val[species + "_Y"])
 
-
         fig1, (ax1, ax2) = plt.subplots(ncols=2)
         fig2, (ax3, ax4) = plt.subplots(ncols=2)
 
@@ -745,7 +717,6 @@ class LearningDatabase(object):
             ax2.plot(y_train, pdf_Y_train, color="k", lw=2)
             ax2.set_xlabel(f"{species} Y $[-]$", fontsize=12)
             ax2.set_ylabel("pdf $[-]$", fontsize=12)
-
 
         ax3.plot(x_val, pdf_X_val, color="k", lw=2)
         ax3.set_xlabel(f"{species} X $[-]$", fontsize=12)
@@ -768,22 +739,16 @@ class LearningDatabase(object):
 
             ax.set_aspect(1.0/ax.get_data_ratio(), adjustable='box')
 
-
         fig1.tight_layout()
         fig2.tight_layout()
 
-
         fig1.savefig(self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/distrib_{species}_train.png", dpi=300, bbox_inches='tight')
         fig2.savefig(self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/distrib_{species}_val.png", dpi=300, bbox_inches='tight')
-
-
 
     def check_inputs(self):
 
         if self.log_transform_X==0 and self.log_transform_Y>0:
             sys.exit("ERROR: log_transform_Y cannot be active if log_transform_X==0 !")
-
-
 
     # 2-D joint PDF plotting of two variable
     def density_scatter(self, var_x , var_y, sort = True, bins = 100):
@@ -817,8 +782,6 @@ class LearningDatabase(object):
 
         fig.tight_layout()
 
-
-
     # Marginal PDF of a given variable in the dataframe
     def plot_pdf_var(self, var):
 
@@ -842,8 +805,6 @@ class LearningDatabase(object):
 
         fig.tight_layout()
         fig.savefig(f"distribution_{var}.png", dpi=400)
-
-
 
     # Compare
     def compare_resampled_pdfs(self, var): 
@@ -874,8 +835,6 @@ class LearningDatabase(object):
 
         fig.tight_layout()
         fig.savefig("comparison_distribution.png", dpi=400)
-
-
 
     # Compute PCA of database
     def compute_pca(self):
@@ -914,5 +873,3 @@ class LearningDatabase(object):
         self.X["PC2"] = PCs[:,1]
 
         self.is_pca_computed = True
-
-

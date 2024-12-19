@@ -1,7 +1,6 @@
-#%%
 import os
-from re import S
-from sqlite3 import enable_callback_tracebacks
+# from re import S
+# from sqlite3 import enable_callback_tracebacks
 import sys
 
 import matplotlib.pyplot as plt
@@ -12,7 +11,6 @@ import shutil
 import numpy as np
 import pandas as pd
 import seaborn as sns
-sns.set_style("dark")
 
 from sklearn.preprocessing import StandardScaler
 
@@ -39,9 +37,9 @@ import ai_reacting_flows.tools.utilities as utils
 
 import cantera as ct
 
+sns.set_style("dark")
 # Using float64
 tf.keras.backend.set_floatx('float64')
-
 
 tf.random.set_seed(2022)
 
@@ -94,7 +92,6 @@ class MLPModel(object):
         # Box-Cox parameter (set by default to 0.1)
         self.lambda_bct = 0.1
 
-
         # Load databased-linked parameter using shelve file
         shelfFile = shelve.open(self.dataset_path + "/dtb_params")
         self.threshold = shelfFile["threshold"]
@@ -107,7 +104,7 @@ class MLPModel(object):
 
         # Model's path
         self.directory = "./" + self.model_name
-        if self.new_model_folder==True:
+        if self.new_model_folder:
             print(">> A new folder is created.")
             # Remove folder if already exists
             shutil.rmtree(self.directory, ignore_errors=True)
@@ -120,7 +117,7 @@ class MLPModel(object):
 
 
         # Parameters which are to be kept constant if new_model_folder is False
-        if self.new_model_folder is True:  # Store parameters
+        if self.new_model_folder:  # Store parameters
             shelfFile = shelve.open(self.directory + "/restart_params")
             shelfFile["dataset_path"] = self.dataset_path
             shelfFile["dt_simu"] = self.dt_simu
@@ -141,7 +138,6 @@ class MLPModel(object):
             print(f">> The considered fuel is: {self.fuel}")
             print(f">> The chemical mechanism type is: {self.mechanism_type} \n")
 
-
         # Checking consistency of inputs
         self.check_inputs()
 
@@ -151,11 +147,11 @@ class MLPModel(object):
         print(f">> Number of clusters is: {self.nb_clusters}")
         
         # Create __init__.py for later use of python files
-        if self.new_model_folder==True:
+        if self.new_model_folder:
             with open(self.directory + "/__init__.py", 'w'): pass
 
         # Training stats
-        if self.new_model_folder==True:
+        if self.new_model_folder:
             os.mkdir(self.directory + "/training")
             os.mkdir(self.directory + "/training/training_curves")
             os.mkdir(self.directory + "/evaluation" )
@@ -168,7 +164,9 @@ class MLPModel(object):
                 shutil.copy(self.dataset_path + "/Xscaler_kmeans.pkl", self.directory)
                 shutil.copy(self.dataset_path + "/kmeans_norm.dat", self.directory)
                 shutil.copy(self.dataset_path + "/km_centroids.dat", self.directory)
-
+            else:
+                if self.nb_clusters > 1:
+                    sys.exit("ERROR: nb_cluster > 1 but cluster_type undefined (should be 'progvar' or 'kmeans')")
 
         # Defining mechanism file (either detailed or reduced)
         if self.mechanism_type=="detailed":
@@ -177,7 +175,7 @@ class MLPModel(object):
             self.mechanism = self.dataset_path + "/mech_reduced.yaml"
 
         # We copy the mechanism files in order to use them for testing
-        if self.new_model_folder==True:
+        if self.new_model_folder:
             if self.mechanism_type=="detailed":
                 shutil.copy(self.dataset_path + "/mech_detailed.yaml", self.directory)
             elif self.mechanism_type=="reduced":
@@ -185,7 +183,7 @@ class MLPModel(object):
 
 
         # Saving parameters using shelve file for later use in testing
-        shelfFile = shelve.open(self.directory + f'/model_params')
+        shelfFile = shelve.open(self.directory + '/model_params')
         #
         shelfFile["threshold"] = self.threshold
         shelfFile["log_transform_X"] = self.log_transform_X
@@ -205,7 +203,6 @@ class MLPModel(object):
 
         # Dictionary for solving models
         self.models_dict = {}
-    
 
     def get_data(self, i_cluster):
         
@@ -216,7 +213,6 @@ class MLPModel(object):
         Y_val = pd.read_csv(filepath_or_buffer= self.dataset_path + f"/cluster{i_cluster}/Y_val.csv")
 
         return X_train, X_val, Y_train, Y_val
-
 
     #------------------------------------------------------------------------------------
     # MODEL TRAINING FUNCTIONS
@@ -247,7 +243,6 @@ class MLPModel(object):
                 self._left_n2 = len(spec_names[:self._n2_index])
                 self._right_n2 = len(spec_names[self._n2_index+1:])
 
-
         print(50*"-")
         print(50*"-")
         print(f"                BUILDING MODEL FOR CLUSTER {i_cluster}")
@@ -264,7 +259,6 @@ class MLPModel(object):
         
         # Number of epochs
         epochs = self.epochs_list[i_cluster]
-        
 
         # ===============================================================================================================
         #                                             GETTING DATA
@@ -317,7 +311,6 @@ class MLPModel(object):
         X_val = Xscaler.transform(X_val)
         # X Scaling parameters 
         self._param1_X, self._param2_X = self.get_scaler_params(Xscaler)
-
         
         # NORMALIZING Y
         # Choose scaler
@@ -335,11 +328,9 @@ class MLPModel(object):
         # if self.output_omegas==True and self.log_transform==True:
         #     Y_train[:,spec_names.index("N2")] = 0.0
         #     Y_val[:,spec_names.index("N2")] = 0.0
-
         
         # Y Scaling parameters
         self._param1_Y, self._param2_Y = self.get_scaler_params(Yscaler)
-        
             
         # Converting numpy arrays into keras tensors for use in custom losses & metrics
         param1_Y_tensor = K.variable(self._param1_Y, dtype="float64")
@@ -352,18 +343,15 @@ class MLPModel(object):
         # Saving mean and variance in matrix form to be read by CONVERGE
         np.savetxt(self.directory + f'/norm_param_X_cluster{i_cluster}.dat', np.vstack([Xscaler.mean_, Xscaler.var_]).T)
         np.savetxt(self.directory + f'/norm_param_Y_cluster{i_cluster}.dat', np.vstack([Yscaler.mean_, Yscaler.var_]).T)
-        
-
 
         # If reaction rates as outputs, we have to deal with non reacting species
         # To do that, we define other parameyers for unscaling (to avoid "(0-0)/0")
-        if self.output_omegas==True:
+        if self.output_omegas:
             self._param2_Y_scale = np.copy(self._param2_Y)
             for i in range(self._param2_Y.shape[0]):
                 
                 if self._param2_Y[i]==0.0:
                     self._param2_Y_scale[i] = np.infty
-    
 
         # =================================================================================================================
         #                                               ANN LEARNING
@@ -372,7 +360,6 @@ class MLPModel(object):
         print(50*"-")
         print("                MODEL TRAINING")
         print(50*"-"+"\n")
-        
         
         # Using float64
         tf.keras.backend.set_floatx('float64')
@@ -564,13 +551,11 @@ class MLPModel(object):
         # Plot function template (scatter plots)
         # sns.relplot(x="CH4_X", y="CH4_Y_err", data=dtb_val)
 
-
     def train_model_all_clusters(self):
 
         # Loop on clusters
         for i_cluster in range(self.nb_clusters):
             self.train_model_cluster_i(i_cluster)
-            
 
     #------------------------------------------------------------------------------------
     # MODEL DEFINITION FUNCTIONS
@@ -679,9 +664,6 @@ class MLPModel(object):
         model = models.Model(layers_dict["input_layer"], outputs=layers_dict["output_layer"], name="main_model")
 
         return model
-
-
-
 
     def generate_nn_model(self, n_X, n_Y, nb_units_in_layers, layers_activation):
 
@@ -854,15 +836,12 @@ class MLPModel(object):
             N = np.dot(np.transpose(M),MMt_inv_M)
             self.L = np.eye(N.shape[0]) - N
 
-
-
     def get_scaler_params(self, scaler):
     
         param1 = scaler.mean_
         param2 = scaler.var_
             
         return param1, param2
-
 
     def check_inputs(self):
 
@@ -875,6 +854,6 @@ class MLPModel(object):
             sys.exit("ERROR: Wrong layer type, it should be 'dense' or 'resnet'")
 
         # Conservation layer
-        if self.hard_constraints_model==2 and self.output_omegas==False:
+        if self.hard_constraints_model==2 and (not self.output_omegas):
             sys.exit("hard_constraints_model=2 not written for output_omegas=False")
 
