@@ -1,18 +1,18 @@
-#%%
 import os
-from re import S
-from sqlite3 import enable_callback_tracebacks
+# from re import S
+# from sqlite3 import enable_callback_tracebacks
 import sys
 
 import matplotlib.pyplot as plt
 
+import csv
 import shelve
 import shutil
+import time
 
 import numpy as np
 import pandas as pd
 import seaborn as sns
-sns.set_style("dark")
 
 from sklearn.preprocessing import StandardScaler
 
@@ -25,10 +25,11 @@ from keras._tf_keras.keras import layers
 from keras._tf_keras.keras import optimizers
 from keras._tf_keras.keras import losses
 from keras._tf_keras.keras import metrics
+from keras._tf_keras.keras.utils import Sequence
 #from keras._tf_keras.keras import callbacks
 from keras._tf_keras.keras import regularizers
 from keras._tf_keras.keras import initializers
-# from keras._tf_keras.keras.utils import plot_model
+from keras._tf_keras.keras.utils import plot_model
 
 from ai_reacting_flows.ann_model_generation.tensorflow_custom import sum_species_metric
 # from ai_reacting_flows.ann_model_generation.tensorflow_custom import AtomicConservation, AtomicConservation_RR, AtomicConservation_RR_lsq
@@ -39,9 +40,17 @@ import ai_reacting_flows.tools.utilities as utils
 
 import cantera as ct
 
+sns.set_style("dark")
 # Using float64
 tf.keras.backend.set_floatx('float64')
 
+gpus = tf.config.experimental.list_physical_devices('GPU')
+if gpus:
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+    except RuntimeError as e:
+        print(e)
 
 tf.random.set_seed(2022)
 
@@ -76,6 +85,8 @@ class MLPModel(object):
         # Optimization parameters
         self.batch_size = training_parameters["batch_size"]
         self.initial_learning_rate = training_parameters["initial_learning_rate"]
+        self.final_learning_rate = training_parameters["final_learning_rate"]
+        self.use_final_lr = training_parameters["use_final_lr"]
         # Parameters of the exponential decay schedule (learning rate decay)
         self.decay_steps = training_parameters["decay_steps"]
         self.decay_rate = training_parameters["decay_rate"]
@@ -94,20 +105,33 @@ class MLPModel(object):
         # Box-Cox parameter (set by default to 0.1)
         self.lambda_bct = 0.1
 
-
+        self.load_weights = training_parameters['load_weights']
+        self.old_model_file = training_parameters['old_model']
+        
         # Load databased-linked parameter using shelve file
-        shelfFile = shelve.open(self.dataset_path + "/dtb_params")
+        while True:
+            try:
+                print('Trying to open the shelve file...')
+                shelfFile = shelve.open(self.dataset_path + '/dtb_params')
+                print('Shelve file opened successfully.')
+                break  # Exit the loop if the file is opened successfully
+            except Exception as e:
+                print(f'Failed to open the shelve file: {e}')
+                print('Retrying in 1 second...')
+                time.sleep(1)
+        
         self.threshold = shelfFile["threshold"]
         self.log_transform_X = shelfFile["log_transform_X"]
         self.log_transform_Y = shelfFile["log_transform_Y"]
         self.output_omegas = shelfFile["output_omegas"]
         self.clustering_type = shelfFile["clusterization_method"]
+        #self.clustered_on = shelfFile["clustered_on"]
         self.with_N_chemistry = shelfFile["with_N_chemistry"]
         shelfFile.close()
 
         # Model's path
-        self.directory = "./" + self.model_name
-        if self.new_model_folder==True:
+        self.directory = "./MODELS/" + self.model_name
+        if self.new_model_folder:
             print(">> A new folder is created.")
             # Remove folder if already exists
             shutil.rmtree(self.directory, ignore_errors=True)
@@ -118,17 +142,41 @@ class MLPModel(object):
                 sys.exit(f'ERROR: new_model_folder is set to False but model {self.directory} does not exist')
             print(f">> Existing model folder {self.directory} is used. \n")
 
+        
+        #writing hyperparams
+        with open(self.dataset_path + '/hyperparams.csv','w') as csv_file:
+            writer = csv.writer(csv_file)
+            for key, value in training_parameters.items():
+                writer.writerow([key, value])
 
         # Parameters which are to be kept constant if new_model_folder is False
         if self.new_model_folder is True:  # Store parameters
-            shelfFile = shelve.open(self.directory + "/restart_params")
+            while True:
+                try:
+                    print('Trying to open the shelve file...')
+                    shelfFile = shelve.open(self.directory + '/restart_params')
+                    print('Shelve file opened successfully.')
+                    break  # Exit the loop if the file is opened successfully
+                except Exception as e:
+                    print(f'Failed to open the shelve file: {e}')
+                    print('Retrying in 1 second...')
+                    time.sleep(1)
             shelfFile["dataset_path"] = self.dataset_path
             shelfFile["dt_simu"] = self.dt_simu
             shelfFile["fuel"] = self.fuel
             shelfFile["mechanism_type"] = self.mechanism_type
             shelfFile.close()
         else:   # read parameters
-            shelfFile = shelve.open(self.directory + "/restart_params")
+            while True:
+                try:
+                    print('Trying to open the shelve file...')
+                    shelfFile = shelve.open(self.directory + '/restart_params')
+                    print('Shelve file opened successfully.')
+                    break  # Exit the loop if the file is opened successfully
+                except Exception as e:
+                    print(f'Failed to open the shelve file: {e}')
+                    print('Retrying in 1 second...')
+                    time.sleep(1)
             self.dataset_path = shelfFile["dataset_path"]
             self.dt_simu = shelfFile["dt_simu"]
             self.fuel = shelfFile["fuel"]
@@ -141,7 +189,6 @@ class MLPModel(object):
             print(f">> The considered fuel is: {self.fuel}")
             print(f">> The chemical mechanism type is: {self.mechanism_type} \n")
 
-
         # Checking consistency of inputs
         self.check_inputs()
 
@@ -151,11 +198,11 @@ class MLPModel(object):
         print(f">> Number of clusters is: {self.nb_clusters}")
         
         # Create __init__.py for later use of python files
-        if self.new_model_folder==True:
+        if self.new_model_folder:
             with open(self.directory + "/__init__.py", 'w'): pass
 
         # Training stats
-        if self.new_model_folder==True:
+        if self.new_model_folder:
             os.mkdir(self.directory + "/training")
             os.mkdir(self.directory + "/training/training_curves")
             os.mkdir(self.directory + "/evaluation" )
@@ -168,7 +215,9 @@ class MLPModel(object):
                 shutil.copy(self.dataset_path + "/Xscaler_kmeans.pkl", self.directory)
                 shutil.copy(self.dataset_path + "/kmeans_norm.dat", self.directory)
                 shutil.copy(self.dataset_path + "/km_centroids.dat", self.directory)
-
+            else:
+                if self.nb_clusters > 1:
+                    sys.exit("ERROR: nb_cluster > 1 but cluster_type undefined (should be 'progvar' or 'kmeans')")
 
         # Defining mechanism file (either detailed or reduced)
         if self.mechanism_type=="detailed":
@@ -177,7 +226,7 @@ class MLPModel(object):
             self.mechanism = self.dataset_path + "/mech_reduced.yaml"
 
         # We copy the mechanism files in order to use them for testing
-        if self.new_model_folder==True:
+        if self.new_model_folder:
             if self.mechanism_type=="detailed":
                 shutil.copy(self.dataset_path + "/mech_detailed.yaml", self.directory)
             elif self.mechanism_type=="reduced":
@@ -185,7 +234,16 @@ class MLPModel(object):
 
 
         # Saving parameters using shelve file for later use in testing
-        shelfFile = shelve.open(self.directory + f'/model_params')
+        while True:
+                try:
+                    print('Trying to open the shelve file...')
+                    shelfFile = shelve.open(self.directory + '/model_params')
+                    print('Shelve file opened successfully.')
+                    break  # Exit the loop if the file is opened successfully
+                except Exception as e:
+                    print(f'Failed to open the shelve file: {e}')
+                    print('Retrying in 1 second...')
+                    time.sleep(1)
         #
         shelfFile["threshold"] = self.threshold
         shelfFile["log_transform_X"] = self.log_transform_X
@@ -205,7 +263,6 @@ class MLPModel(object):
 
         # Dictionary for solving models
         self.models_dict = {}
-    
 
     def get_data(self, i_cluster):
         
@@ -217,12 +274,29 @@ class MLPModel(object):
 
         return X_train, X_val, Y_train, Y_val
 
-
     #------------------------------------------------------------------------------------
     # MODEL TRAINING FUNCTIONS
     #------------------------------------------------------------------------------------
 
     def train_model_cluster_i(self, i_cluster):
+
+        #strategy for calculations on ener (GPU cluster)
+        
+        #slurm_resolver = tf.distribute.cluster_resolver.SlurmClusterResolver(port_base=33333)
+        
+        #communication_options = tf.distribute.experimental.CommunicationOptions(implementation = tf.distribute.experimental.CommunicationImplementation.NCCL)
+        
+        #mirrored_strategy = tf.distribute.MultiWorkerMirroredStrategy(cluster_resolver=slurm_resolver, 
+        #                                                                communication_options=communication_options)
+        
+        device_type = 'GPU'
+        print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))
+        devices = tf.config.experimental.list_physical_devices(device_type)
+        devices_names = [d.name.split('e:')[1] for d in devices]
+        
+        mirrored_strategy = tf.distribute.MirroredStrategy(devices_names)
+        
+        
 
         if i_cluster >= self.nb_clusters:
             sys.exit(f"The cluster identifier {i_cluster} is higher than the number of clusters !")
@@ -247,7 +321,6 @@ class MLPModel(object):
                 self._left_n2 = len(spec_names[:self._n2_index])
                 self._right_n2 = len(spec_names[self._n2_index+1:])
 
-
         print(50*"-")
         print(50*"-")
         print(f"                BUILDING MODEL FOR CLUSTER {i_cluster}")
@@ -264,7 +337,6 @@ class MLPModel(object):
         
         # Number of epochs
         epochs = self.epochs_list[i_cluster]
-        
 
         # ===============================================================================================================
         #                                             GETTING DATA
@@ -317,7 +389,6 @@ class MLPModel(object):
         X_val = Xscaler.transform(X_val)
         # X Scaling parameters 
         self._param1_X, self._param2_X = self.get_scaler_params(Xscaler)
-
         
         # NORMALIZING Y
         # Choose scaler
@@ -335,11 +406,9 @@ class MLPModel(object):
         # if self.output_omegas==True and self.log_transform==True:
         #     Y_train[:,spec_names.index("N2")] = 0.0
         #     Y_val[:,spec_names.index("N2")] = 0.0
-
         
         # Y Scaling parameters
         self._param1_Y, self._param2_Y = self.get_scaler_params(Yscaler)
-        
             
         # Converting numpy arrays into keras tensors for use in custom losses & metrics
         param1_Y_tensor = K.variable(self._param1_Y, dtype="float64")
@@ -352,18 +421,15 @@ class MLPModel(object):
         # Saving mean and variance in matrix form to be read by CONVERGE
         np.savetxt(self.directory + f'/norm_param_X_cluster{i_cluster}.dat', np.vstack([Xscaler.mean_, Xscaler.var_]).T)
         np.savetxt(self.directory + f'/norm_param_Y_cluster{i_cluster}.dat', np.vstack([Yscaler.mean_, Yscaler.var_]).T)
-        
-
 
         # If reaction rates as outputs, we have to deal with non reacting species
         # To do that, we define other parameyers for unscaling (to avoid "(0-0)/0")
-        if self.output_omegas==True:
+        if self.output_omegas:
             self._param2_Y_scale = np.copy(self._param2_Y)
             for i in range(self._param2_Y.shape[0]):
                 
                 if self._param2_Y[i]==0.0:
                     self._param2_Y_scale[i] = np.infty
-    
 
         # =================================================================================================================
         #                                               ANN LEARNING
@@ -374,55 +440,116 @@ class MLPModel(object):
         print(50*"-"+"\n")
         
         
-        # Using float64
-        tf.keras.backend.set_floatx('float64')
+  
+        print('Number of devices {}'.format(mirrored_strategy.num_replicas_in_sync))
+        
+        with mirrored_strategy.scope():
+            # Using float64
+            tf.keras.backend.set_floatx('float64')
     
-        # Model generation
-        if self.with_N_chemistry:
-            model = self.generate_nn_model(X_train.shape[1], Y_train.shape[1], nb_units_in_layers, layers_activation)
-        else:
-            if self.remove_N2:
+            # Model generation
+            if self.with_N_chemistry:
                 model = self.generate_nn_model(X_train.shape[1], Y_train.shape[1], nb_units_in_layers, layers_activation)
             else:
-                model = self.generate_nn_model_N2_cte(X_train.shape[1], Y_train.shape[1], nb_units_in_layers, layers_activation)    
+                if self.remove_N2:
+                    model = self.generate_nn_model(X_train.shape[1], Y_train.shape[1], nb_units_in_layers, layers_activation)
+                else:
+                    model = self.generate_nn_model_N2_cte(X_train.shape[1], Y_train.shape[1], nb_units_in_layers, layers_activation)    
 
         #========================================== defining the optimizer ======================================
         #======================================================================================================== 
         
         # Build the learning rate schedule 
-        lr_schedule = optimizers.schedules.ExponentialDecay(
+            if self.use_final_lr == False:
+                lr_schedule = optimizers.schedules.ExponentialDecay(
                                     initial_learning_rate=self.initial_learning_rate,
                                     decay_steps=self.decay_steps,
                                     decay_rate=self.decay_rate,
+                                           staircase=self.staircase)
+            else:
+                decay_rate = ( self.final_learning_rate / self.initial_learning_rate ) ** ( self.decay_steps / self.epochs_list[i_cluster] )
+                print('DECAY RATE', decay_rate)
+                lr_schedule = optimizers.schedules.ExponentialDecay(
+                                           initial_learning_rate=self.initial_learning_rate,
+                                           decay_steps=self.decay_steps,
+                                           decay_rate=decay_rate,
                                     staircase=self.staircase)
     
         # Build the optimizer
-        optimizer = optimizers.Adam()
+            optimizer = optimizers.Adam()
 
         # empty list for keras callbacks
-        callbacks_list=[] 
+            callbacks_list=[] 
 
         # Callback: LR scheduler
-        callbacks_list.append([tf.keras.callbacks.LearningRateScheduler(lr_schedule, verbose=1)])
+            callbacks_list.append([tf.keras.callbacks.LearningRateScheduler(lr_schedule, verbose=1)])
 
+            # Callback : Checkpoints
+            callbacks_list.append([tf.keras.callbacks.ModelCheckpoint(filepath = self.directory + f'/model_cluster{i_cluster}_checkpoint.weights.h5', 
+                                                                    save_weights_only=True,
+                                                                    monitor ='val_loss',
+                                                                    save_best_only = True,
+                                                                    verbose = 1)])
+            # Callback : TensorBoard
+            callbacks_list.append([tf.keras.callbacks.TensorBoard(log_dir = self.directory + f'/tb_logs_cluster{i_cluster}', 
+							            histogram_freq = 1,
+							            write_graph = False,
+							            write_images = True,
+							            write_steps_per_second = True,
+							            update_freq = 'epoch')])
+							            
         
         # Metrics
-        metrics_list=[metrics.mape,metrics.mae,metrics.mse]
-        metrics_list.append(sum_species_metric(param1_Y_tensor, param2_Y_tensor, self.log_transform_Y))            
+            metrics_list=[metrics.mape,metrics.mae,metrics.mse]
+            metrics_list.append(sum_species_metric(param1_Y_tensor, param2_Y_tensor, self.log_transform_Y))            
         
         # define the loss function   
-        loss=losses.mean_squared_error
+            loss=losses.MeanSquaredError
         # loss=losses.mean_absolute_error
             
         # compile the model
-        model.compile(optimizer=optimizer,
+            model.compile(optimizer=optimizer,
                     loss=loss,
                     metrics=metrics_list)
+		            
+		           
+        indices = np.random.permutation(len(X_train))
+        X_train = X_train[indices]
+        Y_train = Y_train[indices]
+		
+        indices2 = np.random.permutation(len(X_val))
+        X_val = X_val[indices2]
+        Y_val = Y_val[indices2]
+		            
+		
+        train_data = tf.data.Dataset.from_tensor_slices((X_train, Y_train))
+        val_data = tf.data.Dataset.from_tensor_slices((X_val, Y_val))
+
+        # The batch size must now be set on the Dataset objects.
+        train_data = train_data.batch(self.batch_size)
+        val_data = val_data.batch(self.batch_size)
+
+        # Disable AutoShard.
+        #options = tf.data.Options()
+        #options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.DATA
+        #train_data = train_data.with_options(options)
+        #val_data = val_data.with_options(options)
+        
+        
+        # Save the model architecture
+        with open(self.directory + f'/model_architecture_cluster{i_cluster}.json', 'w') as f:
+            f.write(model.to_json())
+            
+        # Saving a representation of the model
+        plot_model(model, to_file=self.directory+ f'/model_plot{i_cluster}.png', show_shapes=True, show_layer_names=True)
+        
+        #loading old model weigths
+        if self.load_weights:
+           model.load_weights(self.old_model_file + f'/model_cluster{i_cluster}_checkpoint.weights.h5')
             
         # fit the model
-        history = model.fit(X_train,
-                        Y_train,
-                        validation_data=(X_val,Y_val),
+        history = model.fit(train_data,
+                        validation_data=val_data,
                         epochs=epochs,
                         batch_size=self.batch_size,
                         validation_freq=1,
@@ -474,6 +601,7 @@ class MLPModel(object):
         plt.plot(self.history_dict['val_loss'])
         plt.legend(['train','validation'])
         plt.savefig( self.directory + f"/training/training_curves/loss_cluster{i_cluster}.png") 
+        plt.grid(True)
         plt.show()
         
 
@@ -490,6 +618,7 @@ class MLPModel(object):
             plt.plot(self.history_dict['val_'+metric])
             plt.legend(['train','validation'])
             plt.savefig(self.directory  + "/training/training_curves/" + metric + f'_cluster{i_cluster}.png')        
+            plt.grid(True)        
             plt.show()
         
         # =====================================================================================================================
@@ -564,13 +693,11 @@ class MLPModel(object):
         # Plot function template (scatter plots)
         # sns.relplot(x="CH4_X", y="CH4_Y_err", data=dtb_val)
 
-
     def train_model_all_clusters(self):
 
         # Loop on clusters
         for i_cluster in range(self.nb_clusters):
             self.train_model_cluster_i(i_cluster)
-            
 
     #------------------------------------------------------------------------------------
     # MODEL DEFINITION FUNCTIONS
@@ -679,9 +806,6 @@ class MLPModel(object):
         model = models.Model(layers_dict["input_layer"], outputs=layers_dict["output_layer"], name="main_model")
 
         return model
-
-
-
 
     def generate_nn_model(self, n_X, n_Y, nb_units_in_layers, layers_activation):
 
@@ -854,15 +978,12 @@ class MLPModel(object):
             N = np.dot(np.transpose(M),MMt_inv_M)
             self.L = np.eye(N.shape[0]) - N
 
-
-
     def get_scaler_params(self, scaler):
     
         param1 = scaler.mean_
         param2 = scaler.var_
             
         return param1, param2
-
 
     def check_inputs(self):
 
@@ -875,6 +996,5 @@ class MLPModel(object):
             sys.exit("ERROR: Wrong layer type, it should be 'dense' or 'resnet'")
 
         # Conservation layer
-        if self.hard_constraints_model==2 and self.output_omegas==False:
+        if self.hard_constraints_model==2 and (not self.output_omegas):
             sys.exit("hard_constraints_model=2 not written for output_omegas=False")
-

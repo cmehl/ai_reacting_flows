@@ -11,10 +11,10 @@ from matplotlib.colors import Normalize
 from matplotlib import cm
 
 import seaborn as sns
-sns.set_style("darkgrid")
 
 import ai_reacting_flows.tools.utilities as utils
 
+sns.set_style("darkgrid")
 
 class StochDatabase(object):
     
@@ -27,7 +27,7 @@ class StochDatabase(object):
         self.add_1D_premixed_archetype = False
 
         # Loading database: concatenation of each data in h5 file
-        h5file_r = h5py.File(self.stoch_dtb_folder + f"/solutions.h5", 'r')
+        h5file_r = h5py.File(self.stoch_dtb_folder + "/solutions.h5", 'r')
         names = h5file_r.keys()
         self.nb_solutions = len(names)
         h5file_r.close()
@@ -58,7 +58,6 @@ class StochDatabase(object):
             os.mkdir(save_folder)
         self.save_folder = save_folder
 
-
     #--------------------------------------------------------
     # READING H5 SOLUTION FILES
     #--------------------------------------------------------
@@ -85,8 +84,6 @@ class StochDatabase(object):
         self.df = pd.concat(list_df, ignore_index=True)
 
         h5file_r.close()
-
-
         
     #--------------------------------------------------------
     # CANONICAL FLAMES CALCULATION
@@ -98,7 +95,6 @@ class StochDatabase(object):
         
         # Compute flame
         self.T_cano_0D, self.Y_cano_dict_0D = utils.compute_0D_reactor(fuel, mech_file, phi, T0, p)
-
 
     def compute_1D_premixed(self, phi, p, T0, fuel, mech_file, diffusion_model):
 
@@ -115,7 +111,6 @@ class StochDatabase(object):
 
         self.df["abs_HRR"] = np.abs(self.df["HRR"])
         self.df["log_abs_HRR"] = np.log(self.df["abs_HRR"])
-
 
     #--------------------------------------------------------
     # SCATTER PLOTS: ALL STATES
@@ -137,7 +132,6 @@ class StochDatabase(object):
         # Save
         fig.savefig(self.save_folder + "/dtb_TZ_plot.png", dpi=300)
 
-
     def plot_Z_Yk(self, species_to_plot):
 
         for spec in species_to_plot:
@@ -154,7 +148,6 @@ class StochDatabase(object):
             
             # Save
             fig.savefig(self.save_folder + f"/dtb_{spec}_Z_plot.png", dpi=300)
-
 
     def plot_T_Yk(self, species_to_plot):
 
@@ -185,8 +178,8 @@ class StochDatabase(object):
             # Save
             fig.savefig(self.save_folder + f"/dtb_T_{spec}_plot.png", dpi=300)
 
-
     # Generic plotting function
+
     def plot_generic(self, var_x, var_y, var_c):
 
         # Creating axis
@@ -203,7 +196,6 @@ class StochDatabase(object):
         # Save
         fig.savefig(self.save_folder + f"/dtb_x{var_x}_y{var_y}_c{var_c}_plot.png", dpi=300)
 
-
     #--------------------------------------------------------
     # SCATTER PLOTS: ONE SOLUTION
     #--------------------------------------------------------
@@ -211,7 +203,7 @@ class StochDatabase(object):
     def plot_T_Z_indiv(self, iteration):
 
         # Loading solution at given iteration
-        h5file_r = h5py.File(self.stoch_dtb_folder + f"/solutions.h5", 'r')
+        h5file_r = h5py.File(self.stoch_dtb_folder + "/solutions.h5", 'r')
         data = h5file_r.get(f"ITERATION_{iteration:05d}/all_states")[()]
         col_names = h5file_r[f"ITERATION_{iteration:05d}/all_states"].attrs["cols"]
         h5file_r.close()
@@ -231,11 +223,10 @@ class StochDatabase(object):
         # Save
         fig.savefig(self.save_folder + f"/dtb_TZ_plot_iteration{iteration:05d}.png", dpi=300)
 
-
     def plot_Z_Yk_indiv(self, species_to_plot, iteration):
 
         # Loading solution at given iteration
-        h5file_r = h5py.File(self.stoch_dtb_folder + f"/solutions.h5", 'r')
+        h5file_r = h5py.File(self.stoch_dtb_folder + "/solutions.h5", 'r')
         data = h5file_r.get(f"ITERATION_{iteration:05d}/all_states")[()]
         col_names = h5file_r[f"ITERATION_{iteration:05d}/all_states"].attrs["cols"]
         h5file_r.close()
@@ -256,12 +247,10 @@ class StochDatabase(object):
             # Save
             fig.savefig(self.save_folder + f"/dtb_{spec}_Z_plot_iteration{iteration:05d}.png", dpi=300)
 
-
-
     def plot_T_Yk_indiv(self, species_to_plot, iteration):
 
         # Loading solution at given iteration
-        h5file_r = h5py.File(self.stoch_dtb_folder + f"/solutions.h5", 'r')
+        h5file_r = h5py.File(self.stoch_dtb_folder + "/solutions.h5", 'r')
         data = h5file_r.get(f"ITERATION_{iteration:05d}/all_states")[()]
         col_names = h5file_r[f"ITERATION_{iteration:05d}/all_states"].attrs["cols"]
         h5file_r.close()
@@ -294,13 +283,12 @@ class StochDatabase(object):
             # Save
             fig.savefig(self.save_folder + f"/dtb_T_{spec}_plot_{iteration:05d}.png", dpi=300)
 
-
-
     # Generic plotting function
+
     def plot_generic_indiv(self, var_x, var_y, var_c, iteration):
 
         # Loading solution at given iteration
-        h5file_r = h5py.File(self.stoch_dtb_folder + f"/solutions.h5", 'r')
+        h5file_r = h5py.File(self.stoch_dtb_folder + "/solutions.h5", 'r')
         data = h5file_r.get(f"ITERATION_{iteration:05d}/all_states")[()]
         col_names = h5file_r[f"ITERATION_{iteration:05d}/all_states"].attrs["cols"]
         h5file_r.close()
@@ -319,7 +307,6 @@ class StochDatabase(object):
 
         # Save
         fig.savefig(self.save_folder + f"/dtb_x{var_x}_y{var_y}_c{var_c}_plot_{iteration:05d}.png", dpi=300)
-
 
     #--------------------------------------------------------
     # TRAJECTORIES PLOTS
@@ -349,7 +336,6 @@ class StochDatabase(object):
         # Save
         fig.savefig(self.save_folder + "traj_TZ_plot.png", dpi=300)
 
-
     def plot_traj_T_time(self):
 
         # styles
@@ -368,7 +354,6 @@ class StochDatabase(object):
         fig.tight_layout()
 
         ax.legend()
-
 
     def plot_traj_Yk_time(self, species_to_plot, mech_file):
 
@@ -394,7 +379,6 @@ class StochDatabase(object):
             # Save
             fig.savefig(self.save_folder + f"traj_{spec}_time_plot.png", dpi=300)
 
-
     #--------------------------------------------------------
     # INDIVIDUAL PARTICLES TRACKING
     #--------------------------------------------------------
@@ -419,8 +403,7 @@ class StochDatabase(object):
         fig.tight_layout()
 
         # Save
-        fig.savefig(self.save_folder + f"/indiv_rajectory.png", dpi=300)
-
+        fig.savefig(self.save_folder + "/indiv_rajectory.png", dpi=300)
 
     #--------------------------------------------------------
     # DISTRIBUTIONS
@@ -429,7 +412,7 @@ class StochDatabase(object):
     def plot_pdf_T_inst(self, iteration):    
 
         # Loading solution at given iteration
-        h5file_r = h5py.File(self.stoch_dtb_folder + f"/solutions.h5", 'r')
+        h5file_r = h5py.File(self.stoch_dtb_folder + "/solutions.h5", 'r')
         data = h5file_r.get(f"ITERATION_{iteration:05d}/all_states")[()]
         col_names = h5file_r[f"ITERATION_{iteration:05d}/all_states"].attrs["cols"]
         h5file_r.close()
@@ -444,7 +427,6 @@ class StochDatabase(object):
         fig.tight_layout()
             
         fig.savefig(self.save_folder + f"/PDF_T_plot_iteration{iteration:05d}.png")
-                    
             
     def plot_pdf_T_all(self): 
             
@@ -456,14 +438,12 @@ class StochDatabase(object):
 
         fig.tight_layout()
             
-        fig.savefig(self.save_folder + f"/PDF_T_plot.png")
-
-
+        fig.savefig(self.save_folder + "/PDF_T_plot.png")
 
     def plot_pdf_HRR_inst(self, iteration):    
 
         # Loading solution at given iteration
-        h5file_r = h5py.File(self.stoch_dtb_folder + f"/solutions.h5", 'r')
+        h5file_r = h5py.File(self.stoch_dtb_folder + "/solutions.h5", 'r')
         data = h5file_r.get(f"ITERATION_{iteration:05d}/all_states")[()]
         col_names = h5file_r[f"ITERATION_{iteration:05d}/all_states"].attrs["cols"]
         h5file_r.close()
@@ -479,8 +459,6 @@ class StochDatabase(object):
             
         fig.savefig(self.save_folder + f"/PDF_HRR_plot_iteration{iteration:05d}.png")
 
-
-
     def plot_pdf_HRR_all(self): 
             
         # Temperature histogram
@@ -494,13 +472,11 @@ class StochDatabase(object):
 
         fig.tight_layout()
             
-        fig.savefig(self.save_folder + f"/PDF_HRR_plot.png")
-
+        fig.savefig(self.save_folder + "/PDF_HRR_plot.png")
 
     #--------------------------------------------------------
     # Points density
     #--------------------------------------------------------
-
 
     def density_scatter(self, var_x , var_y, sort = True, bins = 100):
         # Functions from https://stackoverflow.com/questions/20105364/how-can-i-make-a-scatter-plot-colored-by-density-in-matplotlib
@@ -529,7 +505,3 @@ class StochDatabase(object):
         fig.tight_layout()
 
         fig.savefig(self.save_folder + f"/pnts_density_x{var_x}_y{var_y}_plot.png")
-
-
-
-            
