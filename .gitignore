@@ -139,6 +139,9 @@ dmypy.json
 /notebooks/*.ipynb
 /tests/STOCH_DTB_*
 /tests/test_gen_dtb.py
+/tests/dtb_preprocessing_test.py
+/tests/stoch_dtb_test.py
+/tests/*.png
 
 # VSCode
 *.code-workspace

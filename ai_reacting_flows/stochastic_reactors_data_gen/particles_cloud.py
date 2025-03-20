@@ -42,6 +42,7 @@ class ParticlesCloud(object):
         # Folder where result are stored
         self.run_folder = os.getcwd()
         self.results_folder = f"{self.run_folder:s}/STOCH_DTB_" + data_gen_parameters["results_folder_suffix"]
+        self.solution_file = data_gen_parameters["dtb_file"]
         
         # Methodology to solve chemistry: Cantera or NN
         self.ML_inference_flag = data_gen_parameters["ML_inference_flag"]
@@ -742,7 +743,7 @@ class ParticlesCloud(object):
             arr[i,part.nb_state_vars+11] = part.mass
 
         # Store initial solution in h5 file
-        f = h5py.File(self.results_folder +  "/solutions.h5","a")
+        f = h5py.File(f"{self.results_folder}/{self.solution_file}","a")
         grp = f.create_group(f"ITERATION_{self.iteration:05d}")    # Group created because this function is called first
         dset = grp.create_dataset("all_states",data=arr)
         dset.attrs["cols"] = self.cols_all_states
@@ -763,7 +764,7 @@ class ParticlesCloud(object):
             arr[i,part.nb_state_vars+1] = part.hrr
 
         # Store initial solution in h5 file
-        f = h5py.File(self.results_folder +  f"/solutions.h5","a")
+        f = h5py.File(f"{self.results_folder}/{self.solution_file}","a")
         grp = f.get(f"ITERATION_{self.iteration:05d}")
         dset = grp.create_dataset(which_state,data=arr)
         dset.attrs["cols"] = cols

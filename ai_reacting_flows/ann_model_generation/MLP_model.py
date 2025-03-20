@@ -144,7 +144,7 @@ class MLPModel(object):
 
         
         #writing hyperparams
-        with open('/ifpengpfs/scratch/ifpen/chartiep/ai_reacting_flows/MODELS/' + self.model_name + '/hyperparams.csv','w') as csv_file:
+        with open(self.dataset_path + '/hyperparams.csv','w') as csv_file:
             writer = csv.writer(csv_file)
             for key, value in training_parameters.items():
                 writer.writerow([key, value])
@@ -485,7 +485,7 @@ class MLPModel(object):
             callbacks_list.append([tf.keras.callbacks.LearningRateScheduler(lr_schedule, verbose=1)])
 
             # Callback : Checkpoints
-            callbacks_list.append([tf.keras.callbacks.ModelCheckpoint(filepath = self.directory + f'/model_weights_cluster{i_cluster}_checkpoint.h5', 
+            callbacks_list.append([tf.keras.callbacks.ModelCheckpoint(filepath = self.directory + f'/model_cluster{i_cluster}_checkpoint.weights.h5', 
                                                                     save_weights_only=True,
                                                                     monitor ='val_loss',
                                                                     save_best_only = True,
@@ -504,7 +504,7 @@ class MLPModel(object):
             metrics_list.append(sum_species_metric(param1_Y_tensor, param2_Y_tensor, self.log_transform_Y))            
         
         # define the loss function   
-            loss=losses.mean_squared_error
+            loss=losses.MeanSquaredError
         # loss=losses.mean_absolute_error
             
         # compile the model
@@ -544,8 +544,8 @@ class MLPModel(object):
         plot_model(model, to_file=self.directory+ f'/model_plot{i_cluster}.png', show_shapes=True, show_layer_names=True)
         
         #loading old model weigths
-        if self.load_weights == True:
-           model.load_weights(self.old_model_file + f'/model_weights_cluster{i_cluster}_checkpoint.h5')
+        if self.load_weights:
+           model.load_weights(self.old_model_file + f'/model_cluster{i_cluster}_checkpoint.weights.h5')
             
         # fit the model
         history = model.fit(train_data,

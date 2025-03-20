@@ -141,7 +141,7 @@ def GenerateVariable_dt(params, comm : 'MPI.Comm'):
     # Opening h5 file
     run_folder = os.getcwd()
     stoch_results_folder = f"{run_folder:s}/STOCH_DTB_" + params["results_folder_suffix"]
-    h5file_r = h5py.File(stoch_results_folder +  "/solutions.h5", 'r')
+    h5file_r = h5py.File(f"{stoch_results_folder:s}/{params['dtb_file'].split('.')[0]:s}_resamp{int(params['T_threshold'])}K.h5", 'r')
 
     # Solution 0 read to get columns names
     col_names_X = h5file_r["ITERATION_00000/X"].attrs["cols"][:-2]

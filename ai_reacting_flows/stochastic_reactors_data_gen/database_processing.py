@@ -35,17 +35,19 @@ class LearningDatabase(object):
     def __init__(self, dtb_processing_parameters):
 
         # Input parameters
-        self.dtb_folder  = dtb_processing_parameters["dtb_folder"]
+        # Folder where result are stored
+        self.run_folder = os.getcwd()
+        self.dtb_folder = f"{self.run_folder:s}/STOCH_DTB_" + dtb_processing_parameters["results_folder_suffix"]
         self.database_name = dtb_processing_parameters["database_name"]
         self.log_transform_X  = dtb_processing_parameters["log_transform_X"]
         self.log_transform_Y  = dtb_processing_parameters["log_transform_Y"]
         self.threshold  = dtb_processing_parameters["threshold"]
         self.output_omegas  = dtb_processing_parameters["output_omegas"]
-        self.detailed_mechanism  = dtb_processing_parameters["detailed_mechanism"]
+        self.detailed_mechanism  = dtb_processing_parameters["mech_file"]
         self.fuel  = dtb_processing_parameters["fuel"]
         self.with_N_chemistry = dtb_processing_parameters["with_N_chemistry"]
         self.dt_var = dtb_processing_parameters['dt_var']
-        self.input_dtb_file = dtb_processing_parameters['input_dtb_file']
+        self.input_dtb_file = dtb_processing_parameters['dtb_file']
         self.clusterize_on = dtb_processing_parameters['clusterize_on']
         self.train_set_size = dtb_processing_parameters['train_set_size']
 
@@ -54,7 +56,7 @@ class LearningDatabase(object):
             sys.exit("ERROR: chemical mechanism should be in yaml format !")
 
         # Read H5 files to get databases in pandas format
-        h5file_r = h5py.File(self.dtb_folder + "/solutions.h5", 'r')
+        h5file_r = h5py.File(self.dtb_folder + "/" + self.input_dtb_file, 'r')
         names = h5file_r.keys()
         self.nb_solutions = len(names)
         h5file_r.close()
@@ -112,7 +114,7 @@ class LearningDatabase(object):
     def get_database_from_h5(self):
 
         # Opening h5 file
-        h5file_r = h5py.File(self.dtb_folder + '/' + self.input_dtb_file, 'r')
+        h5file_r = h5py.File(self.dtb_folder + "/" + self.input_dtb_file, 'r')
 
         # Solution 0 read to get columns names
         col_names_X = h5file_r["ITERATION_00000/X"].attrs["cols"]
@@ -147,10 +149,8 @@ class LearningDatabase(object):
         
         h5file_r = h5py.File(self.dtb_folder + '/' + self.input_dtb_file, 'r')
 
-
         # Solution 0 read to get columns names
         col_names_X = h5file_r["ITERATION_00000/X"].attrs["cols"]
-
         col_names_Y = h5file_r["ITERATION_00000/Y"].attrs["cols"]
 
         h5file_w = h5py.File(file_path + file_name, 'w')
@@ -355,7 +355,7 @@ class LearningDatabase(object):
         self.Y.drop(rows, axis=0, inplace=True)
 
     # Re-sampling based on heat release rate
-    def undersample_HRR(self, jpdf_var_1, jpdf_var_2, hrr_func, keep_low_c, n_samples=None, n_bins=100, plot_distrib=False):
+    def undersample_HRR(self, jpdf_var_1, jpdf_var_2, hrr_func, keep_low_c, n_samples=None, n_bins=100, seed=1991, plot_distrib=False):
         
         # Save initial states for later use
         self.X_old = self.X.copy()
@@ -375,7 +375,7 @@ class LearningDatabase(object):
         a = hrr_func(a)
 
         # Setting a numpy seed
-        np.random.seed(1991) 
+        np.random.seed(seed) 
 
         x = self.X[jpdf_var_1]
         y = self.X[jpdf_var_2]
@@ -658,7 +658,7 @@ class LearningDatabase(object):
         assert res_rel_h_out.max() < 1.0e-10
 
     # Database final processing
-    def process_database(self, plot_distributions = False, distribution_species=[]):
+    def process_database(self, plot_distributions = False, distribution_species=[], seed = 42):
 
         self.is_processed = True
 
@@ -671,7 +671,7 @@ class LearningDatabase(object):
         self.list_Y_p_train = []
         self.list_Y_p_val = []
 
-        for i_cluster in range(self.nb_clusters_tot):
+        for i_cluster in range(self.nb_clusters):
             
             print("")
             print(f"CLUSTER {i_cluster}:")
@@ -748,7 +748,7 @@ class LearningDatabase(object):
             Y_p.columns = [str(col) + '_Y' for col in Y_p.columns]
 
             # Train validation split
-            X_train, X_val, Y_train, Y_val = train_test_split(X_p, Y_p, train_size=self.train_set_size, random_state=42)
+            X_train, X_val, Y_train, Y_val = train_test_split(X_p, Y_p, train_size=self.train_set_size, random_state=seed)
 
             # Forcing constant N2
             n2_cte = True # By default -> To make more general
@@ -922,9 +922,9 @@ class LearningDatabase(object):
 
         fig.tight_layout()
         if self.is_resampled:
-            fig.savefig(self.dtb_folder + f'distribution_{var}_resampled.png', dpi=400)
+            fig.savefig(self.dtb_folder + f'_distribution_{var}_resampled.png', dpi=400)
         else:
-            fig.savefig(self.dtb_folder + f'distribution_{var}.png', dpi=400)
+            fig.savefig(self.dtb_folder + f'_distribution_{var}.png', dpi=400)
 
 
 
