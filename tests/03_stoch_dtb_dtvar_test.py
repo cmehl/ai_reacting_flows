@@ -39,15 +39,14 @@ data_gen_parameters["ML_inference_flag"] = False
 data_gen_parameters["ML_models"] = ("")
 data_gen_parameters["prog_var_thresholds"] = (0.25, 0.95)
 
-def test_h2_dtb_computation():
+def test_h2_multi_dt_dtb_computation():
     # required for CI on GitHub
     current_dir = os.path.dirname(__file__)
     os.chdir(current_dir)
     data_gen_parameters["mech_file"] = f"{current_dir:s}{data_gen_parameters['mech_file']:s}"
     data_gen_parameters["inlets_file"] = f"{current_dir:s}{data_gen_parameters['inlets_file']:s}"
 
-    # Call to database generation function
-    generate_stochastic_database(data_gen_parameters, dc.DummyComm())
+    GenerateVariable_dt(data_gen_parameters, dc.DummyComm())
 
-    tol = np.array([139.75, 3.74, 50.4, 4.94, 166.15, 9.9, 124.38, 5.9, 4.62, 2.04])
-    assert np.max(extract_h2_dtb_histograms(f"./STOCH_DTB_{data_gen_parameters['results_folder_suffix']:s}/{data_gen_parameters['dtb_file']:s}","H2_TEST_histograms", tol)) < np.float64(0.0)
+    tol = np.array([168.86, 8.89, 50.17, 20.32, 139.32, 52.21, 61.66, 13.04, 11.16])
+    assert np.max(extract_h2_dtvar_dtb_histograms(f"./STOCH_DTB_{data_gen_parameters['results_folder_suffix']:s}/mech_h2_5dt.h5","H2_dtvar_TEST_histograms", tol)) < np.float64(0.0)

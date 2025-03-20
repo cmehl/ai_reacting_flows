@@ -30,35 +30,18 @@ dtb_processing_parameters["mech_file"] = "/../data/chemical_mechanisms/mech_H2.y
 dtb_processing_parameters["fuel"] = "H2"           # Fuel name
 dtb_processing_parameters['dt_var'] = False
 
-def test_dtb_resampling():
+def test_dtvar_dtb_processing():
     # required for CI on GitHub
     current_dir = os.path.dirname(__file__)
     os.chdir(current_dir)
     dtb_processing_parameters["mech_file"] = f"{current_dir:s}{dtb_processing_parameters['mech_file']:s}"
 
     database = LearningDatabase(dtb_processing_parameters)
+    database.process_database()
 
-    # T_threshold should be in attribute for check (threshold_dtb < threshold_ppro) and warning (threshold_dtb != threshold_ppro)
-    database.apply_temperature_threshold(dtb_processing_parameters["T_threshold"]) # input should be optional (default = threshold_dtb)
-
-    # To be removed for actual CI
-    # database.plot_pdf_var('Temperature')
-    # database.plot_pdf_var('HRR')
-
-    # database.print_data_size()
-    # End : to be removed
-
-    # Check n_samples, needed ? (current > npoints in database)
-    database.undersample_HRR("PC1", "PC2", hrr_func = fHRR, keep_low_c = True, n_samples = 25000, n_bins = 100, plot_distrib = True) # set distrib to false for CI
-
-    # To be removed for actual CI
-    # database.plot_pdf_var('Temperature')
-    # database.plot_pdf_var('HRR')
-
-    # database.print_data_size()
-    # End : to be removed
-
-    database.database_to_h5(f"{current_dir:s}/STOCH_DTB_{dtb_processing_parameters['results_folder_suffix']:s}/", f"{dtb_processing_parameters['dtb_file'].split('.')[0]:s}_resamp{int(dtb_processing_parameters['T_threshold'])}K.h5")
-
-    tol = np.array([35.71, 2.62, 11.83, 5.0, 28.87, 12.84, 10.97, 3.56, 2.57])
-    assert np.max(extract_h2_dtvar_dtb_histograms(f"./STOCH_DTB_{dtb_processing_parameters['results_folder_suffix']:s}/{dtb_processing_parameters['dtb_file'].split('.')[0]:s}_resamp{int(dtb_processing_parameters['T_threshold'])}K.h5","H2_resampled_TEST_histograms", tol)) < np.float64(0.0)
+    tol = []
+    tol.append(np.array([102.17, 105.63, 29.49, 64.26, 327.54, 66.86, 60.28, 428.57, 74.37, 77.45]))
+    tol.append(np.array([110.47, 30.55, 65.14, 339.27, 68.61, 61.46, 427.93, 76.23, 80.23]))
+    tol.append(np.array([33.25, 35.6, 11.43, 22.57, 110.85, 22.97, 20.3, 142.02, 25.08, 25.32]))
+    tol.append(np.array([37.1, 10.95, 22.37, 112.63, 22.68, 20.57, 141.72, 26.18, 26.39]))
+    assert check_h2_training_histograms(f"./STOCH_DTB_{dtb_processing_parameters['results_folder_suffix']:s}/dtb_resampled/cluster0","H2_TEST_training_data", tol)
