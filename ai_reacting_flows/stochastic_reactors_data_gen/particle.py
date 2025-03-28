@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from ai_reacting_flows.stochastic_reactors_data_gen.particles_cloud import ParticlesCloud
 
-import tensorflow as tf
 import numpy as np
 import cantera as ct
 import ai_reacting_flows.tools.utilities as utils
@@ -237,7 +236,7 @@ class Particle(object):
             self.X = self.compute_mol_frac()
             
             # Clear memory to avoid overflow
-            tf.keras.backend.clear_session()
+            # tf.keras.backend.clear_session()
 
 # =============================================================================
 #     FUNCTIONS TO COMPUTE COMPOSITION-DERIVED QUANTITIES
