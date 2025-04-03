@@ -206,7 +206,7 @@ class LearningDatabase(object):
         for i in range(1, nb_clusters_tot):
             os.mkdir(self.dtb_folder + "/" + self.database_name + f"/cluster{i}")
 
-        self.nb_clusters_tot = nb_clusters_tot
+        self.nb_clusters = nb_clusters_tot
 
         if clusterization_method=="progvar":
 
@@ -793,7 +793,7 @@ class LearningDatabase(object):
 
             print(f"\n => There are {size_total} points overall")
         else:
-            for i in range(self.nb_clusters_tot):
+            for i in range(self.nb_clusters):
 
                 size_cluster_i = self.X[self.X["cluster"]==i].shape[0]
                 size_total += size_cluster_i
