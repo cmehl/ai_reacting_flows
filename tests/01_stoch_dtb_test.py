@@ -1,5 +1,5 @@
-from ai_reacting_flows.stochastic_reactors_data_gen.main import generate_stochastic_database, GenerateVariable_dt
-from misc import extract_h2_dtb_histograms, extract_h2_dtvar_dtb_histograms
+from ai_reacting_flows.stochastic_reactors_data_gen.main import generate_stochastic_database
+from misc import extract_h2_dtb_histograms
 
 import DummyComm as dc
 import numpy as np

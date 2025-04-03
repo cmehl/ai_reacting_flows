@@ -1,7 +1,7 @@
 import os
 import numpy as np
 from ai_reacting_flows.stochastic_reactors_data_gen.database_processing import LearningDatabase
-from misc import fHRR, extract_h2_dtvar_dtb_histograms, check_h2_training_histograms
+from misc import check_h2_training_histograms
 
 # Dictionary to store data processing parameters
 dtb_processing_parameters = {}

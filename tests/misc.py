@@ -139,14 +139,14 @@ def check_h2_training_histograms(dtb_folder, histo_folder, tol):
         distances = []
         for col in data.columns:
             # references histogram generated using the following code (to use again if reference is to change)
-            counts, bin_edges = np.histogram(data[col], bins=100)
-            bin_edges[-1] = bin_edges[-1] * np.float64(1.01) if bin_edges[-1] > 0.0 else bin_edges[-1] * np.float64(0.99)
-            if col not in ["Temperature_X", "Temperature_Y"]:
-                bin_edges[-1] = np.min([bin_edges[-1], 1.0], axis=0)
-            else:
-                bin_edges[0] = bin_edges[0] * np.float64(0.99) if bin_edges[0] > 0.0 else bin_edges[0] * np.float64(1.01)
-            counts, _ = np.histogram(data[col], bins=bin_edges)
-            np.savez(f"{histo_folder:s}/{file.split('.')[0]:s}_{col:s}_hist.npz", counts=counts, bin_edges=bin_edges)
+            # counts, bin_edges = np.histogram(data[col], bins=100)
+            # bin_edges[-1] = bin_edges[-1] * np.float64(1.01) if bin_edges[-1] > 0.0 else bin_edges[-1] * np.float64(0.99)
+            # if col not in ["Temperature_X", "Temperature_Y"]:
+            #     bin_edges[-1] = np.min([bin_edges[-1], 1.0], axis=0)
+            # else:
+            #     bin_edges[0] = bin_edges[0] * np.float64(0.99) if bin_edges[0] > 0.0 else bin_edges[0] * np.float64(1.01)
+            # counts, _ = np.histogram(data[col], bins=bin_edges)
+            # np.savez(f"{histo_folder:s}/{file.split('.')[0]:s}_{col:s}_hist.npz", counts=counts, bin_edges=bin_edges)
 
             histo_ref = np.load(f"{histo_folder:s}/{file.split('.')[0]:s}_{col:s}_hist.npz")
             counts_ref = histo_ref["counts"]
