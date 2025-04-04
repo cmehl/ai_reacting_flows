@@ -24,6 +24,10 @@ Additional details on how to install a home-made package can be found [here](htt
 
 In order to run the database generation, an MPI distribution is also necessary. In the current version of the code, the preconized version is OpenMPI/4.1.1.
 
+# Articles
+
+Scripts required to reproduce studies conducted with ARF are gathered in the `article` folder. A list of the articles is provided in the README file within that folder.
+
 # Notebooks
 
 Notebooks used as examples are in the "notebooks" folder. They are versionned in Git as .py files to ease their tracking. To create notebooks from the .py file, simply prompt the following command from the root folder:
