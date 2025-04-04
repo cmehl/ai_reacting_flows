@@ -16,7 +16,7 @@ dtb_processing_parameters["dtb_file"] = "solutions.h5"
 dtb_processing_parameters["log_transform_X"] = 1              # 0: no transform, 1: Logarithm transform, 2: Box-Cox transform
 dtb_processing_parameters["log_transform_Y"] = 1              # 0: no transform, 1: Logarithm transform, 2: Box-Cox transform
 dtb_processing_parameters["threshold"] = 1.0e-10            # Threshold to be applied in case of logarithm transform
-dtb_processing_parameters["T_threshold"] = 200.0
+dtb_processing_parameters["T_threshold"] = 600.0
 
 # Physics described: (omega vs Y) and N chemistry
 dtb_processing_parameters["output_omegas"] = False          # True: output differences, False: output mass fractions
