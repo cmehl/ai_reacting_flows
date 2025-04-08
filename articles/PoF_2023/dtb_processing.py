@@ -19,8 +19,8 @@ dtb_processing_parameters["threshold"] = 1.0e-10            # Threshold to be ap
 dtb_processing_parameters["T_threshold"] = 600.0
 
 # Physics described: (omega vs Y) and N chemistry
-dtb_processing_parameters["output_omegas"] = False          # True: output differences, False: output mass fractions
-dtb_processing_parameters["with_N_chemistry"] = False        # Considering Nitrogen chemistry or not (if not, N not considered in atom balance for reduction). In MLP, it will change treatment of N2.
+dtb_processing_parameters["output_omegas"] = False   # True: output differences, False: output mass fractions
+dtb_processing_parameters["with_N_chemistry"] = False  # Considering Nitrogen chemistry or not (if not, N not considered in atom balance for reduction). In MLP, it will change treatment of N2.
 
 # NN training related processings
 dtb_processing_parameters["clusterize_on"] = 'phys'
@@ -31,7 +31,10 @@ dtb_processing_parameters["fuel"] = "H2"           # Fuel name
 dtb_processing_parameters['dt_var'] = False
 
 database = LearningDatabase(dtb_processing_parameters)
+# database.density_scatter("PC1","PC2")
 database.apply_temperature_threshold(dtb_processing_parameters["T_threshold"])
 database.undersample_HRR("Temperature", "H2O", hrr_func = fHRR, keep_low_c = True, n_samples = 1000000, n_bins = 100, plot_distrib = True)
+# database.density_scatter("PC1","PC2")
 database.compare_resampled_pdfs("Temperature")
-database.clusterize_dataset("kmeans", 2) # Log_transform (input for log transform given to "LearningDatabase") > Scale (Standard on all dtb) > Clusterize
+database.clusterize_dataset("kmeans", 2) # Log_transform (if required) > Scale (StandardScaler, same for all dtb) > Clusterize
+database.process_database(plot_distributions=True, distribution_species=["Temperature","H2","H2O","OH"])

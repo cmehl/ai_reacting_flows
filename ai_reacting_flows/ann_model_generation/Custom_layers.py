@@ -6,10 +6,10 @@ class ResidualBlock(nn.Module):
         super(ResidualBlock, self).__init__()
 
         self.linear1 = nn.Linear(in_features, out_features, dtype=torch.float64)
-        self.activation1 = activation
+        self.activation1 = activation()
 
         self.linear2 = nn.Linear(out_features, out_features, dtype=torch.float64)
-        self.activation2 = activation
+        self.activation2 = activation()
 
         # Si les dimensions d'entrée et de sortie diffèrent, ajuster avec une couche linéaire
         self.shortcut = nn.Linear(in_features, out_features, dtype=torch.float64) if in_features != out_features else nn.Identity()

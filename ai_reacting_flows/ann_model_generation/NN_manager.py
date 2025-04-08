@@ -7,23 +7,22 @@ import numpy as np
 import pandas as pd
 import oyaml as yaml
 import cantera as ct
+import matplotlib.pyplot as plt
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 
 import ai_reacting_flows.tools.utilities as utils
-from NN_models import MLPModel, DeepONet, DeepONet_shift
+from ai_reacting_flows.ann_model_generation.NN_models import MLPModel, DeepONet, DeepONet_shift
 
 torch.set_default_dtype(torch.float64)
 
-activation_functions = {"ReLU": nn.ReLU, "GeLU" : nn.GELU, "tanh" : nn.Tanh}
+activation_functions = {"ReLU": nn.ReLU, "GeLU" : nn.GELU, "tanh" : nn.Tanh, "Id" : nn.Identity}
 model_type = {"MLP": MLPModel, "DeepONet": DeepONet, "DeepONetShift": DeepONet_shift}
 
-class NN_manager(nn.Module):
+class NN_manager():
     def __init__(self):
-        super.__init__()
-        
         self.device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
         
         self.run_folder = os.getcwd()
@@ -78,9 +77,6 @@ class NN_manager(nn.Module):
         print("CLUSTERING:")
         print(f">> Number of clusters is: {self.nb_clusters}")
 
-        # Defining mechanism file (either detailed or reduced)
-        self.mechanism = os.path.join(self.dataset_path, self.mechanism)
-
         # We copy the mechanism files in order to use them for testing
         if self.new_model_folder:
             shutil.copy(self.mechanism, self.directory)
@@ -107,9 +103,11 @@ class NN_manager(nn.Module):
         # Saving parameters for later use in testing
         self.save_dtb_params()
         self.save_networks_params()
+        for f in self.networks_files:
+            shutil.copy(f, self.directory)
         self.save_learning_config()
 
-    def create_model(self, i_cluster):
+    def create_model(self, i_cluster, X_val, Y_val):
         network_type = self.networks_types[i_cluster]
         if (network_type not in model_type.keys()):
             sys.exit(f"ERROR: network_type \"{network_type}\" does not exist")
@@ -120,11 +118,15 @@ class NN_manager(nn.Module):
             if (network_type == "MLP"):
                 # Network shapes
                 nb_units_in_layers_list = network_parameters["nb_units_in_layers_list"]
+                nb_units_in_layers_list.insert(0, X_val.shape[1])
+                nb_units_in_layers_list.append(Y_val.shape[1])
                 layers_activation_list = [activation_functions[act] for act in network_parameters["layers_activation_list"]]
                 layers_type = network_parameters["layers_type"]
             
-                model = model_type[network_type](nb_units_in_layers_list, layers_type, layers_activation_list)
+                model = model_type[network_type](self.device, nb_units_in_layers_list, layers_type, layers_activation_list)
             elif ("DeepONet" in network_type):
+                n_in = X_val.shape[1]
+                n_out = Y_val.shape[1]
                 # Network shapes
                 nb_units_in_layers_list = network_parameters["nb_units_in_layers_list"]
                 layers_activation_list = {}
@@ -132,21 +134,39 @@ class NN_manager(nn.Module):
                     layers_activation_list[k] = [activation_functions[act] for act in network_parameters["layers_activation_list"][k]]
                 layers_type = network_parameters["layers_type"]
                 n_neurons = network_parameters["n_neurons"]
-                model = model_type[network_type](nb_units_in_layers_list, layers_type, layers_activation_list, n_neurons)
+                nb_units_in_layers_list["branch"].insert(0,n_in)
+                nb_units_in_layers_list["branch"].append(n_neurons*n_out)
+                nb_units_in_layers_list["trunk"].insert(0,1)
+                nb_units_in_layers_list["trunk"].append(n_neurons*n_out)
+                model = model_type[network_type](self.device, nb_units_in_layers_list, layers_type, layers_activation_list, n_out, n_neurons)
+            elif ("DeepONetShift" in network_type):
+                n_in = X_val.shape[1]
+                n_out = Y_val.shape[1]
+                # Network shapes
+                nb_units_in_layers_list = network_parameters["nb_units_in_layers_list"]
+                layers_activation_list = {}
+                for k in network_parameters["layers_activation_list"].keys():
+                    layers_activation_list[k] = [activation_functions[act] for act in network_parameters["layers_activation_list"][k]]
+                layers_type = network_parameters["layers_type"]
+                n_neurons = network_parameters["n_neurons"]
+                nb_units_in_layers_list["branch"].insert(0,n_in)
+                nb_units_in_layers_list["branch"].append(n_neurons*n_out)
+                nb_units_in_layers_list["trunk"].insert(0,1)
+                nb_units_in_layers_list["trunk"].append(n_neurons*n_out)
+                nb_units_in_layers_list["shift"].insert(0,n_in)
+                nb_units_in_layers_list["shift"].append(1)
+                model = model_type[network_type](self.device, nb_units_in_layers_list, layers_type, layers_activation_list, n_out, n_neurons)
         
         return model
 
-    def train_model(self, i_cluster, model, loss_fn, optimizer, scheduler):
-        X_train, X_val, Y_train, Y_val = self.read_training_data(i_cluster)
-        Yscaler_mean, Yscaler_std = self.get_Yscaler_stats(i_cluster)
-
-        X_train = torch.tensor(X_train, dtype=torch.float64)
-        Y_train = torch.tensor(Y_train, dtype=torch.float64)
-        X_val = torch.tensor(X_val, dtype=torch.float64)
-        Y_val = torch.tensor(Y_val, dtype=torch.float64)
+    def train_model(self, i_cluster, model, loss_fn, optimizer, scheduler, X_train, X_val, Y_train, Y_val, Yscaler_mean, Yscaler_std):
+        X_train = torch.tensor(X_train.values, dtype=torch.float64)
+        Y_train = torch.tensor(Y_train.values, dtype=torch.float64)
+        X_val = torch.tensor(X_val.values, dtype=torch.float64)
+        Y_val = torch.tensor(Y_val.values, dtype=torch.float64)
         A_element = torch.tensor(self.A_element, dtype=torch.float64)
-        Yscaler_mean = torch.from_numpy(Yscaler_mean)
-        Yscaler_std = torch.from_numpy(Yscaler_std)
+        Yscaler_mean = torch.from_numpy(Yscaler_mean).to(torch.float64)
+        Yscaler_std = torch.from_numpy(Yscaler_std).to(torch.float64)
 
         X_train = X_train.to(self.device)
         Y_train = Y_train.to(self.device)
@@ -167,7 +187,7 @@ class NN_manager(nn.Module):
         stats_sum_yk = np.empty((n_epochs//10,3))
 
         # Array to store elements conservation: mean, min and max
-        stats_A_elements = np.empty((n_epochs//10,4,3))
+        stats_A_elements = np.empty((n_epochs//10,A_element.shape[0],3))
 
         epochs = np.arange(n_epochs)
         epochs_small = epochs[::10]
@@ -184,8 +204,11 @@ class NN_manager(nn.Module):
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
+                # print("Targets stats:", Y_train.min().item(), Y_train.max().item())
+                # print("Preds stats:", y_pred.min().item(), y_pred.max().item())
+                # input("Press Enter to continue.")
 
-            loss_list[epoch] = loss
+            loss_list[epoch] = loss.item()
 
             before_lr = optimizer.param_groups[0]["lr"]
             if self.scheduler_option!="None":
@@ -213,7 +236,7 @@ class NN_manager(nn.Module):
                     stats_sum_yk[epoch//10,2] = sum_yk.max()
 
                     # ELEMENTS CONSERVATION
-                    yval_in = Yscaler_mean + (Yscaler_std + 1e-7)*X_val[:,1:-1]
+                    yval_in = Yscaler_mean + (Yscaler_std + 1e-7)*X_val[:,1:]
                     if self.log_transform_Y:
                         yval_in = torch.exp(yval_in)
                     ye_in = torch.matmul(A_element, torch.transpose(yval_in, 0, 1))
@@ -237,13 +260,67 @@ class NN_manager(nn.Module):
 
     def train_all_clusters(self):
         for i_cluster in range(self.nb_clusters):
-            model = self.create_model(i_cluster)
-            optimizer = optim.Adam(self.model.parameters(), lr=self.lr_ini)
+            X_train, X_val, Y_train, Y_val = self.read_training_data(i_cluster)            
+            Xscaler_mean, Xscaler_var, Yscaler_mean, Yscaler_var = self.get_scalers_stats(i_cluster)
+            model = self.create_model(i_cluster, X_val, Y_val)
+            optimizer = optim.Adam(model.parameters(), lr=self.lr_ini)
             loss_fn = nn.MSELoss()
             # if self.scheduler_option=="ExpLR": # DA: not needed yet (only 1 implemented)
             scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=self.gamma_lr)
             
-            self.train_model(i_cluster, model, loss_fn, optimizer, scheduler)
+            epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements = self.train_model(i_cluster, model, loss_fn, optimizer, scheduler, X_train, X_val, Y_train, Y_val, Yscaler_mean, np.sqrt(Yscaler_var))
+
+            self.plot_losses_conservation(epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements)
+
+            torch.save(model, os.path.join(self.directory, f"cluster{i_cluster}_model.pth"))
+            
+            np.savetxt(os.path.join(self.directory, f"norm_param_X_cluster{i_cluster}.dat"), np.vstack([Xscaler_mean, Xscaler_var]).T)
+            np.savetxt(os.path.join(self.directory, f"norm_param_Y_cluster{i_cluster}.dat"), np.vstack([Yscaler_mean, Yscaler_var]).T)
+
+    def plot_losses_conservation(self, epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements):
+        # LOSSES
+        fig, ax = plt.subplots()
+
+        ax.plot(epochs, loss_list, color="k", label="Training")
+        ax.plot(epochs_small, val_loss_list, color="r", label = "Validation")
+
+        ax.set_yscale('log')
+
+        ax.legend()
+
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("Loss")
+
+        # MASS CONSERVATION
+        fig, ax = plt.subplots()
+
+        ax.plot(epochs_small, stats_sum_yk[:,0], color="k")
+        ax.plot(epochs_small, stats_sum_yk[:,1], color="k", ls="--")
+        ax.plot(epochs_small, stats_sum_yk[:,2], color="k", ls="--")
+
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel(r"$\sum_k \ Y_k$")
+
+        # ELEMENTS CONSERVATION
+        fig, ((ax1, ax2)) = plt.subplots(1,2)
+
+        # C
+        ax1.plot(epochs_small, 100*stats_A_elements[:,0,0], color="k")
+        ax1.plot(epochs_small, 100*stats_A_elements[:,0,1], color="k", ls="--")
+        ax1.plot(epochs_small, 100*stats_A_elements[:,0,2], color="k", ls="--")
+
+        ax1.set_xlabel("Epoch")
+        ax1.set_ylabel(r"$\Delta Y_C$ $(\%$)")
+
+        # H
+        ax2.plot(epochs_small, 100*stats_A_elements[:,1,0], color="k")
+        ax2.plot(epochs_small, 100*stats_A_elements[:,1,1], color="k", ls="--")
+        ax2.plot(epochs_small, 100*stats_A_elements[:,1,2], color="k", ls="--")
+
+        ax2.set_xlabel("Epoch")
+        ax2.set_ylabel(r"$\Delta Y_H$ $(\%)$")
+
+        fig.tight_layout()
 
     def copy_clusterer(self):
         if self.clustering_type=="progvar":
@@ -268,21 +345,21 @@ class NN_manager(nn.Module):
         return X_train, X_val, Y_train, Y_val
     
     def read_scalers(self, i_cluster):
-
-        Xscaler = joblib.load(os.path.join(f"{self.dataset_path:s}/cluster{i_cluster}", "Xscaler.pkl"))
-        Yscaler = joblib.load(os.path.join(f"{self.dataset_path:s}/cluster{i_cluster}", "Yscaler.pkl"))
+        Xscaler = joblib.load(os.path.join(f"{self.dataset_path:s}/cluster{i_cluster}", "Xscaler.save"))
+        Yscaler = joblib.load(os.path.join(f"{self.dataset_path:s}/cluster{i_cluster}", "Yscaler.save"))
 
         return Xscaler, Yscaler
     
-    def get_Yscaler_stats(self, i_cluster):
-        Yscaler = joblib.load(os.path.join(f"{self.dataset_path:s}/cluster{i_cluster}", "processed_database", "Yscaler.pkl"))
+    def get_scalers_stats(self, i_cluster):
+        Xscaler = joblib.load(os.path.join(f"{self.dataset_path:s}/cluster{i_cluster}", "Xscaler.save"))
+        Yscaler = joblib.load(os.path.join(f"{self.dataset_path:s}/cluster{i_cluster}", "Yscaler.save"))
 
-        return Yscaler.mean, Yscaler.std
+        return Xscaler.mean_, Xscaler.var_, Yscaler.mean_, Yscaler.var_
 
     def save_scalers(self, i_cluster, Xscaler, Yscaler):
 
-        joblib.dump(Xscaler, os.path.join(f"{self.directory:s}/cluster{i_cluster}", "Xscaler.pkl"))
-        joblib.dump(Yscaler, os.path.join(f"{self.directory:s}/cluster{i_cluster}", "Yscaler.pkl"))
+        joblib.dump(Xscaler, os.path.join(f"{self.directory:s}/cluster{i_cluster}", "Xscaler.save"))
+        joblib.dump(Yscaler, os.path.join(f"{self.directory:s}/cluster{i_cluster}", "Yscaler.save"))
     
     def save_dtb_params(self):
         data = {
@@ -305,7 +382,7 @@ class NN_manager(nn.Module):
             "networks_files" : self.networks_files
         }
 
-        with open(os.path.join(self.directory,"dtb_params.yaml"), "w") as file:
+        with open(os.path.join(self.directory,"networks_params.yaml"), "w") as file:
             yaml.dump(data, file, default_flow_style=False)
 
     def read_learning_config(self, filepath):
@@ -315,7 +392,7 @@ class NN_manager(nn.Module):
         self.lr_ini = learning_parameters["initial_learning_rate"]
         self.batch_size = learning_parameters["batch_size"]
         self.scheduler_option = "ExpLR"
-        self.gamma_lr = learning_parameters["gamma_lr"]
+        self.gamma_lr = learning_parameters["decay_rate"]
         self.epochs_list = learning_parameters["epochs_list"]
 
         # relics from previous TensorFlow version of ARF --> might be re-integrated later
@@ -335,7 +412,7 @@ class NN_manager(nn.Module):
             "batch_size": self.batch_size,
             "epochs_list": self.epochs_list,
             "scheduler_option": "ExpLR",
-            "gamma_lr": self.gamma_lr,
+            "decay_rate": self.gamma_lr,
             "optimizer": "adam",
             "loss": "MSE"
         }

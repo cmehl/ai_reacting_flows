@@ -666,11 +666,6 @@ class LearningDatabase(object):
         remove_pressure_X = True
         remove_pressure_Y = True
 
-        self.list_X_p_train = []
-        self.list_X_p_val = []
-        self.list_Y_p_train = []
-        self.list_Y_p_val = []
-
         for i_cluster in range(self.nb_clusters):
             
             print("")
@@ -747,24 +742,48 @@ class LearningDatabase(object):
             X_p.columns = [str(col) + '_X' for col in X_p.columns]
             Y_p.columns = [str(col) + '_Y' for col in Y_p.columns]
 
+
+            if not self.with_N_chemistry:
+                X_p = X_p.drop("N2_X", axis=1)
+                Y_p = Y_p.drop("N2_Y", axis=1)
+
             # Train validation split
             X_train, X_val, Y_train, Y_val = train_test_split(X_p, Y_p, train_size=self.train_set_size, random_state=seed)
 
-            # Forcing constant N2
-            n2_cte = True # By default -> To make more general
-            if n2_cte:
-                if self.output_omegas:
-                    Y_train["N2_Y"] = 0.0
-                    Y_val["N2_Y"] = 0.0
-                else:
-                    Y_train["N2_Y"] = X_train["N2_X"]
-                    Y_val["N2_Y"] = X_val["N2_X"]
+            # === SCALERS ===
+            # NORMALIZING X
+            Xscaler = StandardScaler()
+            X_train_array = Xscaler.fit_transform(X_train)
+            X_val_array = Xscaler.transform(X_val)
 
-            #Saving in lists
-            self.list_X_p_train.append(X_train)
-            self.list_X_p_val.append(X_val)
-            self.list_Y_p_train.append(Y_train)
-            self.list_Y_p_val.append(Y_val)
+            X_train = pd.DataFrame(X_train_array, columns=X_train.columns, index=X_train.index)
+            X_val = pd.DataFrame(X_val_array, columns=X_val.columns, index=X_val.index)
+            
+            # NORMALIZING Y
+            Yscaler = StandardScaler()
+            Y_train_array = Yscaler.fit_transform(Y_train)
+            Y_val_array = Yscaler.transform(Y_val)
+
+            Y_train = pd.DataFrame(Y_train_array, columns=Y_train.columns, index=Y_train.index)
+            Y_val = pd.DataFrame(Y_val_array, columns=Y_val.columns, index=Y_val.index)
+            
+            # Saving scalers
+            joblib.dump(Xscaler, f"{self.dtb_folder}/{self.database_name}/cluster{i_cluster}/Xscaler.save")
+            joblib.dump(Yscaler, f"{self.dtb_folder}/{self.database_name}/cluster{i_cluster}/Yscaler.save")
+
+            print(f"X_train mean / std = {X_train.mean()} / {X_train.std()}")
+            print(f"Y_train mean / std = {Y_train.mean()} / {Y_train.std()}")
+            print(f"Y_train max / min = {Y_train.max()} / {Y_train.min()}")
+
+            # Forcing constant N2
+            # n2_cte = not self.with_N_chemistry
+            # if n2_cte:
+            #     if self.output_omegas:
+            #         Y_train["N2_Y"] = 0.0
+            #         Y_val["N2_Y"] = 0.0
+            #     else:
+            #         Y_train["N2_Y"] = X_train["N2_X"]
+            #         Y_val["N2_Y"] = X_val["N2_X"]
 
             # Saving datasets
             print(">> Saving datasets")
@@ -898,6 +917,11 @@ class LearningDatabase(object):
         cbar.ax.set_ylabel('Density')
 
         fig.tight_layout()
+
+        if self.is_resampled:
+            fig.savefig(f"{self.dtb_folder}_density_{var_x}_{var_y}_resampled.png", dpi=400)
+        else:
+            fig.savefig(f"{self.dtb_folder}_density_{var_x}_{var_y}.png", dpi=400)
 
     # Marginal PDF of a given variable in the dataframe
     def plot_pdf_var(self, var):
