@@ -147,6 +147,7 @@ dmypy.json
 /articles/*/*.yaml
 /articles/*/*.png
 /articles/*/*.xlsx
+/articles/*/plots_*
 # VSCode
 *.code-workspace
 .vscode

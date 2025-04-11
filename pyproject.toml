@@ -29,5 +29,6 @@ dependencies = [
     "openpyxl",
     "jupytext",
     "torch==2.6.0",
+    "torchinfo",
     "oyaml"
 ]
