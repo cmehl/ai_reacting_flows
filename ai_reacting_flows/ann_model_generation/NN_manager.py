@@ -49,12 +49,12 @@ class NN_manager():
         self.new_model_folder = networks_parameters["new_model_folder"]
         # Network(s) structure (1 per cluster)
         self.networks_types = networks_parameters["networks_types"] # list[str] (string in model_type.keys()), 1 per cluster
-        self.networks_files = networks_parameters["networks_files"] # list[str], path to network parameters, 1 per cluster
-
-        #
-        # Learning/Optimization parameters
-        #
-        self.read_learning_config(self.run_folder) # DA to CM: same for all clusters ?
+        self.networks_defs = networks_parameters["networks_def"] # list[str], keys to network parameters in "clusters", 1 per cluster
+        self.clusters = networks_parameters["clusters"]
+        self.learning = networks_parameters["learning"] # DA to CM: same learning for all clusters ?
+        self.learning["optimizer"] = "adam"
+        self.learning["loss"] = "MSE"
+        self.learning["scheduler_option"] = "ExpLR"
 
         # Model's path
         self.directory = f"{self.run_folder:s}/MODELS/{self.model_name:s}"
@@ -71,9 +71,9 @@ class NN_manager():
 
         # Get the number of clusters
         self.nb_clusters = len(next(os.walk(self.dataset_path))[1])
-        if ((self.nb_clusters != len(self.networks_files)) or (self.nb_clusters != len(self.networks_files))):
+        if ((self.nb_clusters != len(self.networks_defs)) or (self.nb_clusters != len(self.networks_types))):
             sys.exit((f"ERROR: number of clusters in {self.dataset_path} ({self.nb_clusters}) inconsistent with"
-                     f" \"networks_types\" and/or \"networks_files \" length ({len(self.networks_files)} and {len(self.networks_files)})"))
+                     f" \"networks_types\" and/or \"networks_files \" length ({len(self.networks_defs)} and {len(self.networks_types)})"))
         print("CLUSTERING:")
         print(f">> Number of clusters is: {self.nb_clusters}")
 
@@ -103,18 +103,13 @@ class NN_manager():
         # Saving parameters for later use in testing
         self.save_dtb_params()
         self.save_networks_params()
-        for f in self.networks_files:
-            shutil.copy(f, self.directory)
-        self.save_learning_config()
 
     def create_model(self, i_cluster, X_val, Y_val):
         network_type = self.networks_types[i_cluster]
         if (network_type not in model_type.keys()):
             sys.exit(f"ERROR: network_type \"{network_type}\" does not exist")
         else:
-            network_file = self.networks_files[i_cluster]
-            with open(os.path.join(self.run_folder, network_file), "r") as file:
-                network_parameters = yaml.safe_load(file)
+            network_parameters = self.clusters[self.networks_defs[i_cluster]]
             if (network_type == "MLP"):
                 # Network shapes
                 nb_units_in_layers_list = network_parameters["nb_units_in_layers_list"]
@@ -178,7 +173,7 @@ class NN_manager():
         Yscaler_mean = Yscaler_mean.to(self.device)
         Yscaler_std = Yscaler_std.to(self.device)
 
-        n_epochs = self.epochs_list[i_cluster]
+        n_epochs = self.learning["epochs_list"][i_cluster]
 
         loss_list = np.empty(n_epochs)
         val_loss_list = np.empty(n_epochs//10)
@@ -195,11 +190,11 @@ class NN_manager():
         for epoch in range(n_epochs):
 
             # Training parameters
-            for i in range(0, len(X_train), self.batch_size):
+            for i in range(0, len(X_train), self.learning["batch_size"]):
 
-                Xbatch = X_train[i:i+self.batch_size]
+                Xbatch = X_train[i:i+self.learning["batch_size"]]
                 y_pred = model(Xbatch)
-                ybatch = Y_train[i:i+self.batch_size]
+                ybatch = Y_train[i:i+self.learning["batch_size"]]
                 loss = loss_fn(y_pred, ybatch)
                 optimizer.zero_grad()
                 loss.backward()
@@ -211,7 +206,7 @@ class NN_manager():
             loss_list[epoch] = loss.item()
 
             before_lr = optimizer.param_groups[0]["lr"]
-            if self.scheduler_option!="None":
+            if self.learning["scheduler_option"]!="None":
                 scheduler.step()
             after_lr = optimizer.param_groups[0]["lr"]
 
@@ -263,21 +258,21 @@ class NN_manager():
             X_train, X_val, Y_train, Y_val = self.read_training_data(i_cluster)            
             Xscaler_mean, Xscaler_var, Yscaler_mean, Yscaler_var = self.get_scalers_stats(i_cluster)
             model = self.create_model(i_cluster, X_val, Y_val)
-            optimizer = optim.Adam(model.parameters(), lr=self.lr_ini)
+            optimizer = optim.Adam(model.parameters(), lr=self.learning["initial_learning_rate"])
             loss_fn = nn.MSELoss()
             # if self.scheduler_option=="ExpLR": # DA: not needed yet (only 1 implemented)
-            scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=self.gamma_lr)
+            scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=self.learning["decay_rate"])
             
             epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements = self.train_model(i_cluster, model, loss_fn, optimizer, scheduler, X_train, X_val, Y_train, Y_val, Yscaler_mean, np.sqrt(Yscaler_var))
 
-            self.plot_losses_conservation(epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements)
+            self.plot_losses_conservation(i_cluster, epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements)
 
             torch.save(model, os.path.join(self.directory, f"cluster{i_cluster}_model.pth"))
             
             np.savetxt(os.path.join(self.directory, f"norm_param_X_cluster{i_cluster}.dat"), np.vstack([Xscaler_mean, Xscaler_var]).T)
             np.savetxt(os.path.join(self.directory, f"norm_param_Y_cluster{i_cluster}.dat"), np.vstack([Yscaler_mean, Yscaler_var]).T)
 
-    def plot_losses_conservation(self, epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements):
+    def plot_losses_conservation(self, i_cluster, epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements):
         # LOSSES
         fig, ax = plt.subplots()
 
@@ -291,6 +286,8 @@ class NN_manager():
         ax.set_xlabel("Epoch")
         ax.set_ylabel("Loss")
 
+        plt.savefig( f"{self.directory}/training/cluster_{i_cluster}/training_curves/loss.png")
+
         # MASS CONSERVATION
         fig, ax = plt.subplots()
 
@@ -300,6 +297,8 @@ class NN_manager():
 
         ax.set_xlabel("Epoch")
         ax.set_ylabel(r"$\sum_k \ Y_k$")
+
+        plt.savefig( f"{self.directory}/training/cluster_{i_cluster}/training_curves/mass_conservation.png")
 
         # ELEMENTS CONSERVATION
         fig, ((ax1, ax2)) = plt.subplots(1,2)
@@ -321,6 +320,8 @@ class NN_manager():
         ax2.set_ylabel(r"$\Delta Y_H$ $(\%)$")
 
         fig.tight_layout()
+
+        plt.savefig( f"{self.directory}/training/cluster_{i_cluster}/training_curves/elements_conservation.png")
 
     def copy_clusterer(self):
         if self.clustering_type=="progvar":
@@ -379,22 +380,15 @@ class NN_manager():
             "model_name_suffix" : self.model_name[6:],
             "new_model_folder" : self.new_model_folder,
             "networks_types" : self.networks_types,
-            "networks_files" : self.networks_files
+            "networks_defs" : self.networks_defs,
+            "clusters" : self.clusters,
+            "learning" : self.learning
         }
 
         with open(os.path.join(self.directory,"networks_params.yaml"), "w") as file:
             yaml.dump(data, file, default_flow_style=False)
 
-    def read_learning_config(self, filepath):
-        with open(os.path.join(filepath, "learning_config.yaml"), "r") as file:
-            learning_parameters = yaml.safe_load(file)
-
-        self.lr_ini = learning_parameters["initial_learning_rate"]
-        self.batch_size = learning_parameters["batch_size"]
-        self.scheduler_option = "ExpLR"
-        self.gamma_lr = learning_parameters["decay_rate"]
-        self.epochs_list = learning_parameters["epochs_list"]
-
+    # def read_learning_config(self):
         # relics from previous TensorFlow version of ARF --> might be re-integrated later
         # self.use_final_lr = learning_parameters["use_final_lr"]
         # if (self.use_final_lr):
@@ -404,18 +398,3 @@ class NN_manager():
         # self.decay_steps = learning_parameters["decay_steps"]
         # self.decay_rate = learning_parameters["decay_rate"]
         # self.staircase = learning_parameters["staircase"]
-
-    def save_learning_config(self):
-
-        data = {
-            "initial_learning_rate": self.lr_ini,
-            "batch_size": self.batch_size,
-            "epochs_list": self.epochs_list,
-            "scheduler_option": "ExpLR",
-            "decay_rate": self.gamma_lr,
-            "optimizer": "adam",
-            "loss": "MSE"
-        }
-
-        with open(os.path.join(self.directory,"learning_config.yaml"), "w") as file:
-            yaml.dump(data, file, default_flow_style=False)

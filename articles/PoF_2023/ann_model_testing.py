@@ -11,9 +11,9 @@ testing_parameters["threshold"] = 1.0e-10
 
 testing_parameters["pv_species"] = ["H2O"]
 
-testing_parameters["yk_renormalization"] = False
+testing_parameters["yk_renormalization"] = True
 
-testing_parameters["hybrid_ann_cvode"] = False             # CVODE helping ANN based on a conservation criterion
+testing_parameters["hybrid_ann_cvode"] = True             # CVODE helping ANN based on a conservation criterion
 testing_parameters["hybrid_ann_cvode_tol"] = 5.0e-05      # Tolerance for the CVODE switching
 
 test = NNTesting(testing_parameters)
