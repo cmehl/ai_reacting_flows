@@ -43,6 +43,7 @@ data_gen_parameters["ML_inference_flag"] = False
 def test_h2_dtb_computation():
     # required for CI on GitHub
     current_dir = os.path.dirname(__file__)
+    os.chdir(current_dir)
     data_gen_parameters["mech_file"] = f"{current_dir:s}{data_gen_parameters['mech_file']:s}"
     data_gen_parameters["inlets_file"] = f"{current_dir:s}{data_gen_parameters['inlets_file']:s}"
 

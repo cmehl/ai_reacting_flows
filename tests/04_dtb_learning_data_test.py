@@ -29,6 +29,8 @@ dtb_processing_parameters["clusterize_on"] = 'phys'
 dtb_processing_parameters["train_set_size"] = 0.75
 
 def test_dtvar_dtb_processing():
+    current_dir = os.path.dirname(__file__)
+    os.chdir(current_dir)
     with open("dtb_processing.yaml", "w") as file:
         yaml.dump(dtb_processing_parameters, file, default_flow_style=False)
 

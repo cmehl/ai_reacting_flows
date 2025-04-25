@@ -31,6 +31,7 @@ dtb_processing_parameters["train_set_size"] = 0.75
 def test_dtb_resampling():
     # required for CI on GitHub
     current_dir = os.path.dirname(__file__)
+    os.chdir(current_dir)
 
     with open("dtb_processing.yaml", "w") as file:
         yaml.dump(dtb_processing_parameters, file, default_flow_style=False)
