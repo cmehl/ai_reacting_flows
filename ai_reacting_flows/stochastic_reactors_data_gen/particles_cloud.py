@@ -171,7 +171,7 @@ class ParticlesCloud(object):
             read_mixing = data_gen_parameters["read_mixing"]
             do_CURL_rate = True if "CURL_MODIFIED" in self.mixing_model else False
             if read_mixing:
-                with open(f"{self.results_folder:s}/pairs_list.pkl", "rb") as f:
+                with open(f"{self.run_folder:s}/pairs_list.pkl", "rb") as f:
                     self.pairs_list = pickle.load(f)
                 if do_CURL_rate:
                     with open(f"{self.run_folder:s}/CURL_rate_list.pkl", "rb") as f:
