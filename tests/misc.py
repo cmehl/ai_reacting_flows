@@ -141,10 +141,7 @@ def check_h2_training_histograms(dtb_folder, histo_folder, tol):
             # references histogram generated using the following code (to use again if reference is to change)
             # counts, bin_edges = np.histogram(data[col], bins=100)
             # bin_edges[-1] = bin_edges[-1] * np.float64(1.01) if bin_edges[-1] > 0.0 else bin_edges[-1] * np.float64(0.99)
-            # if col not in ["Temperature_X", "Temperature_Y"]:
-            #     bin_edges[-1] = np.min([bin_edges[-1], 1.0], axis=0)
-            # else:
-            #     bin_edges[0] = bin_edges[0] * np.float64(0.99) if bin_edges[0] > 0.0 else bin_edges[0] * np.float64(1.01)
+            # bin_edges[0] = bin_edges[0] * np.float64(0.99) if bin_edges[0] > 0.0 else bin_edges[0] * np.float64(1.01)
             # counts, _ = np.histogram(data[col], bins=bin_edges)
             # np.savez(f"{histo_folder:s}/{file.split('.')[0]:s}_{col:s}_hist.npz", counts=counts, bin_edges=bin_edges)
 
@@ -155,7 +152,7 @@ def check_h2_training_histograms(dtb_folder, histo_folder, tol):
             #threshold found using the following code
             # noise = data[col] * (1.0 + np.random.normal(loc=0,scale=0.01,size=len(data)))
             # counts, _ = np.histogram(noise, bins=bin_edges_ref)
-            # print(f"distance for {col:s} is {wasserstein_distance(counts, counts_ref):f}")
+            # print(f"noise distance for {col:s} is {wasserstein_distance(counts, counts_ref):f}")
 
             # if col in ["Temperature","H2","O2"]:
             #     print(f"Histograms for {col:s}:")

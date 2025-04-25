@@ -142,6 +142,7 @@ dmypy.json
 /tests/dtb_*_test.py
 /tests/stoch_dtb*_test.py
 /tests/*.png
+/tests/*.yaml
 /articles/*/STOCH_DTB_*
 /articles/*/MODELS/*
 /articles/*/*.png
