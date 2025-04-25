@@ -4,7 +4,7 @@ import shutil
 import pickle
 import shelve
 import random
-
+import oyaml as yaml
 import joblib
 import pandas as pd
 import numpy as np
@@ -32,27 +32,38 @@ sns.set_style("darkgrid")
 
 class LearningDatabase(object):
 
-    def __init__(self, dtb_processing_parameters):
+    def __init__(self):
 
         # Input parameters
-        # Folder where result are stored
         self.run_folder = os.getcwd()
-        self.dtb_folder = f"{self.run_folder:s}/STOCH_DTB_" + dtb_processing_parameters["results_folder_suffix"]
+        with open(os.path.join(self.run_folder, "dtb_processing.yaml"), "r") as file:
+            dtb_processing_parameters = yaml.safe_load(file)
+        
+        # Folder where results are stored
+        self.dtb_folder = f"{self.run_folder:s}/STOCH_DTB_" + dtb_processing_parameters["dtb_folder_suffix"]
+
+        with open(os.path.join(self.dtb_folder, "dtb_params.yaml"), "r") as file:
+            data_gen_parameters = yaml.safe_load(file)
+
+        self.dt_var = data_gen_parameters['dt_var']
+        self.input_dtb_file = data_gen_parameters['dtb_file']
+        self.detailed_mechanism  = data_gen_parameters["mech_file"]
+        self.fuel  = data_gen_parameters["fuel"]
+
         self.database_name = dtb_processing_parameters["database_name"]
         self.log_transform_X  = dtb_processing_parameters["log_transform_X"]
         self.log_transform_Y  = dtb_processing_parameters["log_transform_Y"]
         self.threshold  = dtb_processing_parameters["threshold"]
         self.output_omegas  = dtb_processing_parameters["output_omegas"]
-        self.detailed_mechanism  = dtb_processing_parameters["mech_file"]
-        self.fuel  = dtb_processing_parameters["fuel"]
         self.with_N_chemistry = dtb_processing_parameters["with_N_chemistry"]
-        self.dt_var = dtb_processing_parameters['dt_var']
-        self.input_dtb_file = dtb_processing_parameters['dtb_file']
         self.clusterize_on = dtb_processing_parameters['clusterize_on']
         self.train_set_size = dtb_processing_parameters['train_set_size']
+        self.T_threshold  = dtb_processing_parameters["T_threshold"]
+        self.clustering_method = dtb_processing_parameters["clustering_method"]
+        self.nb_clusters = dtb_processing_parameters["nb_clusters"]
 
         # Check if mechanism is in YAML format
-        if self.detailed_mechanism.endswith("yaml") is False:
+        if not self.detailed_mechanism.endswith("yaml"):
             sys.exit("ERROR: chemical mechanism should be in yaml format !")
 
         # Read H5 files to get databases in pandas format
@@ -76,25 +87,11 @@ class LearningDatabase(object):
         os.mkdir(self.dtb_folder + "/" + self.database_name)
         os.mkdir(self.dtb_folder + "/" + self.database_name + "/cluster0")
 
-        # Saving inputs in file to be read when building ANN
-        shelfFile = shelve.open(self.dtb_folder + "/" + self.database_name + "/dtb_params")
-        #
-        shelfFile["threshold"] = self.threshold
-        shelfFile["log_transform_X"] = self.log_transform_X
-        shelfFile["log_transform_Y"] = self.log_transform_Y
-        shelfFile["output_omegas"] = self.output_omegas
-        shelfFile["with_N_chemistry"] = self.with_N_chemistry
-        shelfFile["clusterization_method"] = None   # Default value, erased if clustering is done
-        shelfFile["clustered_on"] = self.clusterize_on
-        #
-        shelfFile.close()
-
         # By default, we attribute cluster 0 to everyone
         self.X["cluster"] = 0.0
 
         # Clusterized datasets
         self.clusterized_dataset = False
-        self.nb_clusters = 1
 
         self.is_processed = False
 
@@ -103,6 +100,7 @@ class LearningDatabase(object):
 
         # Saving detailed mechanism in database folder
         shutil.copy(self.detailed_mechanism, self.dtb_folder + "/" + self.database_name + "/mech_detailed.yaml")
+        shutil.copy(os.path.join(self.run_folder, "dtb_processing.yaml"), self.dtb_folder + "/" + self.database_name + "/dtb_processing.yaml")
 
         self.is_reduced = False
         self.is_resampled = False
@@ -167,14 +165,13 @@ class LearningDatabase(object):
 
         print("\n H5PY dataset created")
 
-
-    def apply_temperature_threshold(self, T_threshold):
+    def apply_temperature_threshold(self):
 
         if self.clusterized_dataset:
             sys.exit("ERROR: Temperature threshold should be performed before clustering")
 
         # Mask
-        is_above_temp = self.X["Temperature"]>T_threshold
+        is_above_temp = self.X["Temperature"]>self.T_threshold
 
         # Apply mask
         self.X = self.X[is_above_temp]
@@ -184,19 +181,13 @@ class LearningDatabase(object):
         self.X = self.X.reset_index(drop=True)
         self.Y = self.Y.reset_index(drop=True)
 
-    def clusterize_dataset(self, clusterization_method, nb_clusters, c_bounds = []):
+    def clusterize_dataset(self, c_bounds = []):
 
         if self.clusterize_on == 'double':
-            nb_clusters_phys, nb_clusters_time = nb_clusters
+            nb_clusters_phys, nb_clusters_time = self.nb_clusters
             nb_clusters_tot = nb_clusters_phys * nb_clusters_time
         else :
-            nb_clusters_tot = nb_clusters
-        # Saving clustering method
-        shelfFile = shelve.open(self.dtb_folder + "/" + self.database_name + "/dtb_params")
-        #
-        shelfFile["clusterization_method"] = clusterization_method
-        #
-        shelfFile.close()
+            nb_clusters_tot = self.nb_clusters
 
         assert (not self.is_processed)
 
@@ -206,9 +197,7 @@ class LearningDatabase(object):
         for i in range(1, nb_clusters_tot):
             os.mkdir(self.dtb_folder + "/" + self.database_name + f"/cluster{i}")
 
-        self.nb_clusters_tot = nb_clusters_tot
-
-        if clusterization_method=="progvar":
+        if self.clustering_method=="progvar":
 
             assert self.clusterize_on != 'double'
             assert nb_clusters_tot == len(c_bounds) - 1
@@ -227,7 +216,7 @@ class LearningDatabase(object):
                         row["cluster"] = i
                 
 
-        elif clusterization_method=="kmeans":
+        elif self.clustering_method=="kmeans":
             
             spec_list = self.species_names.to_list()
             spec_list.insert(0,"Temperature")
@@ -666,11 +655,6 @@ class LearningDatabase(object):
         remove_pressure_X = True
         remove_pressure_Y = True
 
-        self.list_X_p_train = []
-        self.list_X_p_val = []
-        self.list_Y_p_train = []
-        self.list_Y_p_val = []
-
         for i_cluster in range(self.nb_clusters):
             
             print("")
@@ -747,24 +731,48 @@ class LearningDatabase(object):
             X_p.columns = [str(col) + '_X' for col in X_p.columns]
             Y_p.columns = [str(col) + '_Y' for col in Y_p.columns]
 
+
+            if not self.with_N_chemistry:
+                X_p = X_p.drop("N2_X", axis=1)
+                Y_p = Y_p.drop("N2_Y", axis=1)
+
             # Train validation split
             X_train, X_val, Y_train, Y_val = train_test_split(X_p, Y_p, train_size=self.train_set_size, random_state=seed)
 
-            # Forcing constant N2
-            n2_cte = True # By default -> To make more general
-            if n2_cte:
-                if self.output_omegas:
-                    Y_train["N2_Y"] = 0.0
-                    Y_val["N2_Y"] = 0.0
-                else:
-                    Y_train["N2_Y"] = X_train["N2_X"]
-                    Y_val["N2_Y"] = X_val["N2_X"]
+            # === SCALERS ===
+            # NORMALIZING X
+            Xscaler = StandardScaler()
+            X_train_array = Xscaler.fit_transform(X_train)
+            X_val_array = Xscaler.transform(X_val)
 
-            #Saving in lists
-            self.list_X_p_train.append(X_train)
-            self.list_X_p_val.append(X_val)
-            self.list_Y_p_train.append(Y_train)
-            self.list_Y_p_val.append(Y_val)
+            X_train = pd.DataFrame(X_train_array, columns=X_train.columns, index=X_train.index)
+            X_val = pd.DataFrame(X_val_array, columns=X_val.columns, index=X_val.index)
+            
+            # NORMALIZING Y
+            Yscaler = StandardScaler()
+            Y_train_array = Yscaler.fit_transform(Y_train)
+            Y_val_array = Yscaler.transform(Y_val)
+
+            Y_train = pd.DataFrame(Y_train_array, columns=Y_train.columns, index=Y_train.index)
+            Y_val = pd.DataFrame(Y_val_array, columns=Y_val.columns, index=Y_val.index)
+            
+            # Saving scalers
+            joblib.dump(Xscaler, f"{self.dtb_folder}/{self.database_name}/cluster{i_cluster}/Xscaler.save")
+            joblib.dump(Yscaler, f"{self.dtb_folder}/{self.database_name}/cluster{i_cluster}/Yscaler.save")
+
+            print(f"X_train mean / std = {X_train.mean()} / {X_train.std()}")
+            print(f"Y_train mean / std = {Y_train.mean()} / {Y_train.std()}")
+            print(f"Y_train max / min = {Y_train.max()} / {Y_train.min()}")
+
+            # Forcing constant N2
+            # n2_cte = not self.with_N_chemistry
+            # if n2_cte:
+            #     if self.output_omegas:
+            #         Y_train["N2_Y"] = 0.0
+            #         Y_val["N2_Y"] = 0.0
+            #     else:
+            #         Y_train["N2_Y"] = X_train["N2_X"]
+            #         Y_val["N2_Y"] = X_val["N2_X"]
 
             # Saving datasets
             print(">> Saving datasets")
@@ -793,7 +801,7 @@ class LearningDatabase(object):
 
             print(f"\n => There are {size_total} points overall")
         else:
-            for i in range(self.nb_clusters_tot):
+            for i in range(self.nb_clusters):
 
                 size_cluster_i = self.X[self.X["cluster"]==i].shape[0]
                 size_total += size_cluster_i
@@ -898,6 +906,11 @@ class LearningDatabase(object):
         cbar.ax.set_ylabel('Density')
 
         fig.tight_layout()
+
+        if self.is_resampled:
+            fig.savefig(f"{self.dtb_folder}_density_{var_x}_{var_y}_resampled.png", dpi=400)
+        else:
+            fig.savefig(f"{self.dtb_folder}_density_{var_x}_{var_y}.png", dpi=400)
 
     # Marginal PDF of a given variable in the dataframe
     def plot_pdf_var(self, var):

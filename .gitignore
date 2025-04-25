@@ -139,10 +139,15 @@ dmypy.json
 /notebooks/*.ipynb
 /tests/STOCH_DTB_*
 /tests/test_gen_dtb.py
-/tests/dtb_preprocessing_test.py
-/tests/stoch_dtb_test.py
+/tests/dtb_*_test.py
+/tests/stoch_dtb*_test.py
 /tests/*.png
-
+/tests/*.yaml
+/articles/*/STOCH_DTB_*
+/articles/*/MODELS/*
+/articles/*/*.png
+/articles/*/*.xlsx
+/articles/*/plots_*
 # VSCode
 *.code-workspace
 .vscode
