@@ -1,4 +1,5 @@
 import os
+import oyaml as yaml
 
 import shutil
 from time import perf_counter
@@ -19,12 +20,16 @@ h5py.get_config().mpi
 # Disabling TF warning (in particular warnings related to unused CPU features)
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
-def generate_stochastic_database(data_gen_parameters, comm : 'MPI.Comm'):
+def generate_stochastic_database(comm : 'MPI.Comm'):
 
     # Initial computation time
     t_ini = perf_counter()
 
     rank = comm.Get_rank()
+
+    run_folder = os.getcwd()
+    with open(os.path.join(run_folder, "dtb_params.yaml"), "r") as file:
+        data_gen_parameters = yaml.safe_load(file)
 
     #==========================================================================
     # CATCHING SOME INPUT ERRORS
@@ -118,6 +123,8 @@ def generate_stochastic_database(data_gen_parameters, comm : 'MPI.Comm'):
 
     # End computation time
     t_end = perf_counter()
+
+    shutil.copy(os.path.join(run_folder, "dtb_params.yaml"), f"{run_folder:s}/STOCH_DTB_{data_gen_parameters['results_folder_suffix']}/dtb_params.yaml")
 
     if rank==0:
         #  End of simulation printing

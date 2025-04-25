@@ -144,7 +144,6 @@ dmypy.json
 /tests/*.png
 /articles/*/STOCH_DTB_*
 /articles/*/MODELS/*
-/articles/*/*.yaml
 /articles/*/*.png
 /articles/*/*.xlsx
 /articles/*/plots_*

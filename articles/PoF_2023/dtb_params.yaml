@@ -1,0 +1,19 @@
+mech_file: ../../data/chemical_mechanisms/mech_H2.yaml
+inlets_file: inlets_file.xlsx
+results_folder_suffix: H2_POF_2023
+dtb_file: solutions.h5
+build_ml_dtb: true
+time_step: 5.0e-07
+time_max: 0.004
+mixing_model: CURL_MODIFIED
+mixing_time: 0.0004
+read_mixing: false
+T_threshold: 600.0
+calc_progvar: true
+pv_species:
+- H2O
+fuel:
+- H2
+dt_var: false
+calc_mean_traj: false
+ML_inference_flag: false

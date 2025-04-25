@@ -4,7 +4,7 @@ import shutil
 import pickle
 import shelve
 import random
-
+import oyaml as yaml
 import joblib
 import pandas as pd
 import numpy as np
@@ -32,27 +32,38 @@ sns.set_style("darkgrid")
 
 class LearningDatabase(object):
 
-    def __init__(self, dtb_processing_parameters):
+    def __init__(self):
 
         # Input parameters
-        # Folder where result are stored
         self.run_folder = os.getcwd()
-        self.dtb_folder = f"{self.run_folder:s}/STOCH_DTB_" + dtb_processing_parameters["results_folder_suffix"]
+        with open(os.path.join(self.run_folder, "dtb_processing.yaml"), "r") as file:
+            dtb_processing_parameters = yaml.safe_load(file)
+        
+        # Folder where results are stored
+        self.dtb_folder = f"{self.run_folder:s}/STOCH_DTB_" + dtb_processing_parameters["dtb_folder_suffix"]
+
+        with open(os.path.join(self.dtb_folder, "dtb_params.yaml"), "r") as file:
+            data_gen_parameters = yaml.safe_load(file)
+
+        self.dt_var = data_gen_parameters['dt_var']
+        self.input_dtb_file = data_gen_parameters['dtb_file']
+        self.detailed_mechanism  = data_gen_parameters["mech_file"]
+        self.fuel  = data_gen_parameters["fuel"]
+
         self.database_name = dtb_processing_parameters["database_name"]
         self.log_transform_X  = dtb_processing_parameters["log_transform_X"]
         self.log_transform_Y  = dtb_processing_parameters["log_transform_Y"]
         self.threshold  = dtb_processing_parameters["threshold"]
         self.output_omegas  = dtb_processing_parameters["output_omegas"]
-        self.detailed_mechanism  = dtb_processing_parameters["mech_file"]
-        self.fuel  = dtb_processing_parameters["fuel"]
         self.with_N_chemistry = dtb_processing_parameters["with_N_chemistry"]
-        self.dt_var = dtb_processing_parameters['dt_var']
-        self.input_dtb_file = dtb_processing_parameters['dtb_file']
         self.clusterize_on = dtb_processing_parameters['clusterize_on']
         self.train_set_size = dtb_processing_parameters['train_set_size']
+        self.T_threshold  = dtb_processing_parameters["T_threshold"]
+        self.clustering_method = dtb_processing_parameters["clustering_method"]
+        self.nb_clusters = dtb_processing_parameters["nb_clusters"]
 
         # Check if mechanism is in YAML format
-        if self.detailed_mechanism.endswith("yaml") is False:
+        if not self.detailed_mechanism.endswith("yaml"):
             sys.exit("ERROR: chemical mechanism should be in yaml format !")
 
         # Read H5 files to get databases in pandas format
@@ -76,25 +87,11 @@ class LearningDatabase(object):
         os.mkdir(self.dtb_folder + "/" + self.database_name)
         os.mkdir(self.dtb_folder + "/" + self.database_name + "/cluster0")
 
-        # Saving inputs in file to be read when building ANN
-        shelfFile = shelve.open(self.dtb_folder + "/" + self.database_name + "/dtb_params")
-        #
-        shelfFile["threshold"] = self.threshold
-        shelfFile["log_transform_X"] = self.log_transform_X
-        shelfFile["log_transform_Y"] = self.log_transform_Y
-        shelfFile["output_omegas"] = self.output_omegas
-        shelfFile["with_N_chemistry"] = self.with_N_chemistry
-        shelfFile["clusterization_method"] = None   # Default value, erased if clustering is done
-        shelfFile["clustered_on"] = self.clusterize_on
-        #
-        shelfFile.close()
-
         # By default, we attribute cluster 0 to everyone
         self.X["cluster"] = 0.0
 
         # Clusterized datasets
         self.clusterized_dataset = False
-        self.nb_clusters = 1
 
         self.is_processed = False
 
@@ -103,6 +100,7 @@ class LearningDatabase(object):
 
         # Saving detailed mechanism in database folder
         shutil.copy(self.detailed_mechanism, self.dtb_folder + "/" + self.database_name + "/mech_detailed.yaml")
+        shutil.copy(os.path.join(self.run_folder, "dtb_processing.yaml"), self.dtb_folder + "/" + self.database_name + "/dtb_processing.yaml")
 
         self.is_reduced = False
         self.is_resampled = False
@@ -167,14 +165,13 @@ class LearningDatabase(object):
 
         print("\n H5PY dataset created")
 
-
-    def apply_temperature_threshold(self, T_threshold):
+    def apply_temperature_threshold(self):
 
         if self.clusterized_dataset:
             sys.exit("ERROR: Temperature threshold should be performed before clustering")
 
         # Mask
-        is_above_temp = self.X["Temperature"]>T_threshold
+        is_above_temp = self.X["Temperature"]>self.T_threshold
 
         # Apply mask
         self.X = self.X[is_above_temp]
@@ -184,19 +181,13 @@ class LearningDatabase(object):
         self.X = self.X.reset_index(drop=True)
         self.Y = self.Y.reset_index(drop=True)
 
-    def clusterize_dataset(self, clusterization_method, nb_clusters, c_bounds = []):
+    def clusterize_dataset(self, c_bounds = []):
 
         if self.clusterize_on == 'double':
-            nb_clusters_phys, nb_clusters_time = nb_clusters
+            nb_clusters_phys, nb_clusters_time = self.nb_clusters
             nb_clusters_tot = nb_clusters_phys * nb_clusters_time
         else :
-            nb_clusters_tot = nb_clusters
-        # Saving clustering method
-        shelfFile = shelve.open(self.dtb_folder + "/" + self.database_name + "/dtb_params")
-        #
-        shelfFile["clusterization_method"] = clusterization_method
-        #
-        shelfFile.close()
+            nb_clusters_tot = self.nb_clusters
 
         assert (not self.is_processed)
 
@@ -206,9 +197,7 @@ class LearningDatabase(object):
         for i in range(1, nb_clusters_tot):
             os.mkdir(self.dtb_folder + "/" + self.database_name + f"/cluster{i}")
 
-        self.nb_clusters = nb_clusters_tot
-
-        if clusterization_method=="progvar":
+        if self.clustering_method=="progvar":
 
             assert self.clusterize_on != 'double'
             assert nb_clusters_tot == len(c_bounds) - 1
@@ -227,7 +216,7 @@ class LearningDatabase(object):
                         row["cluster"] = i
                 
 
-        elif clusterization_method=="kmeans":
+        elif self.clustering_method=="kmeans":
             
             spec_list = self.species_names.to_list()
             spec_list.insert(0,"Temperature")

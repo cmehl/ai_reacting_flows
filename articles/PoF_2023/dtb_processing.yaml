@@ -1,0 +1,12 @@
+dtb_folder_suffix: H2_POF_2023
+database_name: dtb_resampled
+log_transform_X: 1
+log_transform_Y: 1
+threshold: 1.0e-10
+T_threshold: 600.0
+output_omegas: false
+with_N_chemistry: false
+clusterize_on: phys
+train_set_size: 0.75
+clustering_method: kmeans
+nb_clusters: 2

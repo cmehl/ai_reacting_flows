@@ -5,15 +5,9 @@ testing_parameters = {}
 testing_parameters["models_folder"] = "MODEL_H2_POF_2023"     # Folder for the ML model
 testing_parameters["spec_to_plot"] = ["N2", "H2", "O2", "H2O", "H2O2"]          # List of species to plot
 
-testing_parameters["log_transform_X"] = 1
-testing_parameters["log_transform_Y"] = 1
-testing_parameters["threshold"] = 1.0e-10
-
-testing_parameters["pv_species"] = ["H2O"]
-
 testing_parameters["yk_renormalization"] = True
 
-testing_parameters["hybrid_ann_cvode"] = True             # CVODE helping ANN based on a conservation criterion
+testing_parameters["hybrid_ann_cvode"] = False             # CVODE helping ANN based on a conservation criterion
 testing_parameters["hybrid_ann_cvode_tol"] = 5.0e-05      # Tolerance for the CVODE switching
 
 test = NNTesting(testing_parameters)

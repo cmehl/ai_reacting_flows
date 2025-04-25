@@ -275,7 +275,7 @@ def get_molar_mass_atomic_matrix(species, fuel, with_N2_chemistry):
         A_atomic[:,k] /=  mol_weights[k]
 
     # Carbon not considered if fuel -> To make more general (get which atoms are in the list of species)
-    if fuel=="H2":
+    if fuel==["H2"]:
         A_atomic = A_atomic[1:,:]
 
     if with_N2_chemistry is False:

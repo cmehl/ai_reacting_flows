@@ -25,17 +25,32 @@ class NNTesting():
         self.device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
 
         self.verbose = True
-        
+
+        self.run_folder = os.getcwd()
         # Model folder name
-        self.models_folder = testing_parameters["models_folder"]
+        self.models_folder = f"{self.run_folder}/MODELS/{testing_parameters['models_folder']}"
+        with open(os.path.join(self.models_folder, "networks_params.yaml"), "r") as file:
+            networks_parameters = yaml.safe_load(file)
+        self.dataset_path = os.path.join(self.run_folder, networks_parameters["database_path"])
+        
+        with open(f"{self.dataset_path}/dtb_processing.yaml", "r") as file:
+            dtb_processing_params = yaml.safe_load(file)
+        self.log_transform_X = dtb_processing_params["log_transform_X"]
+        self.log_transform_Y = dtb_processing_params["log_transform_Y"]
+        self.threshold = dtb_processing_params["threshold"]
+        self.remove_N2 = not dtb_processing_params["with_N_chemistry"]
+        self.clustering_method  = dtb_processing_params["clustering_method"]
+        self.output_omegas = dtb_processing_params["output_omegas"]
+
+        # Getting parameters from ANN model
+        with open(os.path.join(self.run_folder, f"STOCH_DTB_{dtb_processing_params['dtb_folder_suffix']}","dtb_params.yaml"), "r") as file:
+            dtb_parameters = yaml.safe_load(file)
+        
+        self.fuel = dtb_parameters["fuel"][0] # fuel is a list, testing only takes 1 component fuel so far
+        self.mech = dtb_parameters["mech_file"]
 
         # Chemistry (maybe an information to get from model folder ?)
         self.spec_to_plot = testing_parameters["spec_to_plot"]
-
-        # should be in a .yaml file of previous step (for consistency with dtb processing)
-        self.log_transform_X = testing_parameters["log_transform_X"]
-        self.log_transform_Y = testing_parameters["log_transform_Y"]
-        self.threshold = testing_parameters["threshold"]
 
         # Hybrid computation
         self.hybrid_ann_cvode = testing_parameters["hybrid_ann_cvode"]
@@ -44,20 +59,7 @@ class NNTesting():
         # Renormalization of Yk to satisfy elements conservation
         self.yk_renormalization = testing_parameters["yk_renormalization"]
 
-        # Getting parameters from ANN model
-        self.run_folder = os.getcwd()
-        with open(os.path.join(self.run_folder, "dtb_params.yaml"), "r") as file: # DA to CM: should be the same file for previous steps
-            dtb_parameters = yaml.safe_load(file)
-        
-        self.models_folder = f"{self.run_folder}/MODELS/{self.models_folder}"
-        
-        self.dtb_folder = dtb_parameters["dataset_path"]
-        self.mech = dtb_parameters["mechanism"]
-        self.fuel = dtb_parameters["fuel"]
-        self.remove_N2 = dtb_parameters["remove_N2"]
-        self.clustering_method = dtb_parameters["clusterization_method"]
-        self.output_omegas = False
-        self.hard_constraints_model = 0
+        self.hard_constraints_model = 0 # DA: no longer of use ?
 
         # CANTERA solution object needed to access species indices
         self.gas = ct.Solution(self.mech)
@@ -97,7 +99,7 @@ class NNTesting():
            self.load_clustering_algorithm()
 
         # Progress variable definition (we do it in any case, even if no clustering based on progress variable)
-        self.pv_species = testing_parameters["pv_species"] # should be read from a dtb_processing file
+        self.pv_species = dtb_parameters["pv_species"]
         self.pv_ind = []
         for i in range(len(self.pv_species)):
             self.pv_ind.append(self.gas.species_index(self.pv_species[i]))
@@ -508,8 +510,8 @@ class NNTesting():
         self.Yscaler_list = []
 
         for i in range(self.nb_clusters):
-            Xscaler = joblib.load(f"{self.dtb_folder}/cluster{i}/Xscaler.save")
-            Yscaler = joblib.load(f"{self.dtb_folder}/cluster{i}/Yscaler.save") 
+            Xscaler = joblib.load(f"{self.dataset_path}/cluster{i}/Xscaler.save")
+            Yscaler = joblib.load(f"{self.dataset_path}/cluster{i}/Yscaler.save") 
 
             self.Xscaler_list.append(Xscaler)
             self.Yscaler_list.append(Yscaler)
@@ -797,11 +799,11 @@ class NNTesting():
         gas_reduced = ct.Solution(self.reduced_mechanism)
 
         # Adding fictive species by conservation of properties
-        A_atomic = utils.get_molar_mass_atomic_matrix(gas.species_names, self.fuel, not self.remove_N2)
+        A_atomic = utils.get_molar_mass_atomic_matrix(gas.species_names, [self.fuel], not self.remove_N2)
         Ya = np.dot(A_atomic, Y_ref.transpose()).transpose()
         h = np.sum(gas.partial_molar_enthalpies/gas.molecular_weights*Y_ref, axis=1)
         #
-        A_atomic_reduced = utils.get_molar_mass_atomic_matrix(gas_reduced.species_names, self.fuel, not self.remove_N2)
+        A_atomic_reduced = utils.get_molar_mass_atomic_matrix(gas_reduced.species_names, [self.fuel], not self.remove_N2)
         Ya_reduced = np.dot(A_atomic_reduced, Y_reduced.transpose()).transpose()
         h_reduced = np.sum(gas_reduced.partial_molar_enthalpies/gas_reduced.molecular_weights*Y_reduced, axis=1)
         #
@@ -810,7 +812,7 @@ class NNTesting():
         #
         Delta = np.concatenate([Delta_Ya, Delta_h.reshape(-1,1)], axis=1)
         #
-        A_atomic_fictive = utils.get_molar_mass_atomic_matrix(self.fictive_species, self.fuel, not self.remove_N2)
+        A_atomic_fictive = utils.get_molar_mass_atomic_matrix(self.fictive_species, [self.fuel], not self.remove_N2)
         partial_molar_enthalpies_fictive = np.empty(self.nb_spec_fictive)
         molecular_weights_fictive = np.empty(self.nb_spec_fictive)
         for i, spec in enumerate(self.fictive_species):

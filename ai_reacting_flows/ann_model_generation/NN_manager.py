@@ -26,24 +26,27 @@ class NN_manager():
         self.device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
         
         self.run_folder = os.getcwd()
-        with open(os.path.join(self.run_folder, "dtb_params.yaml"), "r") as file: # DA to CM: should be the same file for previous steps
-            dtb_parameters = yaml.safe_load(file)
-        #
-        # Database and data processing related inputs
-        #
-        self.fuel = dtb_parameters["fuel"]
-        self.mechanism = dtb_parameters["mechanism"]
-        # Data processing
-        self.dataset_path = dtb_parameters["dataset_path"] # DA to CM: name should be common with previous steps
-        self.remove_N2 = dtb_parameters["remove_N2"]
-        self.log_transform_Y = dtb_parameters["log_transform_Y"]
-        self.clustering_type = dtb_parameters["clusterization_method"]
-
         #
         # Networks structures parameters
         #
         with open(os.path.join(self.run_folder, "networks_params.yaml"), "r") as file:
             networks_parameters = yaml.safe_load(file)
+        self.dataset_path = os.path.join(self.run_folder, networks_parameters["database_path"])
+        
+        with open(f"{self.dataset_path}/dtb_processing.yaml", "r") as file:
+            dtb_processing_params = yaml.safe_load(file)
+        
+        self.remove_N2 = not dtb_processing_params["with_N_chemistry"]
+        self.log_transform_Y = dtb_processing_params["log_transform_Y"]
+        self.clustering_type = dtb_processing_params["clustering_method"]
+        self.nb_clusters = dtb_processing_params["nb_clusters"]
+
+        with open(os.path.join(self.run_folder, f"STOCH_DTB_{dtb_processing_params['dtb_folder_suffix']}","dtb_params.yaml"), "r") as file:
+            dtb_parameters = yaml.safe_load(file)
+
+        self.fuel = dtb_parameters["fuel"]
+        self.mechanism = dtb_parameters["mech_file"]
+
         # Model folder name
         self.model_name = "MODEL_" + networks_parameters["model_name_suffix"]
         self.new_model_folder = networks_parameters["new_model_folder"]
@@ -70,7 +73,7 @@ class NN_manager():
             print(f">> Existing model folder {self.directory} is used. \n")
 
         # Get the number of clusters
-        self.nb_clusters = len(next(os.walk(self.dataset_path))[1])
+        assert (self.nb_clusters == len(next(os.walk(self.dataset_path))[1]))
         if ((self.nb_clusters != len(self.networks_defs)) or (self.nb_clusters != len(self.networks_types))):
             sys.exit((f"ERROR: number of clusters in {self.dataset_path} ({self.nb_clusters}) inconsistent with"
                      f" \"networks_types\" and/or \"networks_files \" length ({len(self.networks_defs)} and {len(self.networks_types)})"))
@@ -80,6 +83,8 @@ class NN_manager():
         # We copy the mechanism files in order to use them for testing
         if self.new_model_folder:
             shutil.copy(self.mechanism, self.directory)
+        
+        shutil.copy(os.path.join(self.run_folder, "networks_params.yaml"), self.directory)
 
         gas = ct.Solution(self.mechanism)
         self.A_element = utils.get_molar_mass_atomic_matrix(gas.species_names, self.fuel, not self.remove_N2)
@@ -99,10 +104,6 @@ class NN_manager():
 
             # Adding copies of clustering parameters for later use in inference
             self.copy_clusterer()
-
-        # Saving parameters for later use in testing
-        self.save_dtb_params()
-        self.save_networks_params()
 
     def create_model(self, i_cluster, X_val, Y_val):
         network_type = self.networks_types[i_cluster]
@@ -361,32 +362,6 @@ class NN_manager():
 
         joblib.dump(Xscaler, os.path.join(f"{self.directory:s}/cluster{i_cluster}", "Xscaler.save"))
         joblib.dump(Yscaler, os.path.join(f"{self.directory:s}/cluster{i_cluster}", "Yscaler.save"))
-    
-    def save_dtb_params(self):
-        data = {
-            "log_transform_Y" : self.log_transform_Y,
-            "remove_N2" : self.remove_N2,
-            "mechanism" : self.mechanism,
-            "dataset_path" : self.dataset_path,
-            "fuel" : self.fuel,
-            "clusterization_method" : self.clustering_type
-        }
-
-        with open(os.path.join(self.directory,"dtb_params.yaml"), "w") as file:
-            yaml.dump(data, file, default_flow_style=False)
-
-    def save_networks_params(self):
-        data = {
-            "model_name_suffix" : self.model_name[6:],
-            "new_model_folder" : self.new_model_folder,
-            "networks_types" : self.networks_types,
-            "networks_defs" : self.networks_defs,
-            "clusters" : self.clusters,
-            "learning" : self.learning
-        }
-
-        with open(os.path.join(self.directory,"networks_params.yaml"), "w") as file:
-            yaml.dump(data, file, default_flow_style=False)
 
     # def read_learning_config(self):
         # relics from previous TensorFlow version of ARF --> might be re-integrated later
