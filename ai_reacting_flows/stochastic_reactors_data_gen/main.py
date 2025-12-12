@@ -139,6 +139,7 @@ def generate_stochastic_database(comm : 'MPI.Comm'):
         PRINT(f"  >> Cumulated time spent in simulation for plotting results: {particle_cloud.timings['Plotting'].sum():5.4f} s")
         PRINT("")
 
+
 def GenerateVariable_dt(params, comm : 'MPI.Comm'):
     rank = comm.Get_rank()
     size = comm.Get_size()
