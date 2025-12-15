@@ -1,5 +1,5 @@
 [project]
-name = "ai_reacting_flow"
+name = "ai_reacting_flows"
 version = "1.0.0"
 authors = [
     { name = "cmehl" },
@@ -33,6 +33,3 @@ dependencies = [
     "torchinfo",
     "oyaml"
 ]
-
-[project.urls]
-Homepage = "https://github.com/cmehl/ai_reacting_flows"
