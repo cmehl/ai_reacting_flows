@@ -151,3 +151,6 @@ dmypy.json
 # VSCode
 *.code-workspace
 .vscode
+
+
+pip_download/

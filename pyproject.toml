@@ -1,3 +1,9 @@
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [project]
 name = "ai_reacting_flows"
 version = "1.0.0"
