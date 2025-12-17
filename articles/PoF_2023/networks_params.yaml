@@ -1,6 +1,7 @@
 database_path: STOCH_DTB_H2_POF_2023/dtb_resampled
 model_name_suffix: H2_POF_2023
 new_model_folder: true
+convert_to_keras: true
 networks_types:
 - MLP
 - MLP

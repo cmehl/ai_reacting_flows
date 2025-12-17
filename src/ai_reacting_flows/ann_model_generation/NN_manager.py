@@ -2,6 +2,7 @@ import sys
 import os
 import shutil
 import joblib
+import copy
 
 import numpy as np
 import pandas as pd
@@ -16,11 +17,21 @@ import torch.optim as optim
 import ai_reacting_flows.tools.utilities as utils
 from ai_reacting_flows.ann_model_generation.NN_models import MLPModel, DeepONet, DeepONet_shift
 
+from tensorflow.keras import layers
+from ai_reacting_flows.ann_model_generation.NN_models_keras import MLPModel_keras, DeepONet_keras, DeepONet_shift_keras
+from ai_reacting_flows.ann_model_generation.NN_utilities import transfer_weights_mlp
+
 torch.set_default_dtype(torch.float64)
 
 activation_functions = {"ReLU": nn.ReLU, "GeLU" : nn.GELU, "tanh" : nn.Tanh, "Id" : nn.Identity}
 model_type = {"MLP": MLPModel, "DeepONet": DeepONet, "DeepONetShift": DeepONet_shift}
 
+model_type_keras = {"MLP": MLPModel_keras, "DeepONet": DeepONet_keras, "DeepONetShift": DeepONet_shift_keras}
+activation_functions_keras = { "ReLU": layers.ReLU(),          # ReLU
+                                "GeLU": layers.Activation("gelu"),  # GELU
+                                "tanh": layers.Activation("tanh"),  # Tanh
+                                "Id": layers.Activation("linear")   # Identity
+                                }
 class NN_manager():
     def __init__(self):
         self.device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
@@ -32,6 +43,8 @@ class NN_manager():
         with open(os.path.join(self.run_folder, "networks_params.yaml"), "r") as file:
             networks_parameters = yaml.safe_load(file)
         self.dataset_path = os.path.join(self.run_folder, networks_parameters["database_path"])
+
+        self.convert_to_keras = networks_parameters["convert_to_keras"]
         
         with open(f"{self.dataset_path}/dtb_processing.yaml", "r") as file:
             dtb_processing_params = yaml.safe_load(file)
@@ -113,7 +126,7 @@ class NN_manager():
             network_parameters = self.clusters[self.networks_defs[i_cluster]]
             if (network_type == "MLP"):
                 # Network shapes
-                nb_units_in_layers_list = network_parameters["nb_units_in_layers_list"]
+                nb_units_in_layers_list = copy.deepcopy(network_parameters["nb_units_in_layers_list"])
                 nb_units_in_layers_list.insert(0, X_val.shape[1])
                 nb_units_in_layers_list.append(Y_val.shape[1])
                 layers_activation_list = [activation_functions[act] for act in network_parameters["layers_activation_list"]]
@@ -124,7 +137,7 @@ class NN_manager():
                 n_in = X_val.shape[1]
                 n_out = Y_val.shape[1]
                 # Network shapes
-                nb_units_in_layers_list = network_parameters["nb_units_in_layers_list"]
+                nb_units_in_layers_list = copy.deepcopy(network_parameters["nb_units_in_layers_list"])
                 layers_activation_list = {}
                 for k in network_parameters["layers_activation_list"].keys():
                     layers_activation_list[k] = [activation_functions[act] for act in network_parameters["layers_activation_list"][k]]
@@ -139,7 +152,7 @@ class NN_manager():
                 n_in = X_val.shape[1]
                 n_out = Y_val.shape[1]
                 # Network shapes
-                nb_units_in_layers_list = network_parameters["nb_units_in_layers_list"]
+                nb_units_in_layers_list = copy.deepcopy(network_parameters["nb_units_in_layers_list"])
                 layers_activation_list = {}
                 for k in network_parameters["layers_activation_list"].keys():
                     layers_activation_list[k] = [activation_functions[act] for act in network_parameters["layers_activation_list"][k]]
@@ -154,6 +167,62 @@ class NN_manager():
                 model = model_type[network_type](self.device, nb_units_in_layers_list, layers_type, layers_activation_list, n_out, n_neurons)
         
         return model
+    
+
+    def create_model_keras(self, i_cluster, X_val, Y_val):
+
+        network_type = self.networks_types[i_cluster]
+        if (network_type not in model_type_keras.keys()):
+            sys.exit(f"ERROR: network_type \"{network_type}\" does not exist")
+        else:
+            network_parameters = self.clusters[self.networks_defs[i_cluster]]
+            if (network_type == "MLP"):
+                # Network shapes
+                nb_units_in_layers_list = copy.deepcopy(network_parameters["nb_units_in_layers_list"])
+                nb_units_in_layers_list.insert(0, X_val.shape[1])
+                nb_units_in_layers_list.append(Y_val.shape[1])
+                layers_activation_list = [activation_functions_keras[act] for act in network_parameters["layers_activation_list"]]
+                layers_type = network_parameters["layers_type"]
+            
+                model = model_type_keras[network_type](nb_units_in_layers_list, layers_type, layers_activation_list)
+            elif ("DeepONet" in network_type):
+                n_in = X_val.shape[1]
+                n_out = Y_val.shape[1]
+                # Network shapes
+                nb_units_in_layers_list = copy.deepcopy(network_parameters["nb_units_in_layers_list"])
+                layers_activation_list = {}
+                for k in network_parameters["layers_activation_list"].keys():
+                    layers_activation_list[k] = [activation_functions_keras[act] for act in network_parameters["layers_activation_list"][k]]
+                layers_type = network_parameters["layers_type"]
+                n_neurons = network_parameters["n_neurons"]
+                nb_units_in_layers_list["branch"].insert(0,n_in)
+                nb_units_in_layers_list["branch"].append(n_neurons*n_out)
+                nb_units_in_layers_list["trunk"].insert(0,1)
+                nb_units_in_layers_list["trunk"].append(n_neurons*n_out)
+                model = model_type_keras[network_type](nb_units_in_layers_list, layers_type, layers_activation_list, n_out, n_neurons)
+            elif ("DeepONetShift" in network_type):
+                n_in = X_val.shape[1]
+                n_out = Y_val.shape[1]
+                # Network shapes
+                nb_units_in_layers_list = copy.deepcopy(network_parameters["nb_units_in_layers_list"])
+                layers_activation_list = {}
+                for k in network_parameters["layers_activation_list"].keys():
+                    layers_activation_list[k] = [activation_functions_keras[act] for act in network_parameters["layers_activation_list"][k]]
+                layers_type = network_parameters["layers_type"]
+                n_neurons = network_parameters["n_neurons"]
+                nb_units_in_layers_list["branch"].insert(0,n_in)
+                nb_units_in_layers_list["branch"].append(n_neurons*n_out)
+                nb_units_in_layers_list["trunk"].insert(0,1)
+                nb_units_in_layers_list["trunk"].append(n_neurons*n_out)
+                nb_units_in_layers_list["shift"].insert(0,n_in)
+                nb_units_in_layers_list["shift"].append(1)
+                model = model_type_keras[network_type](nb_units_in_layers_list, layers_type, layers_activation_list, n_out, n_neurons)
+
+            dummy_input = np.random.randn(1, nb_units_in_layers_list[0]).astype(np.float64)
+            _ = model(dummy_input) 
+        
+        return model
+
 
     def train_model(self, i_cluster, model, loss_fn, optimizer, scheduler, X_train, X_val, Y_train, Y_val, Yscaler_mean, Yscaler_std):
         X_train = torch.tensor(X_train.values, dtype=torch.float64)
@@ -269,6 +338,20 @@ class NN_manager():
             self.plot_losses_conservation(i_cluster, epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements)
 
             torch.save(model, os.path.join(self.directory, f"cluster{i_cluster}_model.pth"))
+
+            # Convert model to keras for use in NNICE (requires h5 and json files)
+            if self.convert_to_keras:
+                if self.networks_types[i_cluster]!="MLP":
+                    sys.exit("ERROR: Pytorch to keras is only supported for MLP type network at this moment.)")
+                # Initializing keras model
+                keras_model = self.create_model_keras(i_cluster, X_val, Y_val)
+                # Conversion of pytorch model
+                transfer_weights_mlp(model, keras_model)
+                # Save the model weights
+                keras_model.save_weights(os.path.join(self.directory, f'model_weights_cluster{i_cluster}.weights.h5'))
+                # Save the model architecture
+                with open(os.path.join(self.directory,f'model_architecture_cluster{i_cluster}.json'), 'w') as f:
+                    f.write(keras_model.to_json())
             
             np.savetxt(os.path.join(self.directory, f"norm_param_X_cluster{i_cluster}.dat"), np.vstack([Xscaler_mean, Xscaler_var]).T)
             np.savetxt(os.path.join(self.directory, f"norm_param_Y_cluster{i_cluster}.dat"), np.vstack([Yscaler_mean, Yscaler_var]).T)
