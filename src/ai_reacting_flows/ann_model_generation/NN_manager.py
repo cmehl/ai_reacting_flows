@@ -9,6 +9,7 @@ import pandas as pd
 import oyaml as yaml
 import cantera as ct
 import matplotlib.pyplot as plt
+import h5py
 
 import torch
 import torch.nn as nn
@@ -17,21 +18,11 @@ import torch.optim as optim
 import ai_reacting_flows.tools.utilities as utils
 from ai_reacting_flows.ann_model_generation.NN_models import MLPModel, DeepONet, DeepONet_shift
 
-from tensorflow.keras import layers
-from ai_reacting_flows.ann_model_generation.NN_models_keras import MLPModel_keras, DeepONet_keras, DeepONet_shift_keras
-from ai_reacting_flows.ann_model_generation.NN_utilities import transfer_weights_mlp
-
 torch.set_default_dtype(torch.float64)
 
 activation_functions = {"ReLU": nn.ReLU, "GeLU" : nn.GELU, "tanh" : nn.Tanh, "Id" : nn.Identity}
 model_type = {"MLP": MLPModel, "DeepONet": DeepONet, "DeepONetShift": DeepONet_shift}
 
-model_type_keras = {"MLP": MLPModel_keras, "DeepONet": DeepONet_keras, "DeepONetShift": DeepONet_shift_keras}
-activation_functions_keras = { "ReLU": layers.ReLU(),          # ReLU
-                                "GeLU": layers.Activation("gelu"),  # GELU
-                                "tanh": layers.Activation("tanh"),  # Tanh
-                                "Id": layers.Activation("linear")   # Identity
-                                }
 class NN_manager():
     def __init__(self):
         self.device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
@@ -43,8 +34,6 @@ class NN_manager():
         with open(os.path.join(self.run_folder, "networks_params.yaml"), "r") as file:
             networks_parameters = yaml.safe_load(file)
         self.dataset_path = os.path.join(self.run_folder, networks_parameters["database_path"])
-
-        self.convert_to_keras = networks_parameters["convert_to_keras"]
         
         with open(f"{self.dataset_path}/dtb_processing.yaml", "r") as file:
             dtb_processing_params = yaml.safe_load(file)
@@ -339,20 +328,8 @@ class NN_manager():
 
             torch.save(model, os.path.join(self.directory, f"cluster{i_cluster}_model.pth"))
 
-            # Convert model to keras for use in NNICE (requires h5 and json files)
-            if self.convert_to_keras:
-                if self.networks_types[i_cluster]!="MLP":
-                    sys.exit("ERROR: Pytorch to keras is only supported for MLP type network at this moment.)")
-                # Initializing keras model
-                keras_model = self.create_model_keras(i_cluster, X_val, Y_val)
-                # Conversion of pytorch model
-                transfer_weights_mlp(model, keras_model)
-                # Save the model weights
-                keras_model.save_weights(os.path.join(self.directory, f'model_weights_cluster{i_cluster}.weights.h5'))
-                # Save the model architecture
-                with open(os.path.join(self.directory,f'model_architecture_cluster{i_cluster}.json'), 'w') as f:
-                    f.write(keras_model.to_json())
-            
+            self.save_pt_model_to_h5(model, os.path.join(self.directory, f"cluster{i_cluster}_model.h5"))
+
             np.savetxt(os.path.join(self.directory, f"norm_param_X_cluster{i_cluster}.dat"), np.vstack([Xscaler_mean, Xscaler_var]).T)
             np.savetxt(os.path.join(self.directory, f"norm_param_Y_cluster{i_cluster}.dat"), np.vstack([Yscaler_mean, Yscaler_var]).T)
 
@@ -445,6 +422,95 @@ class NN_manager():
 
         joblib.dump(Xscaler, os.path.join(f"{self.directory:s}/cluster{i_cluster}", "Xscaler.save"))
         joblib.dump(Yscaler, os.path.join(f"{self.directory:s}/cluster{i_cluster}", "Yscaler.save"))
+
+
+    def save_pt_model_to_h5(self, model, h5_path):
+        model.eval()
+
+        def save_module(group, module, module_name, parent_activation_map):
+            """
+            Recursively save modules with parameters only, skipping pure activations.
+            """
+            # Skip pure activations (no params, no children)
+            if len(list(module.parameters(recurse=False))) == 0 and len(list(module.children())) == 0:
+                return
+
+            # Create a group for this module
+            layer_group = group.create_group(module_name)
+
+            # Save activation if exists
+            activation_name = parent_activation_map.get(module_name, 'none')
+            layer_group.attrs['activation'] = activation_name
+
+            # Save parameters of this module (Linear, etc.)
+            for param_name, param in module.named_parameters(recurse=False):
+                data = param.detach().cpu().numpy()
+                if param_name == "weight":
+                    layer_group.create_dataset("kernel:0", data=data)
+                elif param_name == "bias":
+                    layer_group.create_dataset("bias:0", data=data)
+
+            # Recursively save children (ResidualBlock submodules)
+            for child_name, child_module in module.named_children():
+                save_module(layer_group, child_module, child_name, parent_activation_map)
+
+        with h5py.File(h5_path, "w") as f:
+            # Save each top-level layer directly, no 'model' group
+            for layer_name, module in model.model.named_children():  # note: model.model is nn.Sequential
+                save_module(f, module, layer_name, getattr(model, 'activation_map', {}))
+
+    # def save_pt_model_to_h5(self, model, h5_path):
+
+    #     model.eval()
+
+    #     # Example: map PyTorch module types to simple names
+    #     activation_map = {
+    #         'ReLU': 'relu',
+    #         'Tanh': 'tanh',
+    #         'Identity': 'identity',
+    #         'Sigmoid': 'sigmoid',
+    #         'LeakyReLU': 'leaky_relu'
+    #     }
+
+    #     with h5py.File(h5_path, "w") as f:
+    #         for layer_name, module in model.named_modules():
+
+    #             # Skip top-level module (empty name)
+    #             if layer_name == "":
+    #                 continue
+
+    #             # Remove 'model.' prefix if it exists
+    #             if layer_name.startswith("model."):
+    #                 layer_name = layer_name[len("model."):]
+
+    #             if layer_name=="model":
+    #                 layer_name="input_layer"
+
+    #             # Only layers with parameters
+    #             if len(list(module.parameters())) == 0:
+    #                 continue
+
+    #             # Create group for layer
+    #             layer_group = f.create_group(layer_name)
+
+    #             # Create subgroup with same name
+    #             sub_group = layer_group.create_group(layer_name)
+
+    #             # Save weights
+    #             for param_name, param in module.named_parameters(recurse=False):
+    #                 data = param.detach().cpu().numpy()
+
+    #                 if param_name == "weight":
+    #                     sub_group.create_dataset("kernel:0", data=data)
+    #                 elif param_name == "bias":
+    #                     sub_group.create_dataset("bias:0", data=data)
+
+
+    #             # Save activation from the activation_map
+    #             activation_name = getattr(model, 'activation_map', {}).get(layer_name, 'none')
+    #             layer_group.attrs['activation'] = activation_name
+
+
 
     # def read_learning_config(self):
         # relics from previous TensorFlow version of ARF --> might be re-integrated later

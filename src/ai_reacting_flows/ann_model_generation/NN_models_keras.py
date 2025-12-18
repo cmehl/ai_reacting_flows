@@ -67,14 +67,16 @@ class MLPModel_keras(keras.Model):
         # Add hidden layers
         for i in range(1, len(hidden_layers)):
             if layers_type[i-1] == "dense":
+                layer_name="output_layer" if i==len(hidden_layers)-1 else f"dense_layer_{i}"
                 self.model_layers.append(
                     layers.Dense(
                         hidden_layers[i],
+                        activation=activations[i-1],
                         dtype=tf.float64,
-                        use_bias=True
+                        use_bias=True,
+                        name=layer_name
                     )
                 )
-                self.model_layers.append(activations[i-1])
             elif layers_type[i-1] == "resnet":
                 self.model_layers.append(
                     ResidualBlock_keras(

@@ -34,7 +34,6 @@ dependencies = [
     "ipykernel>=6.15.2",
     "openpyxl",
     "jupytext",
-    "tensorflow>=2.19.0",
     "torch>=2.6.0",
     "torchinfo",
     "oyaml"

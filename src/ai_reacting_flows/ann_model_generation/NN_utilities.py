@@ -6,10 +6,6 @@ from tensorflow.keras import layers
 from ai_reacting_flows.ann_model_generation.Custom_layers import ResidualBlock
 
 
-"""In this file we propose function to convert a MLP from pytorch to keras. This is needed to use trained networks in NNICE.
-These functions have not been extended to DeepONet architectures yet """
-
-
 def transfer_weights_mlp(pytorch_model, keras_model):
     """
     Transfer weights from PyTorch MLPModel to Keras MLPModel.
@@ -110,6 +106,9 @@ def transfer_residual_block(pytorch_block, keras_block, layer_idx):
         if keras_block.use_shortcut:
             raise ValueError("PyTorch has Identity shortcut but Keras has Linear")
         print(f"    shortcut: Identity (no weights to transfer)")
+
+
+
 
 
 
