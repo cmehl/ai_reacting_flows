@@ -137,106 +137,108 @@ class Particle(object):
             self.mass_k = self.mass * self.Y
             self.Hs = self.mass * self.hs
 
-    def react_NN_wrapper(self, ML_models, prog_var_thresholds, dt, T_threshold):
+    # def react_NN_wrapper(self, ML_models, prog_var_thresholds, dt, T_threshold):
                     
-        # Single model
-        if len(ML_models)==1:
-            self.react_NN(ML_models[0], dt, T_threshold)
-        # Three models
-        elif len(ML_models)==3:
-            # if self.prog_var<=0.01 or  self.prog_var>=0.99:
-            if self.prog_var<prog_var_thresholds[0]:
-                self.react_NN(ML_models[0], dt, T_threshold)
-            elif self.prog_var>prog_var_thresholds[0] and self.prog_var<prog_var_thresholds[1]:
-                self.react_NN(ML_models[1], dt, T_threshold)
-            else:  # self.prog_var>prog_var_thresholds[1]
-                self.react_NN(ML_models[2], dt, T_threshold)
-                        
+    #     # Single model
+    #     if len(ML_models)==1:
+    #         self.react_NN(ML_models[0], dt, T_threshold)
+    #     # Three models
+    #     elif len(ML_models)==3:
+    #         # if self.prog_var<=0.01 or  self.prog_var>=0.99:
+    #         if self.prog_var<prog_var_thresholds[0]:
+    #             self.react_NN(ML_models[0], dt, T_threshold)
+    #         elif self.prog_var>prog_var_thresholds[0] and self.prog_var<prog_var_thresholds[1]:
+    #             self.react_NN(ML_models[1], dt, T_threshold)
+    #         else:  # self.prog_var>prog_var_thresholds[1]
+    #             self.react_NN(ML_models[2], dt, T_threshold)
+
+
+    # TO REWRITE COMPLETELY FOR PYTORCH  
     # NN-based function to update chemistry
-    def react_NN(self, parent):
+    # def react_NN(self, parent):
         
-        if self.T>parent.T_threshold:
+    #     if self.T>parent.T_threshold:
             
-            # Initializing ANN model
-            ann_model = ModelANN(parent.ML_model)
+    #         # Initializing ANN model
+    #         ann_model = ModelANN(parent.ML_model)
             
-            # Loading model
-            ann_model.load_ann_model()
+    #         # Loading model
+    #         ann_model.load_ann_model()
     
-            # Load scalers
-            ann_model.load_scalers()
+    #         # Load scalers
+    #         ann_model.load_scalers()
             
             
-            # Storing initial values
-            Y_old = self.Y
+    #         # Storing initial values
+    #         Y_old = self.Y
                     
-            # Gas object modification
-            parent.gas.TPY= self.T, self.P, self.Y
-            #        
-            # State vector for NN (temperature + mass fractions => different than in self.state)
-            state_NN = np.append(self.T,self.Y)
-            # NN update for Yk's
-            # if ann_model.log_transform_X:
-            #     state_NN[state_NN<ann_model.threshold] = ann_model.threshold
-            log_state = np.zeros(self.nb_species+1)
-            log_state[0] = state_NN[0]
-            if ann_model.log_transform_X:
-                log_state[1:] = np.log(1.0 + state_NN[1:])
-            else:
-                log_state[1:] = state_NN[1:]
+    #         # Gas object modification
+    #         parent.gas.TPY= self.T, self.P, self.Y
+    #         #        
+    #         # State vector for NN (temperature + mass fractions => different than in self.state)
+    #         state_NN = np.append(self.T,self.Y)
+    #         # NN update for Yk's
+    #         # if ann_model.log_transform_X:
+    #         #     state_NN[state_NN<ann_model.threshold] = ann_model.threshold
+    #         log_state = np.zeros(self.nb_species+1)
+    #         log_state[0] = state_NN[0]
+    #         if ann_model.log_transform_X:
+    #             log_state[1:] = np.log(1.0 + state_NN[1:])
+    #         else:
+    #             log_state[1:] = state_NN[1:]
             
-            # Removing N2 if omegas outputed
-            # if ann_model.output_omegas:
-            #     log_state = np.delete(log_state, 1 + self.species_names.index("N2"))    
+    #         # Removing N2 if omegas outputed
+    #         # if ann_model.output_omegas:
+    #         #     log_state = np.delete(log_state, 1 + self.species_names.index("N2"))    
             
-            # input of NN
-            log_state = log_state.reshape(1, -1)
-            NN_input = ann_model.Xscaler.transform(log_state)
+    #         # input of NN
+    #         log_state = log_state.reshape(1, -1)
+    #         NN_input = ann_model.Xscaler.transform(log_state)
                     
-            # New state predicted by ANN
-            state_new = ann_model.model.predict(NN_input, batch_size=1)
+    #         # New state predicted by ANN
+    #         state_new = ann_model.model.predict(NN_input, batch_size=1)
     
-            # Getting Y and scaling
-            if ann_model.scaler_Y != "None":
-                Y_new = ann_model.Yscaler.inverse_transform(state_new)
-            else:
-                Y_new = state_new
-            # Log transform of species
-            if ann_model.log_transform_Y:
-                Y_new = np.exp(Y_new) - 1.0
+    #         # Getting Y and scaling
+    #         if ann_model.scaler_Y != "None":
+    #             Y_new = ann_model.Yscaler.inverse_transform(state_new)
+    #         else:
+    #             Y_new = state_new
+    #         # Log transform of species
+    #         if ann_model.log_transform_Y:
+    #             Y_new = np.exp(Y_new) - 1.0
                     
-            # Adding N2 again
-            # if ann_model.output_omegas:
-            #     Y_new = np.insert(Y_new, self.species_names.index("N2"), 0.0)
+    #         # Adding N2 again
+    #         # if ann_model.output_omegas:
+    #         #     Y_new = np.insert(Y_new, self.species_names.index("N2"), 0.0)
                     
-            # If reaction rate outputs from network
-            if ann_model.output_omegas:
-                Y_new += Y_old
+    #         # If reaction rate outputs from network
+    #         if ann_model.output_omegas:
+    #             Y_new += Y_old
                     
-            # Deducing T from energy conservation
-            # Explicit update
-            T_new = state_NN[0] - (1/parent.gas.cp)*np.sum(parent.gas.partial_molar_enthalpies/self.spec_mol_weights*(Y_new-Y_old))
+    #         # Deducing T from energy conservation
+    #         # Explicit update
+    #         T_new = state_NN[0] - (1/parent.gas.cp)*np.sum(parent.gas.partial_molar_enthalpies/self.spec_mol_weights*(Y_new-Y_old))
     
     
             
-            # Remark: we assume self.P stays identical
-            self.T = T_new
-            self.Y = Y_new.reshape(self.nb_species)
-            self.compute_hs_from_T()
+    #         # Remark: we assume self.P stays identical
+    #         self.T = T_new
+    #         self.Y = Y_new.reshape(self.nb_species)
+    #         self.compute_hs_from_T()
             
             
-            # Updated state
-            state_new = np.empty(self.nb_state_vars)
-            state_new[0] = self.hs
-            state_new[1] = self.P
-            state_new[2:] = self.Y
-            self.state = state_new
+    #         # Updated state
+    #         state_new = np.empty(self.nb_state_vars)
+    #         state_new[0] = self.hs
+    #         state_new[1] = self.P
+    #         state_new[2:] = self.Y
+    #         self.state = state_new
             
-            # Variables from state
-            self.X = self.compute_mol_frac()
+    #         # Variables from state
+    #         self.X = self.compute_mol_frac()
             
-            # Clear memory to avoid overflow
-            # tf.keras.backend.clear_session()
+    #         # Clear memory to avoid overflow
+    #         # tf.keras.backend.clear_session()
 
 # =============================================================================
 #     FUNCTIONS TO COMPUTE COMPOSITION-DERIVED QUANTITIES
