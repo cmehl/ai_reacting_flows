@@ -36,5 +36,6 @@ dependencies = [
     "jupytext",
     "torch>=2.6.0",
     "torchinfo",
-    "oyaml"
+    "oyaml",
+    "h5py"
 ]
