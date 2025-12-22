@@ -9,9 +9,25 @@ import oyaml as yaml
 # Dictionary to store inputs
 data_gen_parameters = {}
 
+#inlets
+inlet_1 = {'type':'cold_premixed',
+           'nb_particles': 450,
+           'fuel': 'H2',
+           'phi': 0.6,
+           'T': 300.0,
+           'P': 101325.0}
+inlet_2 = {'type':'burnt_premixed',
+           'nb_particles': 50,
+           'fuel': 'H2',
+           'phi': 0.6,
+           'T': 300.0,
+           'P': 101325.0}
+inlets = {'inlet_1':inlet_1,
+          'inlet_2':inlet_2}
+
 # General parameters
 data_gen_parameters["mech_file"] = "/../data/chemical_mechanisms/mech_H2.yaml"      # Mechanism file
-data_gen_parameters["inlets_file"] = "/inlets_file.xlsx"      # file defining the stochastic reactors inlets
+data_gen_parameters["inlets"] = inlets      # dict defining the stochastic reactors inlets
 data_gen_parameters["results_folder_suffix"] = "TEST"    # Name of the resulting database (used as a suffix of "STOCH_DTB")
 data_gen_parameters["dtb_file"] = "solutions.h5" #
 data_gen_parameters["build_ml_dtb"] = True     # Flag to generate ML database or do a stand-alone simulation
@@ -45,7 +61,6 @@ def test_h2_dtb_computation():
     current_dir = os.path.dirname(__file__)
     os.chdir(current_dir)
     data_gen_parameters["mech_file"] = f"{current_dir:s}{data_gen_parameters['mech_file']:s}"
-    data_gen_parameters["inlets_file"] = f"{current_dir:s}{data_gen_parameters['inlets_file']:s}"
 
     with open("dtb_params.yaml", "w") as file:
         yaml.dump(data_gen_parameters, file, default_flow_style=False)
