@@ -158,61 +158,6 @@ class NN_manager():
         return model
     
 
-    def create_model_keras(self, i_cluster, X_val, Y_val):
-
-        network_type = self.networks_types[i_cluster]
-        if (network_type not in model_type_keras.keys()):
-            sys.exit(f"ERROR: network_type \"{network_type}\" does not exist")
-        else:
-            network_parameters = self.clusters[self.networks_defs[i_cluster]]
-            if (network_type == "MLP"):
-                # Network shapes
-                nb_units_in_layers_list = copy.deepcopy(network_parameters["nb_units_in_layers_list"])
-                nb_units_in_layers_list.insert(0, X_val.shape[1])
-                nb_units_in_layers_list.append(Y_val.shape[1])
-                layers_activation_list = [activation_functions_keras[act] for act in network_parameters["layers_activation_list"]]
-                layers_type = network_parameters["layers_type"]
-            
-                model = model_type_keras[network_type](nb_units_in_layers_list, layers_type, layers_activation_list)
-            elif ("DeepONet" in network_type):
-                n_in = X_val.shape[1]
-                n_out = Y_val.shape[1]
-                # Network shapes
-                nb_units_in_layers_list = copy.deepcopy(network_parameters["nb_units_in_layers_list"])
-                layers_activation_list = {}
-                for k in network_parameters["layers_activation_list"].keys():
-                    layers_activation_list[k] = [activation_functions_keras[act] for act in network_parameters["layers_activation_list"][k]]
-                layers_type = network_parameters["layers_type"]
-                n_neurons = network_parameters["n_neurons"]
-                nb_units_in_layers_list["branch"].insert(0,n_in)
-                nb_units_in_layers_list["branch"].append(n_neurons*n_out)
-                nb_units_in_layers_list["trunk"].insert(0,1)
-                nb_units_in_layers_list["trunk"].append(n_neurons*n_out)
-                model = model_type_keras[network_type](nb_units_in_layers_list, layers_type, layers_activation_list, n_out, n_neurons)
-            elif ("DeepONetShift" in network_type):
-                n_in = X_val.shape[1]
-                n_out = Y_val.shape[1]
-                # Network shapes
-                nb_units_in_layers_list = copy.deepcopy(network_parameters["nb_units_in_layers_list"])
-                layers_activation_list = {}
-                for k in network_parameters["layers_activation_list"].keys():
-                    layers_activation_list[k] = [activation_functions_keras[act] for act in network_parameters["layers_activation_list"][k]]
-                layers_type = network_parameters["layers_type"]
-                n_neurons = network_parameters["n_neurons"]
-                nb_units_in_layers_list["branch"].insert(0,n_in)
-                nb_units_in_layers_list["branch"].append(n_neurons*n_out)
-                nb_units_in_layers_list["trunk"].insert(0,1)
-                nb_units_in_layers_list["trunk"].append(n_neurons*n_out)
-                nb_units_in_layers_list["shift"].insert(0,n_in)
-                nb_units_in_layers_list["shift"].append(1)
-                model = model_type_keras[network_type](nb_units_in_layers_list, layers_type, layers_activation_list, n_out, n_neurons)
-
-            dummy_input = np.random.randn(1, nb_units_in_layers_list[0]).astype(np.float64)
-            _ = model(dummy_input) 
-        
-        return model
-
-
     def train_model(self, i_cluster, model, loss_fn, optimizer, scheduler, X_train, X_val, Y_train, Y_val, Yscaler_mean, Yscaler_std):
         X_train = torch.tensor(X_train.values, dtype=torch.float64)
         Y_train = torch.tensor(Y_train.values, dtype=torch.float64)
