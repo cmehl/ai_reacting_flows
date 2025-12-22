@@ -17,8 +17,6 @@ from mpi4py import MPI
 
 h5py.get_config().mpi
 
-# Disabling TF warning (in particular warnings related to unused CPU features)
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 def generate_stochastic_database(comm : 'MPI.Comm'):
 
@@ -84,7 +82,6 @@ def generate_stochastic_database(comm : 'MPI.Comm'):
         os.mkdir(results_folder)
 
         # Copying input files to results folder to document run
-        shutil.copy(data_gen_parameters["inlets_file"], results_folder)
         shutil.copy(data_gen_parameters["mech_file"], results_folder)
 
 

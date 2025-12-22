@@ -50,15 +50,13 @@ The current version of the code only includes the generation of databases for co
 
 The following steps must be performed in practice to generate the database using this model:
 
-1. A file specifying the initial state of particles must be created. This is done using the notebook *generate_inlets_file.ipynb*. 
-
-2. Generation of the stochastic particles dataset. The particles are evolved in time and the raw states are stored. The entire set of encountered states is stored in *databases_states.csv*. For ML purposes, the files *X_dtb.csv* and *Y_dtb.csv* are also created and contain the raw temperature and mass fractions at time $t$ and corresponding $t+dt$, respectively. The parameters for the dataset generation must be specified in the script *generate_stoch_dtb.py* found in the *scripts* folder. The script may be launched on multiple processors using MPI: 
+1. Generation of the stochastic particles dataset. The particles are evolved in time and the raw states are stored. The entire set of encountered states is stored in *databases_states.csv*. For ML purposes, the files *X_dtb.csv* and *Y_dtb.csv* are also created and contain the raw temperature and mass fractions at time $t$ and corresponding $t+dt$, respectively. The parameters for the dataset generation must be specified in the script *generate_stoch_dtb.py* found in the *scripts* folder. The script may be launched on multiple processors using MPI: 
 
 ```
 mpirun -n nb_procs python generate_stoch_dtb.py
 ```
 
-3. The raw ML database, composed of  *X_dtb.csv* and *Y_dtb.csv*, must be processed. This includes an eventual transformation of the data (log, Box-Cox, etc...), the possible use of differences $Y_k(t+dt)-Y_k(t)$ as ANN outputs instead of $Y_k(t+dt)$, the clustering of the dataset and the splitting into training/validation datasets. Note that the standardization is performed later, at the ANN model generation stage. This step generates folders *cluster{i}*, $i=1..N_c$ where $N_c$ is the number of data clusters. In each folder, the files *X_train.csv*, *X_val.csv*, *Y_train.csv* and *Y_val.csv* are stored. The processing may be launched using the notebook *generate_ML_dtb.ipynb*, where all input parameters are specified.
+2. The raw ML database, composed of  *X_dtb.csv* and *Y_dtb.csv*, must be processed. This includes an eventual transformation of the data (log, Box-Cox, etc...), the possible use of differences $Y_k(t+dt)-Y_k(t)$ as ANN outputs instead of $Y_k(t+dt)$, the clustering of the dataset and the splitting into training/validation datasets. Note that the standardization is performed later, at the ANN model generation stage. This step generates folders *cluster{i}*, $i=1..N_c$ where $N_c$ is the number of data clusters. In each folder, the files *X_train.csv*, *X_val.csv*, *Y_train.csv* and *Y_val.csv* are stored. The processing may be launched using the notebook *generate_ML_dtb.ipynb*, where all input parameters are specified.
 
 Additionaly, a module for post-processing and analyzing the stochastic particles database is provided. An exemple of use is presented in notebook *post_processing_stoch_reac.ipynb*. If necessary, additional functions may be coded in *ai_reacting_flows/stochastic_reactors_data_gen/post_processing.py*.
 

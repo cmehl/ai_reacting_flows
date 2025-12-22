@@ -13,6 +13,7 @@ import seaborn as sns
 import cantera as ct
 
 from ai_reacting_flows.stochastic_reactors_data_gen.particle import Particle
+from ai_reacting_flows.stochastic_reactors_data_gen.pre_processing import Inlet
 import ai_reacting_flows.tools.utilities as utils
 from ai_reacting_flows.tools.utilities import PRINT
 
@@ -67,42 +68,47 @@ class ParticlesCloud(object):
         # Dabatase building
         self.build_ml_dtb = data_gen_parameters["build_ml_dtb"]
 
-        # =====================================================================
-        #     READING INLET DATA    
-        # =====================================================================
-        
-        # Reading excel file with inlet data
-        inlets_file_xl = pd.ExcelFile(data_gen_parameters["inlets_file"])
-        df = inlets_file_xl.parse("Sheet1")
-        
-        # Number of inlets
-        self.nb_inlets = df.shape[0]
-        
         # Species names
-        self.species_names = df.columns[4:].to_list()
+        self.species_names = self.gas.species_names
 
-        # Get the data as a numpy array (we discard index column)
-        data = df.to_numpy()[:,1:]
+        # =====================================================================
+        #     GENERATING INLETS    
+        # =====================================================================
+
+        # Reading inlets configuration from 
+        self.inlets_config = data_gen_parameters["inlets"]
+
+        self.nb_inlets = len(self.inlets_config)
+
+        inlet_list = []
+        for inlet_name in self.inlets_config:
+
+            type = self.inlets_config[inlet_name]["type"]
+            nb_part = self.inlets_config[inlet_name]["nb_particles"]
+            fuel = self.inlets_config[inlet_name]["fuel"]
+            phi = self.inlets_config[inlet_name]["phi"]
+            T = self.inlets_config[inlet_name]["T"]
+            P = self.inlets_config[inlet_name]["P"]
+            
+            inlet = Inlet(type, nb_particles=nb_part)
+            inlet.set_state(fuel=fuel, mech=self.mech_file, phi=phi, T=T, p=P)
+
+            inlet_list.append(inlet)
         
         # Total number of particles in simulation
-        self.nb_parts_tot = data[:,0].sum()
-        
-        # Dict with number of particles per inlet
         self.nb_parts_per_inlet = dict.fromkeys(range(1,self.nb_inlets+1))
-        for inlet in self.nb_parts_per_inlet:
-            i = inlet-1 # because of pythonic convention
-            self.nb_parts_per_inlet[inlet] = data[i,0]
-        
-        # Composition for each inlet
         self.state_per_inlet = dict.fromkeys(range(1,self.nb_inlets+1))
-        for inlet in self.state_per_inlet:
-            i = inlet-1
-            self.state_per_inlet[inlet] = np.array(data[i,1:], dtype="float")
-        
+        for i, inlet in enumerate(inlet_list):
+            self.nb_parts_per_inlet[i+1] = inlet.nb_particles
+            self.state_per_inlet[i+1] = inlet.state[1:]
+
+
+        # Total number of particles
+        self.nb_parts_tot = sum(self.nb_parts_per_inlet.values())
+
         # Number of states variables (using first inlet as it is necessarily present)
         self.nb_state_vars = len(self.state_per_inlet[1])
-
-
+        
         # =====================================================================
         #     GENERATION OF PARTICLES LIST 
         # =====================================================================
@@ -268,6 +274,10 @@ class ParticlesCloud(object):
         # Compatibility between inlet file and mech file species names
         if self.rank == 0:
             self.check_species()
+
+# =============================================================================
+#   INLET GENERATION
+# =============================================================================
     
 # =============================================================================
 #   TIME MARCHING FUNCTIONS
@@ -834,6 +844,7 @@ class ParticlesCloud(object):
         PRINT("")
         PRINT("START OF SIMULATION")
         PRINT(f">> Total number of iterations: {int(self.time_max/self.dt)}")
+        PRINT(f">> Number of inlets: {self.nb_inlets}")
         PRINT(f">> Total number of particles: {self.nb_parts_tot}")
         if self.mixing_model=="CURL":
             PRINT(f">> Number of particles pair used for CURL diffusion is: {self.Npairs_curl}")

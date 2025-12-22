@@ -152,5 +152,6 @@ dmypy.json
 *.code-workspace
 .vscode
 
+testing*
 
 pip_download/

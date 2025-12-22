@@ -1,5 +1,19 @@
 mech_file: ../../data/chemical_mechanisms/mech_H2.yaml
-inlets_file: inlets_file.xlsx
+inlets:
+  inlet_1:
+    type: cold_premixed
+    nb_particles: 500
+    fuel: H2
+    phi: 0.4
+    T: 300.0
+    P: 101325.0
+  inlet_2:
+    type: cold_premixed
+    nb_particles: 100
+    fuel: H2
+    phi: 0.4
+    T: 1200.0
+    P: 101325.0
 results_folder_suffix: H2_POF_2023
 dtb_file: solutions.h5
 build_ml_dtb: true
