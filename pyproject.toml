@@ -17,9 +17,9 @@ maintainers = [
 ]
 description = "DESCRIPTION"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 classifiers = [
-    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.11",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
@@ -34,8 +34,8 @@ dependencies = [
     "ipykernel>=6.15.2",
     "openpyxl",
     "jupytext",
-    "tensorflow>=2.9.1",
     "torch>=2.6.0",
     "torchinfo",
-    "oyaml"
+    "oyaml",
+    "h5py"
 ]

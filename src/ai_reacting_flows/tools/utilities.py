@@ -8,7 +8,7 @@ Created on Fri Dec 20 12:22:15 2019
 
 import sys
 import numpy as np
-from scipy.stats.kde import gaussian_kde
+from scipy.stats import gaussian_kde
 import cantera as ct
 import ruamel.yaml as yaml
 import copy

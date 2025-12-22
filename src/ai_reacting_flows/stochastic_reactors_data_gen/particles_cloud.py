@@ -16,7 +16,7 @@ from ai_reacting_flows.stochastic_reactors_data_gen.particle import Particle
 import ai_reacting_flows.tools.utilities as utils
 from ai_reacting_flows.tools.utilities import PRINT
 
-from ai_reacting_flows.stochastic_reactors_data_gen.ann_model import ModelANN
+# from ai_reacting_flows.stochastic_reactors_data_gen.ann_model import ModelANN
 
 matplotlib.use('Agg')
 sns.set()
@@ -358,10 +358,11 @@ class ParticlesCloud(object):
 
         # We perform chemical reactions -> each processor computes on its chunks
         for part in lists_particles:
-            if self.ML_inference_flag:
-                part.react_NN_wrapper(self)
-            else:
-                part.react(dt, self)
+            # if self.ML_inference_flag:
+            #     part.react_NN_wrapper(self)
+            # else:
+            #     part.react(dt, self)
+            part.react(dt, self)
 
         # Allgather regroups the chunks and give the whole list to all the processors (<=> gather + broadcast)
         result = self.comm.allgather(lists_particles)
@@ -660,16 +661,16 @@ class ParticlesCloud(object):
 #   MACHINE LEARNING RELATED FUNCTIONS
 # =============================================================================        
     
-    def _init_ML_modelling(self):
+    # def _init_ML_modelling(self):
         
-        # Initializing ANN model
-        self.ann_model = ModelANN(self.ML_model)
+    #     # Initializing ANN model
+    #     self.ann_model = ModelANN(self.ML_model)
         
-        # Loading model
-        self.ann_model.load_ann_model()
+    #     # Loading model
+    #     self.ann_model.load_ann_model()
 
-        # Load scalers
-        self.ann_model.load_scalers()
+    #     # Load scalers
+    #     self.ann_model.load_scalers()
 
 # =============================================================================
 #   MEAN TRAJECTORIES
