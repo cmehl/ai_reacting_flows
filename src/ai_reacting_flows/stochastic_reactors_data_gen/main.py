@@ -60,6 +60,15 @@ def generate_stochastic_database(comm : 'MPI.Comm'):
                 print("")
                 raise
             
+        if (data_gen_parameters["ML_inference_flag"]==True) and (data_gen_parameters["read_mixing"]==False) : 
+            try:
+                raise ValueError("Input error.")
+            except ValueError:
+                print("")
+                print(">> When use ann read mixing should be enable.")
+                print("")
+                raise
+            
 
     #==========================================================================
     # INITIALIZING RUN
@@ -75,14 +84,22 @@ def generate_stochastic_database(comm : 'MPI.Comm'):
         # Checking input parameters
 
         # Remove existing results dir if already exists
+        
         results_folder = "STOCH_DTB_" + data_gen_parameters["results_folder_suffix"]
-        if os.path.isdir(results_folder):
-            PRINT("WARNING: existing results directory has been removed. \n")
-            shutil.rmtree(results_folder)
-        os.mkdir(results_folder)
+        if data_gen_parameters["ML_inference_flag"] == False :
+            if os.path.isdir(results_folder):
+                PRINT("WARNING: existing results directory has been removed. \n")
+                shutil.rmtree(results_folder)
+            os.mkdir(results_folder)
+        else : 
+            PRINT(60 * "=")
+            PRINT(" SIMULATION OF STOCHASTIC PARTICLES WITH ANN ")
+            PRINT(60 * "=")
+            
 
-        # Copying input files to results folder to document run
-        shutil.copy(data_gen_parameters["mech_file"], results_folder)
+        # Copying input files to results folder to document run$
+        if data_gen_parameters["ML_inference_flag"] == False : 
+            shutil.copy(data_gen_parameters["mech_file"], results_folder)
 
 
     # Particle cloud initialization
@@ -108,6 +125,7 @@ def generate_stochastic_database(comm : 'MPI.Comm'):
         # Save mean trajectories
         if data_gen_parameters["calc_mean_traj"]:
             particle_cloud.write_trajectories()
+            
             shutil.move("./mean_trajectories.h5", results_folder + "/mean_trajectories.h5")
 
         # Plot some statistics on particles
@@ -121,8 +139,10 @@ def generate_stochastic_database(comm : 'MPI.Comm'):
     # End computation time
     t_end = perf_counter()
 
-    shutil.copy(os.path.join(run_folder, "dtb_params.yaml"), f"{run_folder:s}/STOCH_DTB_{data_gen_parameters['results_folder_suffix']}/dtb_params.yaml")
-
+    if data_gen_parameters["ML_inference_flag"] == False :
+        shutil.copy(os.path.join(run_folder, "dtb_params.yaml"), f"{run_folder:s}/STOCH_DTB_{data_gen_parameters['results_folder_suffix']}/dtb_params.yaml")
+    else : 
+        shutil.copy(os.path.join(run_folder, "dtb_params.yaml"), f"{run_folder:s}/STOCH_DTB_{data_gen_parameters['results_folder_suffix']}/dtb_params_ann.yaml")
     if rank==0:
         #  End of simulation printing
         PRINT("")
@@ -161,7 +181,7 @@ def GenerateVariable_dt(params, comm : 'MPI.Comm'):
 
     h5file_r.close()
 
-    X = pd.concat(list_df_X, ignore_index=True).to_numpy()
+    X = pd.concat(list_df_X, ignore_index=True).to_numpy(copy=True)
     Y = np.empty(X.shape)
     np.random.shuffle(X) # DAK: check why we shuffle X
     state_list = np.dstack((X,Y)) # DAK : check why we dstack with Y (np.empty)

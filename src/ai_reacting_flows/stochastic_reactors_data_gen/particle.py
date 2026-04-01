@@ -137,21 +137,52 @@ class Particle(object):
             self.mass_k = self.mass * self.Y
             self.Hs = self.mass * self.hs
 
-    # def react_NN_wrapper(self, ML_models, prog_var_thresholds, dt, T_threshold):
-                    
-    #     # Single model
-    #     if len(ML_models)==1:
-    #         self.react_NN(ML_models[0], dt, T_threshold)
-    #     # Three models
-    #     elif len(ML_models)==3:
-    #         # if self.prog_var<=0.01 or  self.prog_var>=0.99:
-    #         if self.prog_var<prog_var_thresholds[0]:
-    #             self.react_NN(ML_models[0], dt, T_threshold)
-    #         elif self.prog_var>prog_var_thresholds[0] and self.prog_var<prog_var_thresholds[1]:
-    #             self.react_NN(ML_models[1], dt, T_threshold)
-    #         else:  # self.prog_var>prog_var_thresholds[1]
-    #             self.react_NN(ML_models[2], dt, T_threshold)
-
+    def react_NN(self, dt, parent: 'ParticlesCloud'):
+        """
+        Replace Cantera CVODE by the trained ANN (NNTesting instance stored in
+        parent.nn_inference) to advance the particle state by dt.
+ 
+        The flow mirrors exactly how NNTesting.test_0D_ignition uses the ANN:
+          1. compute_progvar  → progvar
+          2. attribute_cluster → writes nn.cluster (read by advance_state_NN)
+          3. advance_state_NN → returns T_new, Y_new
+          4. update particle  → T, Y, hs (via parent.gas), X, state, mass_k, Hs
+        """
+        if self.T <= parent.T_threshold:
+            return
+ 
+        nn = parent.nn_inference
+ 
+        # ── 1. cluster attribution (writes nn.cluster, used inside advance_state_NN)
+        state_vec = np.append(self.T, self.Y)
+        if nn.nb_clusters > 1:
+            progvar = nn.compute_progvar(state_vec, self.P)
+            nn.attribute_cluster(state_vec, progvar)
+        else:
+            nn.cluster = 0
+ 
+        # ── 2. ANN advance — nn.cluster is set, advance_state_NN reads it via
+        #       self.Xscaler_list[self.cluster] and self.models_list[self.cluster]
+        T_new, Y_new = nn.advance_state_NN(self.T, self.Y, self.P, dt)
+ 
+        # ── 3. clip negative mass fractions that can arise from ANN
+        Y_new = np.clip(Y_new, 0.0, None)
+ 
+        # ── 4. update particle state
+        #       use parent.gas (not nn.gas which is left in old state after advance_state_NN)
+        self.T = float(T_new)
+        self.Y = Y_new.reshape(-1)
+ 
+        parent.gas.TPY = self.T, self.P, self.Y
+        self.hs = parent.gas.HP[0]
+        self.X  = parent.gas.X
+ 
+        self.state[0]  = self.hs
+        self.state[1]  = self.P
+        self.state[2:] = self.Y
+ 
+        self.mass_k = self.mass * self.Y
+        self.Hs     = self.mass * self.hs
 
     # TO REWRITE COMPLETELY FOR PYTORCH  
     # NN-based function to update chemistry
@@ -340,4 +371,3 @@ class Particle(object):
         # mu = parent.parent.gas.viscosity
         #
         self.Le_k = cond / (rho*cp*Dk)
-
