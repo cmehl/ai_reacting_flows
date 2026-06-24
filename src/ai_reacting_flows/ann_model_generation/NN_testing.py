@@ -497,6 +497,11 @@ class NNTesting():
         
         for i in range(self.nb_clusters):
             model = torch.load(os.path.join(self.models_folder, f"cluster{i}_model.pth"), weights_only=False)
+            # model = torch.load(
+            #     os.path.join(self.models_folder, f"cluster{i}_model.pth"),
+            #     map_location=torch.device("cpu"),
+            #     weights_only=False
+            # ) # MK : Test chargement d'un model entrainé sur GPU sur CPU
             # Add to list
             self.models_list.append(model)
 
