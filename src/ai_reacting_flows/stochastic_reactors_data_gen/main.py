@@ -146,11 +146,14 @@ def GenerateVariable_dt(params, comm : 'MPI.Comm'):
     # Opening h5 file
     run_folder = os.getcwd()
     stoch_results_folder = f"{run_folder:s}/STOCH_DTB_" + params["results_folder_suffix"]
-    h5file_r = h5py.File(f"{stoch_results_folder:s}/{params['dtb_file'].split('.')[0]:s}_resamp{int(params['T_threshold'])}K.h5", 'r')
+    # h5file_r = h5py.File(f"{stoch_results_folder:s}/{params['dtb_file'].split('.')[0]:s}_resamp{int(params['T_threshold'])}K.h5", 'r')
+    h5file_r = h5py.File(f"{stoch_results_folder:s}/{params['dtb_file'].split('.')[0]:s}.h5", 'r')
 
     # Solution 0 read to get columns names
     col_names_X = h5file_r["ITERATION_00000/X"].attrs["cols"][:-2]
     col_names_Y = h5file_r["ITERATION_00000/Y"].attrs["cols"][:-2]
+
+    print(f"X columns: {col_names_X} \n")
 
     # Loop on solutions
     list_df_X = []
@@ -166,9 +169,9 @@ def GenerateVariable_dt(params, comm : 'MPI.Comm'):
     np.random.shuffle(X) # DAK: check why we shuffle X
     state_list = np.dstack((X,Y)) # DAK : check why we dstack with Y (np.empty)
 
-    #adding dt to the features
     T_thresh = params['T_threshold']
 
+    # Adding dt to the features
     dt_simu = params['time_step']
     if params['time_step_type'] == 'set':
         dt_list = params['time_step_range']
@@ -189,11 +192,11 @@ def GenerateVariable_dt(params, comm : 'MPI.Comm'):
 
     count = 0
     all_new_states = []
-    #reacting all states X for dt in dt_range
+    # Reacting all states X for dt in dt_range
     for state in state_list: 
             count +=1
             if rank == 0 and count%5000 == 0:
-                print('Opération (proc 0)', count, '/', int(tot_0))
+                print('Operation (proc 0)', count, '/', int(tot_0))
             if params['time_step_type'] == 'random':
                 dt_list = sc.stats.loguniform(dt_range[0], dt_range[1]).rvs(size = nb_dt) 
                 dt_list.sort()

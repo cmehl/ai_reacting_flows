@@ -403,9 +403,10 @@ def compute_0D_reactor(fuel, mech_file, phi, T0, p):
     return T, Y_dict
 
 def react_multi_dt(state, gas, T_thresh, dt_list, dt_simu):
+
     # Unsolved pb: if Yk from NN is inputed here; 
     # it may become negative and mass is lost (output from CVODE is always positive)
-    time_step = np.ndarray((1,2) , buffer = np.array([dt_simu, 0]))
+    time_step = np.array([[dt_simu, 0]])
     state = np.append(state, time_step, axis = 0)
     new_states = np.empty_like([state,])
     if state[0,0] > T_thresh:  
@@ -418,7 +419,7 @@ def react_multi_dt(state, gas, T_thresh, dt_list, dt_simu):
         # Constant pressure reactor
         r = ct.IdealGasConstPressureReactor(gas)
         # Initializing reactor
-        sim = ct.ReactorNet([r])
+        sim = ct.ReactorNet([r])   # Cedric: for me there is a bug: sim should be in dt loop
         
         # Advancing to dts
         for dt in dt_list:
@@ -432,7 +433,9 @@ def react_multi_dt(state, gas, T_thresh, dt_list, dt_simu):
             state[:,1] = np.append(y, [0])
             new_states = np.append(new_states, np.array([state,]), axis = 0)
         new_states = new_states[1:,]
+
         return new_states
+    
     return None
 
 # =============================================================================

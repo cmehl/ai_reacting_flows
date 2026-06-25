@@ -28,6 +28,11 @@ pv_species:
 - H2O
 fuel:
 - H2
-dt_var: false
 calc_mean_traj: false
 ML_inference_flag: false
+time_step_type: random
+time_step_range:
+- 1.0e-07
+- 1.0e-06
+nb_dt: 5
+new_file_name: solutions_5dt.h5

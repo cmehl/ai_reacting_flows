@@ -49,6 +49,7 @@ class LearningDatabase(object):
         self.input_dtb_file = data_gen_parameters['dtb_file']
         self.detailed_mechanism  = data_gen_parameters["mech_file"]
         self.fuel  = data_gen_parameters["fuel"]
+        self.dt_var = data_gen_parameters['dt_var']
 
         self.database_name = dtb_processing_parameters["database_name"]
         self.log_transform_X  = dtb_processing_parameters["log_transform_X"]
