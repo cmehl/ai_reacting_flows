@@ -161,7 +161,7 @@ def GenerateVariable_dt(params, comm : 'MPI.Comm'):
 
     h5file_r.close()
 
-    X = pd.concat(list_df_X, ignore_index=True).to_numpy()
+    X = pd.concat(list_df_X, ignore_index=True).to_numpy().copy()
     Y = np.empty(X.shape)
     np.random.shuffle(X) # DAK: check why we shuffle X
     state_list = np.dstack((X,Y)) # DAK : check why we dstack with Y (np.empty)
