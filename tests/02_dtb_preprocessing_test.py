@@ -28,6 +28,8 @@ dtb_processing_parameters["nb_clusters"] = 2
 dtb_processing_parameters["clusterize_on"] = 'phys'
 dtb_processing_parameters["train_set_size"] = 0.75
 
+dtb_processing_parameters["dt_var"] = False
+
 def test_dtb_resampling():
     # required for CI on GitHub
     current_dir = os.path.dirname(__file__)

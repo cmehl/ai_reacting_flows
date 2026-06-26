@@ -35,7 +35,6 @@ data_gen_parameters["time_step"] = 5.0e-6       # Constant time step of the simu
 data_gen_parameters["time_max"] = 1e-3          # Simulation end time
 
 # Multiple dt parameters
-data_gen_parameters['dt_var'] = False
 data_gen_parameters['time_step_type'] = 'random'  # set or random, if 'set': input the values of dt in a table. If 'random' : input the range (min and max)
 data_gen_parameters['time_step_range'] = [0.1e-6, 1e-6]
 data_gen_parameters['nb_dt'] = 5 # number of dt to choose in the range for each data point (only if time_step_type = 'random')

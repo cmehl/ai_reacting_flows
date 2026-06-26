@@ -28,6 +28,8 @@ dtb_processing_parameters["nb_clusters"] = 1
 dtb_processing_parameters["clusterize_on"] = 'phys'
 dtb_processing_parameters["train_set_size"] = 0.75
 
+dtb_processing_parameters["dt_var"] = False
+
 def test_dtvar_dtb_processing():
     current_dir = os.path.dirname(__file__)
     os.chdir(current_dir)

@@ -402,37 +402,45 @@ def compute_0D_reactor(fuel, mech_file, phi, T0, p):
     
     return T, Y_dict
 
-def react_multi_dt(state, gas, T_thresh, dt_list, dt_simu):
+def react_multi_dt(state, gas, T_thresh, dt_list):
 
     # Unsolved pb: if Yk from NN is inputed here; 
     # it may become negative and mass is lost (output from CVODE is always positive)
-    time_step = np.array([[dt_simu, 0]])
+    time_step = np.array([[0, 0]])
     state = np.append(state, time_step, axis = 0)
     new_states = np.empty_like([state,])
+
     if state[0,0] > T_thresh:  
+
         # Initial value are current's particle state
-        T = state[0,0]
-        P = state[1,0]
-        Y = state[2:-1,0]
-        gas.TPY = T, P, Y
-        
-        # Constant pressure reactor
-        r = ct.IdealGasConstPressureReactor(gas)
-        # Initializing reactor
-        sim = ct.ReactorNet([r])   # Cedric: for me there is a bug: sim should be in dt loop
-        
+        T0 = state[0,0]
+        P0 = state[1,0]
+        Y0 = state[2:-1,0]
+
         # Advancing to dts
         for dt in dt_list:
+            
+            gas.TPY = T0, P0, Y0
+                        
+            # Constant pressure reactor
+            r = ct.IdealGasConstPressureReactor(gas)
+            # Initializing reactor
+            sim = ct.ReactorNet([r])
+
+            # Advancing simulation by dt
             state[-1, 0] = dt
             sim.advance(dt)
+
             # Updated state
-            y = np.empty(len(Y)+2)
+            y = np.empty(len(Y0)+2)
             y[0] = gas.T
             y[1] = gas.P
             y[2:] = gas.Y
+
             state[:,1] = np.append(y, [0])
             new_states = np.append(new_states, np.array([state,]), axis = 0)
-        new_states = new_states[1:,]
+        
+        new_states = new_states[1:,]  # First was empty and only used for using append in loop
 
         return new_states
     
