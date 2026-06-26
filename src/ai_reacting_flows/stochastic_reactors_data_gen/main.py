@@ -150,7 +150,7 @@ def GenerateVariable_dt(params, comm : 'MPI.Comm'):
     h5file_r = h5py.File(f"{stoch_results_folder:s}/{params['dtb_file'].split('.')[0]:s}.h5", 'r')
 
     # Solution 0 read to get columns names
-    col_names_X = h5file_r["ITERATION_00000/X"].attrs["cols"][:-2]
+    col_names_X = h5file_r["ITERATION_00000/X"].attrs["cols"][:-2]    # -2 because we remove c and HRR which are in those arrays in the h5 file
     col_names_Y = h5file_r["ITERATION_00000/Y"].attrs["cols"][:-2]
 
     print(f"X columns: {col_names_X} \n")
@@ -158,7 +158,9 @@ def GenerateVariable_dt(params, comm : 'MPI.Comm'):
     # Loop on solutions
     list_df_X = []
 
-    for i in range(len(h5file_r.keys())):
+    nb_solutions = len(h5file_r.keys())
+
+    for i in range(nb_solutions):
         data_X = h5file_r.get(f"ITERATION_{i:05d}/X")[:,:-2]
         list_df_X.append(pd.DataFrame(data=data_X, columns=col_names_X))
 
@@ -169,6 +171,7 @@ def GenerateVariable_dt(params, comm : 'MPI.Comm'):
     np.random.shuffle(X) # DAK: check why we shuffle X
     state_list = np.dstack((X,Y)) # DAK : check why we dstack with Y (np.empty)
 
+    # Temperature threshold
     T_thresh = params['T_threshold']
 
     # Adding dt to the features
@@ -180,6 +183,8 @@ def GenerateVariable_dt(params, comm : 'MPI.Comm'):
     else:
         dt_range = params['time_step_range']
         nb_dt = params['nb_dt']
+        dt_min, dt_max = dt_range[0], dt_range[1]
+        fact_min, fact_max = 1.0, 1.0  # Extend the learned dt 
 
     state_list = np.array_split(state_list, size)
     # assert len(state_list) == size
@@ -194,43 +199,51 @@ def GenerateVariable_dt(params, comm : 'MPI.Comm'):
     all_new_states = []
     # Reacting all states X for dt in dt_range
     for state in state_list: 
-            count +=1
-            if rank == 0 and count%5000 == 0:
-                print('Operation (proc 0)', count, '/', int(tot_0))
-            if params['time_step_type'] == 'random':
-                dt_list = sc.stats.loguniform(dt_range[0], dt_range[1]).rvs(size = nb_dt) 
-                dt_list.sort()
-            new_states = react_multi_dt(state, gas, T_thresh, dt_list, dt_simu)
-            if new_states is not None:
-                all_new_states.append(new_states)
+        count +=1
+        if rank == 0 and count%5000 == 0:
+            print(f"Operation (proc 0) : {count} / {int(tot_0)}")
+        if params['time_step_type'] == 'random':
+            #Sample dt
+            dt_list = np.random.uniform(low=np.log(fact_min*dt_min), high=np.log(fact_max*dt_max), size=(nb_dt))
+            dt_list = np.exp(dt_list)
+            # dt_list = sc.stats.loguniform(dt_range[0], dt_range[1]).rvs(size = nb_dt) 
+            dt_list.sort()  # CM: is it necessary ?
+        new_states = react_multi_dt(state, gas, T_thresh, dt_list)
+        if new_states is not None:
+            all_new_states.append(new_states)
     
     
     all_new_states = np.concatenate(all_new_states)
     X_new, Y_new = np.dsplit(all_new_states, 2)
     X_new, Y_new = np.squeeze(X_new), np.squeeze(Y_new)
     Y_new = Y_new[:,:-1]
-    print('READY', rank)
+
+    print(f'Processor {rank} has built array all_new_states. \n')
     
     comm.Barrier()
+
+    # Gather all X_new/Y_new arrays from every rank onto rank 0
+    all_X_new = comm.gather(X_new, root=0)
+    all_Y_new = comm.gather(Y_new, root=0)
 
     if rank ==0:
 
-        f = h5py.File(f"{stoch_results_folder:s}/{params['new_file_name']:s}","w")
+        # Concatenate the per-rank arrays into one global array
+        X_new_full = np.concatenate(all_X_new, axis=0)
+        Y_new_full = np.concatenate(all_Y_new, axis=0)
 
-    comm.Barrier()
-    
-    for i in range(size):
-        if rank == i:
-            print('WRITING', rank)
-            f = h5py.File(f"{stoch_results_folder:s}/{params['new_file_name']:s}","a")
-            grp = f.create_group(f"ITERATION_{(rank):05d}") 
-            dset_X = grp.create_dataset('X', data = X_new)
-            dset_Y = grp.create_dataset('Y', data = Y_new)
-            dset_X.attrs["cols"] = np.append(col_names_X, 'dt')
-            dset_Y.attrs["cols"] = col_names_Y
-            f.close()
-            print('WRITTEN', rank)
+        # For multi-dt all data is written by default in "ITERATION_00000" as it is too complex to keep the per iteration structure 
+        # (and useless as it is not considered when creating processed database)
+        print('WRITING', rank)
+        f = h5py.File(f"{stoch_results_folder:s}/{params['new_file_name']:s}", "w")
+        grp = f.create_group("ITERATION_00000")
+        dset_X = grp.create_dataset('X', data=X_new_full)
+        dset_Y = grp.create_dataset('Y', data=Y_new_full)
+        dset_X.attrs["cols"] = np.append(col_names_X, 'dt')
+        dset_Y.attrs["cols"] = col_names_Y
+        f.close()
+        print(f'Processor {rank} has written output file. \n')
             
-        comm.Barrier()
+    comm.Barrier()
     
     return 'Done'

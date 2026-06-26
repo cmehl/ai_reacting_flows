@@ -45,11 +45,9 @@ class LearningDatabase(object):
         with open(os.path.join(self.dtb_folder, "dtb_params.yaml"), "r") as file:
             data_gen_parameters = yaml.safe_load(file)
 
-        self.dt_var = data_gen_parameters['dt_var']
         self.input_dtb_file = data_gen_parameters['dtb_file']
         self.detailed_mechanism  = data_gen_parameters["mech_file"]
         self.fuel  = data_gen_parameters["fuel"]
-        self.dt_var = data_gen_parameters['dt_var']
 
         self.database_name = dtb_processing_parameters["database_name"]
         self.log_transform_X  = dtb_processing_parameters["log_transform_X"]
@@ -62,6 +60,7 @@ class LearningDatabase(object):
         self.T_threshold  = dtb_processing_parameters["T_threshold"]
         self.clustering_method = dtb_processing_parameters["clustering_method"]
         self.nb_clusters = dtb_processing_parameters["nb_clusters"]
+        self.dt_var = dtb_processing_parameters['dt_var']
 
         # Check if mechanism is in YAML format
         if not self.detailed_mechanism.endswith("yaml"):
