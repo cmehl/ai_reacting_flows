@@ -789,55 +789,55 @@ class NNTesting():
 
         return progvar
 
-    # Closure model for fictive species
-    def close_fictive_species(self, Y_ref, Y_reduced):
-        # Transposing to have a shape nb_points,nb_species, which is more convenient
-        Y_ref = Y_ref.transpose()
-        Y_reduced = Y_reduced.transpose()
+    # # Closure model for fictive species
+    # def close_fictive_species(self, Y_ref, Y_reduced):
+    #     # Transposing to have a shape nb_points,nb_species, which is more convenient
+    #     Y_ref = Y_ref.transpose()
+    #     Y_reduced = Y_reduced.transpose()
 
-        gas = ct.Solution(self.mech)
-        gas_reduced = ct.Solution(self.reduced_mechanism)
+    #     gas = ct.Solution(self.mech)
+    #     gas_reduced = ct.Solution(self.reduced_mechanism)
 
-        # Adding fictive species by conservation of properties
-        A_atomic = utils.get_molar_mass_atomic_matrix(gas.species_names, [self.fuel], not self.remove_N2)
-        Ya = np.dot(A_atomic, Y_ref.transpose()).transpose()
-        h = np.sum(gas.partial_molar_enthalpies/gas.molecular_weights*Y_ref, axis=1)
-        #
-        A_atomic_reduced = utils.get_molar_mass_atomic_matrix(gas_reduced.species_names, [self.fuel], not self.remove_N2)
-        Ya_reduced = np.dot(A_atomic_reduced, Y_reduced.transpose()).transpose()
-        h_reduced = np.sum(gas_reduced.partial_molar_enthalpies/gas_reduced.molecular_weights*Y_reduced, axis=1)
-        #
-        Delta_Ya = Ya - Ya_reduced
-        Delta_h = h - h_reduced
-        #
-        Delta = np.concatenate([Delta_Ya, Delta_h.reshape(-1,1)], axis=1)
-        #
-        A_atomic_fictive = utils.get_molar_mass_atomic_matrix(self.fictive_species, [self.fuel], not self.remove_N2)
-        partial_molar_enthalpies_fictive = np.empty(self.nb_spec_fictive)
-        molecular_weights_fictive = np.empty(self.nb_spec_fictive)
-        for i, spec in enumerate(self.fictive_species):
-            partial_molar_enthalpies_fictive[i] = gas_reduced.partial_molar_enthalpies[gas_reduced.species_index(spec)]
-            molecular_weights_fictive[i] = gas_reduced.molecular_weights[gas_reduced.species_index(spec)]
-        #
-        delta_h_f = partial_molar_enthalpies_fictive/molecular_weights_fictive
-        #
-        matrix_linear_system = np.concatenate([A_atomic_fictive, delta_h_f.reshape(1,-1)])
-        #
-        matrix_inv = np.linalg.inv(matrix_linear_system)
+    #     # Adding fictive species by conservation of properties
+    #     A_atomic = utils.get_molar_mass_atomic_matrix(gas.species_names, [self.fuel], not self.remove_N2)
+    #     Ya = np.dot(A_atomic, Y_ref.transpose()).transpose()
+    #     h = np.sum(gas.partial_molar_enthalpies/gas.molecular_weights*Y_ref, axis=1)
+    #     #
+    #     A_atomic_reduced = utils.get_molar_mass_atomic_matrix(gas_reduced.species_names, [self.fuel], not self.remove_N2)
+    #     Ya_reduced = np.dot(A_atomic_reduced, Y_reduced.transpose()).transpose()
+    #     h_reduced = np.sum(gas_reduced.partial_molar_enthalpies/gas_reduced.molecular_weights*Y_reduced, axis=1)
+    #     #
+    #     Delta_Ya = Ya - Ya_reduced
+    #     Delta_h = h - h_reduced
+    #     #
+    #     Delta = np.concatenate([Delta_Ya, Delta_h.reshape(-1,1)], axis=1)
+    #     #
+    #     A_atomic_fictive = utils.get_molar_mass_atomic_matrix(self.fictive_species, [self.fuel], not self.remove_N2)
+    #     partial_molar_enthalpies_fictive = np.empty(self.nb_spec_fictive)
+    #     molecular_weights_fictive = np.empty(self.nb_spec_fictive)
+    #     for i, spec in enumerate(self.fictive_species):
+    #         partial_molar_enthalpies_fictive[i] = gas_reduced.partial_molar_enthalpies[gas_reduced.species_index(spec)]
+    #         molecular_weights_fictive[i] = gas_reduced.molecular_weights[gas_reduced.species_index(spec)]
+    #     #
+    #     delta_h_f = partial_molar_enthalpies_fictive/molecular_weights_fictive
+    #     #
+    #     matrix_linear_system = np.concatenate([A_atomic_fictive, delta_h_f.reshape(1,-1)])
+    #     #
+    #     matrix_inv = np.linalg.inv(matrix_linear_system)
 
-        # Getting mass fractions of fictive species
-        Yk_fictive = np.dot(matrix_inv, Delta.transpose()).transpose()
-        #
-        j = 0
-        for i, spec in enumerate(gas_reduced.species_names):
-            if spec in self.fictive_species:
-                Y_reduced[:,i] = Yk_fictive[:,j]
-                j+=1
+    #     # Getting mass fractions of fictive species
+    #     Yk_fictive = np.dot(matrix_inv, Delta.transpose()).transpose()
+    #     #
+    #     j = 0
+    #     for i, spec in enumerate(gas_reduced.species_names):
+    #         if spec in self.fictive_species:
+    #             Y_reduced[:,i] = Yk_fictive[:,j]
+    #             j+=1
 
-        # Transposing back
-        Y_reduced = Y_reduced.transpose()
+    #     # Transposing back
+    #     Y_reduced = Y_reduced.transpose()
 
-        return Y_reduced
+    #     return Y_reduced
 
     def enforce_elements_balance(self, gas, Y_old, Y_new):
         # Resulting vector
