@@ -42,8 +42,17 @@ class DatabaseFlamelets(object):
         gas = ct.Solution(self.mech_file)
         self.species_names = gas.species_names
         self.nb_spec = len(self.species_names)
-        cols = ['Temperature'] + ['Pressure'] + self.species_names + ['enthalpy'] + ['reactor_type'] + ['Simulation number']
+        cols = ['Temperature'] + ['Pressure'] + self.species_names + ['enthalpy'] + ['Progress_variable'] + ['Heat_release_rate'] + ['reactor_type'] + ['Simulation number']
         self.df = pd.DataFrame(data=[], columns=cols)
+
+        # Progress variable setup
+        self.pv_species = data_gen_parameters["pv_species"]
+        self.npvspec = len(self.pv_species)
+        #
+        #: int: list of progress variable species indices
+        self.pv_ind = []
+        for i in range(self.npvspec):
+            self.pv_ind.append(gas.species_index(self.pv_species[i]))
 
 
     def compute_0d_reactors(self, zerod_params):
@@ -110,7 +119,6 @@ class DatabaseFlamelets(object):
         data_local = []
         curves_local = []  # (t_array, T_array) pairs, gathered later for the combined plot
 
-        # for i, row in self.df_ODE_train_0D.iterrows():
         for i, row in rows_local:
 
             phi_ini = row['Phi']
@@ -139,11 +147,16 @@ class DatabaseFlamelets(object):
 
             # Computing equilibrium (to get end of simulation criterion)
             gas_equil.TPX = temperature_ini, self.p, compo_ini
+            Yc_u  = gas_equil.Y[self.pv_ind].sum()
             gas_equil.equilibrate('HP')
+            Yc_eq = gas_equil.Y[self.pv_ind].sum()
             state_equil = np.append(gas_equil.X, gas_equil.T)
 
             equil_bool = False
             n_iter = 0
+
+            progvar_vect = []
+            hrr_vect = []
 
             while (equil_bool == False) and (time < max_sim_time):
                 
@@ -160,10 +173,25 @@ class DatabaseFlamelets(object):
                     sys.exit("solve_mode should be dt_cvode or dt_cfd")
 
                 # checking if equilibrium is reached
-                
                 state_current = np.append(r.thermo.X, r.T)
                 residual = 100.0*np.linalg.norm(state_equil - state_current,ord=np.inf)/np.linalg.norm(state_equil,
                                                                                                            ord=np.inf)
+                
+                # Compute progress variable
+                Yc = gas.Y[self.pv_ind].sum(axis=0)
+                if Yc_eq - Yc_u > 1e-10:
+                    progvar = (Yc - Yc_u) / (Yc_eq - Yc_u)
+                else:
+                    progvar = 0.0
+                progvar_vect.append(progvar)
+                
+                # Compute heat release rate
+                hrr = 0.0       
+                for spec in gas.species_names:
+                    standard_enthalpy_spec = gas.standard_enthalpies_RT[gas.species_index(spec)] * ct.gas_constant * gas.T
+                    hrr += -gas.net_production_rates[gas.species_index(spec)] * standard_enthalpy_spec
+                hrr_vect.append(hrr)
+
                 
                 n_iter +=1
                 # max iteration                    
@@ -173,34 +201,38 @@ class DatabaseFlamelets(object):
             # ============================== Construction of the database =========
             # Get the total number of rows for the current simulation
             n_rows = len(states.t) + 1
-            # temperature / pressure / Y / sim number
-            n_cols = 1 + 1 + nb_spec + 1 + 1 + 1
+            # nb_spec + [Temperature, Pressure, enthalpy, progress variable, HRR, reactor type, sim number] (=> +7)
+            n_cols = nb_spec + 7
             # empty array saving
             arr = np.empty(shape=(n_rows,n_cols))
             #  initial conditions
             arr[0,0] = temperature_ini
             arr[0,1] = self.p
             arr[0,2:2+nb_spec] = Y0
-            arr[0,-3] = h0
+            arr[0,-5] = h0
+            arr[0,-4] = 0.0
+            arr[0,-3] = 0.0
             arr[0,-2] = 0
             arr[0,-1] = i
             #  solution for each time step (each couple of S(t) and S(t+dt) for the dtCVODE case)
             arr[1:, 0] = states.T
             arr[1:, 1] = states.P
             arr[1:, 2:2 + nb_spec] = states.Y
-            arr[1:, -3] = states.enthalpy_mass
+            arr[1:, -5] = states.enthalpy_mass
+            arr[1:, -4] = np.asarray([progvar_vect])
+            arr[1:, -3] = np.asarray([hrr_vect])
             arr[1:, -2] = 0
             arr[1:, -1] = i
 
             # Save in pandas dataframe
-            cols = ['Temperature'] + ['Pressure'] + gas.species_names + ['enthalpy'] + ['reactor_type'] + ['Simulation number']
+            cols = ['Temperature'] + ['Pressure'] + gas.species_names + ['enthalpy'] + ['Progress_variable'] + ['Heat_release_rate'] + ['reactor_type'] + ['Simulation number']
             df = pd.DataFrame(data=arr, columns=cols)
 
             # List of dataframes
             data_local.append(df)
 
             # Store the raw curve (small numpy arrays, easy to pickle/gather)
-            curves_local.append((np.array(states.t), np.array(states.T)))
+            curves_local.append((np.array(states.t), np.array(states.T), np.asarray([progvar_vect]), np.asarray([hrr_vect])))
 
 
         # Gather results from all ranks onto rank 0
@@ -214,7 +246,7 @@ class DatabaseFlamelets(object):
     
             df_ODE_0D = pd.concat(data, axis=0).reset_index(drop=True)
             # Sort back by simulation number to keep a deterministic order
-            df_ODE_0D = df_ODE_0D.sort_values(['Simulation number']).reset_index(drop=True)
+            df_ODE_0D = df_ODE_0D.sort_values(['Simulation number'], kind='stable').reset_index(drop=True)
     
             if self.df.empty:
                 self.df = df_ODE_0D.copy()
@@ -222,11 +254,17 @@ class DatabaseFlamelets(object):
                 self.df = pd.concat([self.df, df_ODE_0D], axis=0).reset_index(drop=True)
     
             # Build the combined trajectories plot from every rank's curves
-            fig, ax = plt.subplots()
-            ax.set_xlabel("t [s]")
-            ax.set_ylabel("T [K]")
-            for t_arr, T_arr in curves:
-                ax.plot(t_arr, T_arr)
+            fig, (ax1, ax2, ax3) = plt.subplots(nrows=3)
+            for ax in [ax1, ax2, ax3]:
+                ax.set_xlabel("t [s]")
+            ax1.set_ylabel("T [K]")
+            ax2.set_ylabel("c [-]")
+            ax3.set_ylabel("HRR [W/m3]")
+            for t_arr, T_arr, progvar_arr, hrr_arr in curves:
+                ax1.plot(t_arr, T_arr)
+                ax2.plot(t_arr, progvar_arr.squeeze())
+                ax3.plot(t_arr, hrr_arr.squeeze())
+            fig.tight_layout()
             fig.savefig(os.path.join(self.folder, "0D_trajectories.png"))
     
         # Broadcast the merged dataframe back to every rank so self.df stays
@@ -340,31 +378,53 @@ class DatabaseFlamelets(object):
                 crashed = True
 
             if crashed==False:
-            
+
+                # Computation of progress variable (same Yceq as we are adiabatic)
+                gas_equil = ct.Solution(self.mech_file)
+                gas_equil.TPX = temperature_ini, self.p, compo_ini
+                Yc_u  = gas_equil.Y[self.pv_ind].sum()
+                gas_equil.equilibrate('HP')
+                Yc_eq = gas_equil.Y[self.pv_ind].sum()
+                #
+                Yc = f.Y[self.pv_ind, :].sum(axis=0)
+                if Yc_eq - Yc_u > 1e-10:
+                    progvar = (Yc - Yc_u) / (Yc_eq - Yc_u)
+                else:
+                    progvar = np.zeros_like(Yc)
+
+                # Computation of HRR
+                hrr = np.zeros(f.grid.size)
+                for n in range(f.grid.size):
+                    gas.TPY = f.T[n], f.P, f.Y[:, n]
+                    h = gas.standard_enthalpies_RT * ct.gas_constant * f.T[n]
+                    hrr[n] = -np.dot(gas.net_production_rates, h)
+
                 # ============================== Construction of the database =========
                 # Get the total number of rows for the current simulation
                 n_rows = len(f.grid)
-                # temperature / pressure / Y / sim number
-                n_cols = 1 + 1 + nb_spec + 1 + 1 + 1
+                # nb_spec + [Temperature, Pressure, enthalpy, progress variable, HRR, reactor type, sim number] (=> +7)
+                n_cols = nb_spec + 7
                 # empty array saving
                 arr = np.empty(shape=(n_rows,n_cols))
                 #  solution for each time step (each couple of S(t) and S(t+dt) for the dtCVODE case)
                 arr[:, 0] = f.T
                 arr[:, 1] = f.P
                 arr[:, 2:2 + nb_spec] = np.transpose(f.Y)
-                arr[:, -3] = f.enthalpy_mass
+                arr[:, -5] = f.enthalpy_mass
+                arr[:, -4] = progvar
+                arr[:, -3] = hrr
                 arr[:, -2] = 1
                 arr[:, -1] = i
 
                 # Save in pandas dataframe
-                cols = ['Temperature'] + ['Pressure'] + gas.species_names + ['enthalpy'] + ['reactor_type'] + ['Simulation number']
+                cols = ['Temperature'] + ['Pressure'] + gas.species_names + ['enthalpy'] + ['Progress_variable'] + ['Heat_release_rate'] + ['reactor_type'] + ['Simulation number']
                 df = pd.DataFrame(data=arr, columns=cols)
 
                 # List of dataframes
                 data_local.append(df)
 
                 # Store the raw curve (small numpy arrays, easy to pickle/gather)
-                curves_local.append((np.array(f.grid), np.array(f.T)))
+                curves_local.append((np.array(f.grid), np.array(f.T), progvar, hrr))
 
         # Gather results from all ranks onto rank 0
         all_data = self.comm.gather(data_local, root=0)
@@ -377,7 +437,7 @@ class DatabaseFlamelets(object):
     
             df_ODE_1D_prem = pd.concat(data, axis=0).reset_index(drop=True)
             # Sort back by simulation number to keep a deterministic order
-            df_ODE_1D_prem = df_ODE_1D_prem.sort_values(['Simulation number']).reset_index(drop=True)
+            df_ODE_1D_prem = df_ODE_1D_prem.sort_values(['Simulation number'], kind='stable').reset_index(drop=True)
     
             if self.df.empty:
                 self.df = df_ODE_1D_prem.copy()
@@ -385,11 +445,17 @@ class DatabaseFlamelets(object):
                 self.df = pd.concat([self.df, df_ODE_1D_prem], axis=0).reset_index(drop=True)
     
             # Build the combined trajectories plot from every rank's curves
-            fig, ax = plt.subplots()
-            ax.set_xlabel("x [m]")
-            ax.set_ylabel("T [K]")
-            for x_arr, T_arr in curves:
-                ax.plot(x_arr, T_arr)
+            fig, (ax1, ax2, ax3) = plt.subplots(nrows=3)
+            for ax in [ax1, ax2, ax3]:
+                ax.set_xlabel("x [m]")
+            ax1.set_ylabel("T [K]")
+            ax2.set_ylabel("c [-]")
+            ax3.set_ylabel("HRR [W/m3]")
+            for x_arr, T_arr, progvar_arr, hrr_arr in curves:
+                ax1.plot(x_arr, T_arr)
+                ax2.plot(x_arr, progvar_arr)
+                ax3.plot(x_arr, hrr_arr)
+            fig.tight_layout()
             fig.savefig(os.path.join(self.folder, "1D_prem_trajectories.png"))
     
         # Broadcast the merged dataframe back to every rank so self.df stays
@@ -478,9 +544,12 @@ class DatabaseFlamelets(object):
 
             gas.TPX = temperature_ini, self.p, compo_ini_o
             density_o = gas.density
+            Y_o = gas.Y.copy()
+            h_o = gas.enthalpy_mass                   # J/kg
             gas.TPX = 300.0, self.p, compo_ini_f
             density_f = gas.density
-
+            Y_f = gas.Y.copy()
+            h_f = gas.enthalpy_mass                   # J/kg
 
             # Stream mass flow rates
             vel = strain * width / 2.0
@@ -516,30 +585,78 @@ class DatabaseFlamelets(object):
                 crashed = True
 
             if crashed==False:
+                
+                #NOT WORKING: c reaches 2 ...
+                # # Computation of progress variable: we compute unburnt and burnt values from a local state (based on Z)
+                # #Unburnt is on the mixing line and burnt is computed from an equilibrium computation
+                # Z_arr = f.mixture_fraction("Bilger")
+                # progvar = np.zeros_like(Z_arr)
+                # gas_equil = ct.Solution(self.mech_file)
+                # for n in range(f.grid.size):
+
+                #     Z = Z_arr[n]
+
+                #     # Local cold unburnt state at same Z
+                #     Y_mix = Z * Y_f + (1.0 - Z) * Y_o
+                #     h_mix = Z * h_f + (1.0 - Z) * h_o
+                #     gas_equil.HPY = h_mix, self.p, Y_mix
+                #     Yc_u = gas_equil.Y[self.pv_ind].sum()
+
+                #     # Equilibrium from that local state
+                #     gas_equil.equilibrate('HP')
+                #     Yc_eq = gas_equil.Y[self.pv_ind].sum()
+
+                #     # Current flame point
+                #     Yc = f.Y[self.pv_ind, n].sum()
+
+                #     if Yc_eq - Yc_u > 1e-10:
+                #         progvar[n] = (Yc - Yc_u) / (Yc_eq - Yc_u)
+                #     else:
+                #         progvar[n] = 0.0
+
+                # Easier solution: we normalize by min and max of Yc in flame
+                # For what we need to do with progvar (undersample database mostly) it should be ok
+                Yc_arr = f.Y[self.pv_ind, :].sum(axis=0)
+                Yc_min = Yc_arr.min()
+                Yc_max = Yc_arr.max()
+                if Yc_max - Yc_min > 1e-10:
+                    progvar = (Yc_arr - Yc_min) / (Yc_max - Yc_min)
+                else:
+                    progvar = np.zeros_like(Yc_arr)
+
+                # Computation of HRR
+                hrr = np.zeros(f.grid.size)
+                for n in range(f.grid.size):
+                    gas.TPY = f.T[n], f.P, f.Y[:, n]
+                    h = gas.standard_enthalpies_RT * ct.gas_constant * f.T[n]
+                    hrr[n] = -np.dot(gas.net_production_rates, h)
+
                 # ============================== Construction of the database =========
                 # Get the total number of rows for the current simulation
                 n_rows = len(f.grid)
-                # temperature / pressure / Y / sim number
-                n_cols = 1 + 1 + nb_spec + 1 + 1 + 1
+                # nb_spec + [Temperature, Pressure, enthalpy, progress variable, HRR, reactor type, sim number] (=> +7)
+                n_cols = nb_spec + 7
                 # empty array saving
                 arr = np.empty(shape=(n_rows,n_cols))
                 #  solution for each time step (each couple of S(t) and S(t+dt) for the dtCVODE case)
                 arr[:, 0] = f.T
                 arr[:, 1] = f.P
                 arr[:, 2:2 + nb_spec] = np.transpose(f.Y)
-                arr[:, -3] = f.enthalpy_mass
+                arr[:, -5] = f.enthalpy_mass
+                arr[:, -4] = progvar
+                arr[:, -3] = hrr
                 arr[:, -2] = 2
                 arr[:, -1] = i
-
+                
                 # Save in pandas dataframe
-                cols = ['Temperature'] + ['Pressure'] + gas.species_names + ['enthalpy'] + ['reactor_type'] + ['Simulation number']
+                cols = ['Temperature'] + ['Pressure'] + gas.species_names + ['enthalpy'] + ['Progress_variable'] + ['Heat_release_rate'] + ['reactor_type'] + ['Simulation number']
                 df = pd.DataFrame(data=arr, columns=cols)
 
                 # List of dataframes
                 data_local.append(df)
 
                 # Store the raw curve (small numpy arrays, easy to pickle/gather)
-                curves_local.append((np.array(f.grid), np.array(f.T)))
+                curves_local.append((np.array(f.grid), np.array(f.T), progvar, hrr))
 
         # Gather results from all ranks onto rank 0
         all_data = self.comm.gather(data_local, root=0)
@@ -552,7 +669,7 @@ class DatabaseFlamelets(object):
     
             df_ODE_1D_diff = pd.concat(data, axis=0).reset_index(drop=True)
             # Sort back by simulation number to keep a deterministic order
-            df_ODE_1D_diff = df_ODE_1D_diff.sort_values(['Simulation number']).reset_index(drop=True)
+            df_ODE_1D_diff = df_ODE_1D_diff.sort_values(['Simulation number'], kind='stable').reset_index(drop=True)
     
             if self.df.empty:
                 self.df = df_ODE_1D_diff.copy()
@@ -560,11 +677,17 @@ class DatabaseFlamelets(object):
                 self.df = pd.concat([self.df, df_ODE_1D_diff], axis=0).reset_index(drop=True)
     
             # Build the combined trajectories plot from every rank's curves
-            fig, ax = plt.subplots()
-            ax.set_xlabel("x [m]")
-            ax.set_ylabel("T [K]")
-            for x_arr, T_arr in curves:
-                ax.plot(x_arr, T_arr)
+            fig, (ax1, ax2, ax3) = plt.subplots(nrows=3)
+            for ax in [ax1, ax2, ax3]:
+                ax.set_xlabel("x [m]")
+            ax1.set_ylabel("T [K]")
+            ax2.set_ylabel("c [-]")
+            ax3.set_ylabel("HRR [W/m3]")
+            for x_arr, T_arr, progvar_arr, hrr_arr in curves:
+                ax1.plot(x_arr, T_arr)
+                ax2.plot(x_arr, progvar_arr)
+                ax3.plot(x_arr, hrr_arr)
+            fig.tight_layout()
             fig.savefig(os.path.join(self.folder, "1D_diff_trajectories.png"))
     
         # Broadcast the merged dataframe back to every rank so self.df stays
@@ -579,7 +702,7 @@ class DatabaseFlamelets(object):
 
         gas = ct.Solution(self.mech_file)
 
-        cols = ['Temperature'] + ['Pressure'] + gas.species_names + ['enthalpy'] + ['reactor_type'] + ['Simulation number']
+        cols = ['Temperature'] + ['Pressure'] + gas.species_names + ['enthalpy']+ ['Progress_variable'] + ['Heat_release_rate'] + ['reactor_type'] + ['Simulation number']
         self.df_augmented = pd.DataFrame(data=[], columns=cols)
 
 
@@ -595,13 +718,33 @@ class DatabaseFlamelets(object):
             max_values_1D_diff = self.df[self.df["reactor_type"]==2].max()    # We should probably do it by simulation type !!
             min_values_1D_diff = self.df[self.df["reactor_type"]==2].min()
 
+        h_idx = 2 + self.nb_spec
+        bounds = {}
+        if self.include_zerod:
+            bounds[0] = (max_values_0D.iloc[h_idx], min_values_0D.iloc[h_idx])
+        if self.include_oned_prem:
+            bounds[1] = (max_values_1D_prem.iloc[h_idx], min_values_1D_prem.iloc[h_idx])
+        if self.include_oned_diff:
+            bounds[2] = (max_values_1D_diff.iloc[h_idx], min_values_1D_diff.iloc[h_idx])
+
+
+        # Split row indices across ranks
+        rows = list(self.df.iterrows())
+        rows_local = rows[self.rank::self.size]    
+
+        local_rows_new = []
+        local_idx_new = []
+
         # Data augmentation based on the work of Ding et al. (HFRD method)
-        for i, row in self.df.iterrows():
+        # Subtelty here: when you do that i correspond to the original row index; and therefore by saving i we are able to rebuild 
+        # df_augmented with the rows having same positions than original dataframe
+        for i, row in rows_local: 
             
             tries = 0
             accepted = False
             while tries<=10 and accepted==False:
                 
+                rng = np.random.default_rng(42 + i) # per row rng needed to avoid processor dependent results
                 tries += 1
                 accepted = True
 
@@ -609,24 +752,13 @@ class DatabaseFlamelets(object):
                 p = row.iloc[1]
                 Yk = row.iloc[2:2 + self.nb_spec].values
                 h = row.iloc[2 + self.nb_spec]
-                i_reac = row.iloc[3 + self.nb_spec]
+                i_reac = row.iloc[5 + self.nb_spec]
 
-
-                # Bounds depending on reactor type
-                if i_reac==0:
-                    hmax = max_values_0D.iloc[2 + self.nb_spec]
-                    hmin = min_values_0D.iloc[2 + self.nb_spec]
-                elif i_reac==1:
-                    hmax = max_values_1D_prem.iloc[2 + self.nb_spec]
-                    hmin = min_values_1D_prem.iloc[2 + self.nb_spec]
-                elif i_reac==2:
-                    hmax = max_values_1D_diff.iloc[2 + self.nb_spec]
-                    hmin = min_values_1D_diff.iloc[2 + self.nb_spec]
-
+                hmax, hmin = bounds[i_reac]
                 
                 # Random numbers
-                c = np.random.uniform(-1, 1)
-                d = np.random.uniform(-1, 1)
+                c = rng.uniform(-1, 1)
+                d = rng.uniform(-1, 1)
 
                 # Parameters
                 a = 8
@@ -645,11 +777,13 @@ class DatabaseFlamelets(object):
                 except ct.CanteraError:
                     print(f">> T computation crashed for row {i}")
                     accepted = False
+                    continue
 
 
                 # Skip under some conditions
                 if Tnew<300.0:
                     accepted = False
+                    continue
 
                 # Elements (C, H, O, N)
                 X_el = compute_X_element(gas.species_names, Yknew)
@@ -659,18 +793,42 @@ class DatabaseFlamelets(object):
 
 
                 if accepted:
-                    row_new = np.empty(5+self.nb_spec)
+                    row_new = np.empty(7+self.nb_spec)
                     row_new[0] = Tnew
                     row_new[1] = p
                     row_new[2:2 + self.nb_spec] = Yknew
                     row_new[2 + self.nb_spec] = hnew
-                    row_new[3 + self.nb_spec] = row.iloc[3 + self.nb_spec]
-                    row_new[4 + self.nb_spec] = row.iloc[4 + self.nb_spec]
+                    row_new[3 + self.nb_spec] = row.iloc[3 + self.nb_spec]   #CM: recompute proper progvar 
+                    row_new[4 + self.nb_spec] = row.iloc[4 + self.nb_spec]   #CM: recompute proper HRR
+                    row_new[5 + self.nb_spec] = row.iloc[6 + self.nb_spec]
+                    row_new[6 + self.nb_spec] = row.iloc[5 + self.nb_spec]
 
-                    self.df_augmented.loc[i] = row_new
+                    local_rows_new.append(row_new)
+                    local_idx_new.append(i)
+
+        # Gather results from all ranks onto rank 0
+        all_rows_new = self.comm.gather(local_rows_new, root=0)
+        all_idx_new = self.comm.gather(local_idx_new, root=0)
+
+        if self.rank == 0:
+            flat_rows = [r for sub in all_rows_new for r in sub]
+            flat_idx = [idx for sub in all_idx_new for idx in sub]
+
+            if flat_rows:
+                self.df_augmented = pd.DataFrame(data=flat_rows, columns=cols, index=flat_idx)
+                self.df_augmented = self.df_augmented.sort_index()
+            else:
+                self.df_augmented = pd.DataFrame(data=[], columns=cols)
+        else:
+            self.df_augmented = None
+
+        # Broadcast self.df_augmented from rank 0 to every rank
+        self.df_augmented = self.comm.bcast(self.df_augmented, root=0)
+
+        # Now every rank has an identical self.df_augmented, so this is consistent everywhere
+        self.df = pd.concat([self.df, self.df_augmented], axis=0).reset_index(drop=True)
 
 
-        self.df = pd.concat([self.df, self.df_augmented], axis=0).reset_index(drop=True) 
 
 
     def save_database(self):
@@ -688,15 +846,20 @@ class DatabaseFlamelets(object):
         # so every rank applies the EXACT same shuffle (otherwise each rank's
         # np.random call would draw a different permutation independently).
         if self.rank == 0:
-            permutation_train = np.random.permutation(self.X.shape[0])
+            # Use a fixed RNG seed so the shuffle is reproducible
+            rng = np.random.default_rng(42)
+            permutation_train = rng.permutation(self.X.shape[0])
         else:
             permutation_train = None
         
         permutation_train = self.comm.bcast(permutation_train, root=0)
 
+        self.X = self.X.iloc[permutation_train].reset_index(drop=True)
+        self.Y = self.Y.iloc[permutation_train].reset_index(drop=True)
+
         # Store initial solution in h5 file
         if self.rank==0:
-            cols = ['Temperature'] + ['Pressure'] + self.species_names
+            cols = ['Temperature'] + ['Pressure'] + self.species_names + ['Prog_var'] + ['HRR']
             f = h5py.File(f"{self.folder}/{self.dtb_file}","w")
             grp = f.create_group("ITERATION_00000") 
             dset = grp.create_dataset("X", data=self.X.values)
@@ -732,7 +895,7 @@ class DatabaseFlamelets(object):
         X = X[self.X_cols]
 
         # Remove non needed lables for Y
-        list_to_remove = ['enthalpy_Y', 'Temperature_Y']   # Temperature computed from enthalpy conservation
+        list_to_remove = ['enthalpy_Y']   # Temperature computed from enthalpy conservation
         # Removing unwanted items
         [self.Y_cols.remove(elt) for elt in list_to_remove]
         Y= Y[self.Y_cols]
@@ -775,6 +938,8 @@ class DatabaseFlamelets(object):
             Y_local[k_local, 0] = self.gas.T
             Y_local[k_local, 1] = self.gas.P
             Y_local[k_local, 2:2 + self.nb_spec] = self.gas.Y
+            Y_local[k_local, 3 + self.nb_spec] = -1.0 # We add progvar to the dataset but we set meaningless value as it is not needed later
+            Y_local[k_local, 4 + self.nb_spec] = -1.0 # We add hrr to the dataset but we set meaningless value as it is not needed later
 
         # Gather local results + their global row indices on every rank
         # (Allgather so every rank ends up with the full Y, ready to use)
@@ -793,19 +958,23 @@ class DatabaseFlamelets(object):
 
         fig, ax = plt.subplots()
 
-        if self.include_zerod:
-            ax.scatter(self.df_augmented[x_var][self.df_augmented["reactor_type"]==0], self.df_augmented[y_var][self.df_augmented["reactor_type"]==0], color="blue", alpha=0.2,  s=3)
-        if self.include_oned_prem:
-            ax.scatter(self.df_augmented[x_var][self.df_augmented["reactor_type"]==1], self.df_augmented[y_var][self.df_augmented["reactor_type"]==1], color="green", alpha=0.2,  s=3)
-        if self.include_oned_diff:
-            ax.scatter(self.df_augmented[x_var][self.df_augmented["reactor_type"]==2], self.df_augmented[y_var][self.df_augmented["reactor_type"]==2], color="purple", alpha=0.2,  s=3)
+        if self.augment_dataset:
+            if self.include_zerod:
+                ax.scatter(self.df_augmented[x_var][self.df_augmented["reactor_type"]==0], self.df_augmented[y_var][self.df_augmented["reactor_type"]==0], color="blue", alpha=0.2,  s=3)
+            if self.include_oned_prem:
+                ax.scatter(self.df_augmented[x_var][self.df_augmented["reactor_type"]==1], self.df_augmented[y_var][self.df_augmented["reactor_type"]==1], color="green", alpha=0.2,  s=3)
+            if self.include_oned_diff:
+                ax.scatter(self.df_augmented[x_var][self.df_augmented["reactor_type"]==2], self.df_augmented[y_var][self.df_augmented["reactor_type"]==2], color="purple", alpha=0.2,  s=3)
+            flamelet_data = self.df_flamelet
+        else:
+            flamelet_data = self.df
 
         if self.include_zerod:
-            ax.scatter(self.df_flamelet[x_var][self.df_flamelet["reactor_type"]==0], self.df_flamelet[y_var][self.df_flamelet["reactor_type"]==0], color="blue", s=3, label="0D")
+            ax.scatter(flamelet_data[x_var][flamelet_data["reactor_type"]==0], flamelet_data[y_var][flamelet_data["reactor_type"]==0], color="blue", s=3, label="0D")
         if self.include_oned_prem:
-            ax.scatter(self.df_flamelet[x_var][self.df_flamelet["reactor_type"]==1], self.df_flamelet[y_var][self.df_flamelet["reactor_type"]==1], color="green", s=3, label="1D premixed")
+            ax.scatter(flamelet_data[x_var][flamelet_data["reactor_type"]==1], flamelet_data[y_var][flamelet_data["reactor_type"]==1], color="green", s=3, label="1D premixed")
         if self.include_oned_diff:
-            ax.scatter(self.df_flamelet[x_var][self.df_flamelet["reactor_type"]==2], self.df_flamelet[y_var][self.df_flamelet["reactor_type"]==2], color="purple", s=3, label="1D diffusion")
+            ax.scatter(flamelet_data[x_var][flamelet_data["reactor_type"]==2], flamelet_data[y_var][flamelet_data["reactor_type"]==2], color="purple", s=3, label="1D diffusion")
 
         ax.set_xlabel(x_var, fontsize=14)
         ax.set_ylabel(y_var, fontsize=14)
