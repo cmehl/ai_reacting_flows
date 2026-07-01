@@ -72,8 +72,6 @@ def generate_stochastic_database(comm : 'MPI.Comm'):
         PRINT(" SIMULATION OF STOCHASTIC PARTICLES ")
         PRINT(60 * "=")
 
-        # Checking input parameters
-
         # Remove existing results dir if already exists
         results_folder = "STOCH_DTB_" + data_gen_parameters["results_folder_suffix"]
         if os.path.isdir(results_folder):

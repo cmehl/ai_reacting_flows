@@ -1,3 +1,4 @@
+database_type: stoch
 dtb_folder_suffix: H2_POF_2023
 database_name: dtb_resampled
 log_transform_X: 1

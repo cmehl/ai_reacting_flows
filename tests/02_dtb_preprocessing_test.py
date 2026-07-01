@@ -8,6 +8,7 @@ from misc import fHRR, extract_h2_dtvar_dtb_histograms
 dtb_processing_parameters = {}
 
 # Input / output database files
+dtb_processing_parameters["database_type"] = "stoch"              # Type of database
 dtb_processing_parameters["dtb_folder_suffix"] = "TEST"       # Stochastic reactors simulation folder
 dtb_processing_parameters["database_name"] = "dtb_resampled" # "database_log_log_resampled_kmeans_3clusters"                   # Resulting database name
 dtb_processing_parameters["dtb_file"] = "solutions.h5"
