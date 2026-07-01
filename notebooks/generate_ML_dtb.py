@@ -35,7 +35,7 @@
 # ## Data reading
 
 # %%
-from ai_reacting_flows.stochastic_reactors_data_gen.database_processing import LearningDatabase
+from ai_reacting_flows.databases_processing.database_processing import LearningDatabase
 
 # %%
 # %load_ext autoreload

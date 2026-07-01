@@ -1,4 +1,4 @@
-from ai_reacting_flows.stochastic_reactors_data_gen.main import GenerateVariable_dt
+from ai_reacting_flows.databases_processing.generate_var_dt_dtb import GenerateVariable_dt
 from misc import extract_h2_dtvar_dtb_histograms
 
 import DummyComm as dc

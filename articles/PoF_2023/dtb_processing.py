@@ -1,4 +1,4 @@
-from ai_reacting_flows.stochastic_reactors_data_gen.database_processing import LearningDatabase
+from ai_reacting_flows.databases_processing.database_processing import LearningDatabase
 
 # Function applied on the HRR
 def fHRR(x):
