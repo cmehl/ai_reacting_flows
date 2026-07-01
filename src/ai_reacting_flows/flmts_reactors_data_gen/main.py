@@ -1,6 +1,7 @@
 import os
 import shutil
 import oyaml as yaml
+from time import perf_counter
 
 from mpi4py import MPI
 
@@ -9,6 +10,9 @@ from ai_reacting_flows.tools.utilities import PRINT
 
 
 def generate_flmts_database(comm : 'MPI.Comm'):
+
+    # Initial computation time
+    t_ini = perf_counter()
 
     run_folder = os.getcwd()
     with open(os.path.join(run_folder, "dtb_params_flmts.yaml"), "r") as file:
@@ -102,8 +106,12 @@ def generate_flmts_database(comm : 'MPI.Comm'):
 
         shutil.copy(os.path.join(run_folder, "dtb_params_flmts.yaml"), f"{run_folder:s}/FLAMELETS_DTB_{data_gen_parameters['results_folder_suffix']}/dtb_params_flmts.yaml")
 
+         # End computation time
+        t_end = perf_counter()
+
         PRINT("")
         PRINT("END OF SIMULATION")
+        PRINT(f"Total CPU time to generate database: {t_end-t_ini:4.3f} s")
         PRINT("")
 
     return

@@ -8,8 +8,8 @@ dtb_file: solutions.h5
 pressure: 101325.0
 dt_cfd:  1.0e-6
 include_zerod: True
-include_oned_prem: True
-include_oned_diff: True
+include_oned_prem: False
+include_oned_diff: False
 zerod_params:
   phi_bounds:
   - 0.6
@@ -17,7 +17,7 @@ zerod_params:
   T0_bounds:
   - 1800.0
   - 2000.0
-  n_samples: 10
+  n_samples: 100
   max_sim_time: 1.0e-2
   solve_mode: "dt_cfd"
 oned_prem_params:
@@ -37,4 +37,4 @@ oned_diff_params:
     - 500.0
   n_samples: 3
   width: 0.02
-augment_dataset: True
+augment_dataset: False

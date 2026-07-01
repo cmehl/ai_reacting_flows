@@ -38,16 +38,6 @@ class LearningDatabase(object):
         self.run_folder = os.getcwd()
         with open(os.path.join(self.run_folder, "dtb_processing.yaml"), "r") as file:
             dtb_processing_parameters = yaml.safe_load(file)
-        
-        # Folder where results are stored
-        self.dtb_folder = f"{self.run_folder:s}/STOCH_DTB_" + dtb_processing_parameters["dtb_folder_suffix"]
-
-        with open(os.path.join(self.dtb_folder, "dtb_params.yaml"), "r") as file:
-            data_gen_parameters = yaml.safe_load(file)
-
-        self.input_dtb_file = data_gen_parameters['dtb_file']
-        self.detailed_mechanism  = data_gen_parameters["mech_file"]
-        self.fuel  = data_gen_parameters["fuel"]
 
         self.database_type = dtb_processing_parameters["database_type"]
         self.database_name = dtb_processing_parameters["database_name"]
@@ -63,6 +53,27 @@ class LearningDatabase(object):
         self.nb_clusters = dtb_processing_parameters["nb_clusters"]
         self.dt_var = dtb_processing_parameters['dt_var']
 
+        if self.database_type not in ["stoch", "flamelets"]:
+            sys.exit("Error on database_type. It should be 'stoch' or 'flamelets'")
+
+        # Parameters depending on database type
+        if self.database_type=="stoch":
+            folder_prefix = "STOCH"
+            dtb_params_file = "dtb_params.yaml"
+        elif self.database_type=="flamelets":
+            folder_prefix = "FLAMELETS"
+            dtb_params_file = "dtb_params_flmts.yaml"
+        
+        # Folder where results are stored
+        self.dtb_folder = f"{self.run_folder:s}/{folder_prefix}_DTB_" + dtb_processing_parameters["dtb_folder_suffix"]
+
+        with open(os.path.join(self.dtb_folder, dtb_params_file), "r") as file:
+            data_gen_parameters = yaml.safe_load(file)
+
+        self.input_dtb_file = data_gen_parameters['dtb_file']
+        self.detailed_mechanism  = data_gen_parameters["mech_file"]
+        self.fuel  = data_gen_parameters["fuel"]
+
         # Check if mechanism is in YAML format
         if not self.detailed_mechanism.endswith("yaml"):
             sys.exit("ERROR: chemical mechanism should be in yaml format !")
@@ -74,16 +85,15 @@ class LearningDatabase(object):
         h5file_r.close()
         if self.database_type=="stoch":
             self.get_stoch_database_from_h5()
-        elif self.database_type=="zerod":
-            self.get_zerod_database_from_h5()
-        else:
-            sys.exit("Error on database_type. It should be 'stoch' or 'zerod'")
+        elif self.database_type=="flamelets":
+            self.get_flmts_database_from_h5()
 
         # Extracting some information
         if self.dt_var:
             self.species_names = self.X.columns[2:-1]
         else:
             self.species_names = self.X.columns[2:-2]
+        print(f" >> species names: {self.species_names}")
         self.nb_species = len(self.species_names)
 
         # Saving folder: by default the model is saved in cluster0
@@ -108,12 +118,13 @@ class LearningDatabase(object):
         shutil.copy(self.detailed_mechanism, self.dtb_folder + "/" + self.database_name + "/mech_detailed.yaml")
         shutil.copy(os.path.join(self.run_folder, "dtb_processing.yaml"), self.dtb_folder + "/" + self.database_name + "/dtb_processing.yaml")
 
-        self.is_reduced = False
+        # self.is_reduced = False
         self.is_resampled = False
 
         self.is_pca_computed = False
 
         self.check_inputs()
+
     
     def get_stoch_database_from_h5(self):
 
@@ -171,9 +182,26 @@ class LearningDatabase(object):
 
         print("\n H5PY dataset created")
 
-    def get_zerod_database_from_h5(self):
-        # to be written
+
+    def get_flmts_database_from_h5(self):
+        
+        # Opening h5 file
+        h5file_r = h5py.File(self.dtb_folder + "/" + self.input_dtb_file, 'r')
+
+        # Solution 0 read to get columns names
+        col_names_X = h5file_r["FLAMELETS/X"].attrs["cols"]
+        col_names_Y = h5file_r["FLAMELETS/Y"].attrs["cols"]
+
+        data_X = h5file_r.get(f"FLAMELETS/X")[()]
+        data_Y = h5file_r.get(f"FLAMELETS/Y")[()]
+
+        h5file_r.close()
+
+        self.X = pd.DataFrame(data=data_X, columns=col_names_X)
+        self.Y = pd.DataFrame(data=data_Y, columns=col_names_Y)
+
         return
+
 
     def apply_temperature_threshold(self):
 
@@ -770,9 +798,9 @@ class LearningDatabase(object):
             joblib.dump(Xscaler, f"{self.dtb_folder}/{self.database_name}/cluster{i_cluster}/Xscaler.save")
             joblib.dump(Yscaler, f"{self.dtb_folder}/{self.database_name}/cluster{i_cluster}/Yscaler.save")
 
-            print(f"X_train mean / std = {X_train.mean()} / {X_train.std()}")
-            print(f"Y_train mean / std = {Y_train.mean()} / {Y_train.std()}")
-            print(f"Y_train max / min = {Y_train.max()} / {Y_train.min()}")
+            # print(f"X_train mean / std = {X_train.mean()} / {X_train.std()}")
+            # print(f"Y_train mean / std = {Y_train.mean()} / {Y_train.std()}")
+            # print(f"Y_train max / min = {Y_train.max()} / {Y_train.min()}")
 
             # Forcing constant N2
             # n2_cte = not self.with_N_chemistry
@@ -901,7 +929,7 @@ class LearningDatabase(object):
         data , x_e, y_e = np.histogram2d(x, y, bins = bins, density = False )
         z = interpn( ( 0.5*(x_e[1:] + x_e[:-1]) , 0.5*(y_e[1:]+y_e[:-1]) ) , data , np.vstack([x,y]).T , method = "splinef2d", bounds_error = False)
 
-        #To be sure to plot all data
+        # To be sure to plot all data
         z[np.where(np.isnan(z))] = 0.0
 
         # Sort the points by density, so that the densest points are plotted last
@@ -918,9 +946,10 @@ class LearningDatabase(object):
         fig.tight_layout()
 
         if self.is_resampled:
-            fig.savefig(f"{self.dtb_folder}_density_{var_x}_{var_y}_resampled.png", dpi=400)
+            fig.savefig(os.path.join(self.dtb_folder, f"density_{var_x}_{var_y}_resampled.png"), dpi=400)
         else:
-            fig.savefig(f"{self.dtb_folder}_density_{var_x}_{var_y}.png", dpi=400)
+            fig.savefig(os.path.join(self.dtb_folder, f"density_{var_x}_{var_y}.png"), dpi=400)
+
 
     # Marginal PDF of a given variable in the dataframe
     def plot_pdf_var(self, var):
@@ -979,7 +1008,7 @@ class LearningDatabase(object):
         ax1.legend(fontsize=10)
 
         fig.tight_layout()
-        fig.savefig("comparison_distribution.png", dpi=400)
+        fig.savefig(os.path.join(self.dtb_folder,"comparison_distribution.png"), dpi=400)
 
     # Compute PCA of database
     def compute_pca(self):

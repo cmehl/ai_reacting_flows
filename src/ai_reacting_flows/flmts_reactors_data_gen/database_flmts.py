@@ -1,4 +1,5 @@
 import os, sys
+from typing import Dict
 from scipy.stats import qmc
 import numpy as np
 import pandas as pd
@@ -15,13 +16,31 @@ from ai_reacting_flows.tools.utilities import compute_X_element
 
 class DatabaseFlamelets(object):
 
-    def __init__(self, data_gen_parameters, comm):
-            
+    """Generate flamelet databases using Cantera and MPI.
+
+    This class is instantiated from ``flmts_reactors_data_gen.main.generate_flmts_database``
+    and encapsulates 0D, 1D premixed, and 1D diffusion flame simulations,
+    optional data augmentation, and HDF5 export.
+    """
+
+    def __init__(self, data_gen_parameters: Dict, comm) -> None:
+        """Initialize the flamelet database generator.
+
+        Parameters
+        ----------
+        data_gen_parameters:
+            Parsed YAML configuration dictionary used by
+            ``generate_flmts_database``.
+        comm:
+            MPI communicator used to distribute the workload.
+        """
+
         # MPI communicator
         self.comm = comm
         self.rank = comm.Get_rank()
         self.size = comm.Get_size()
 
+        # Core input parameters
         self.mech_file = data_gen_parameters["mech_file"]
         self.fuel = data_gen_parameters["fuel"][0]
         self.dt_cfd = data_gen_parameters["dt_cfd"]
@@ -38,21 +57,27 @@ class DatabaseFlamelets(object):
         # We work with constant pressure here
         self.p = data_gen_parameters["pressure"]
 
-        # Initialize solution array 
+        # Initialize solution array
         gas = ct.Solution(self.mech_file)
         self.species_names = gas.species_names
         self.nb_spec = len(self.species_names)
-        cols = ['Temperature'] + ['Pressure'] + self.species_names + ['enthalpy'] + ['Progress_variable'] + ['Heat_release_rate'] + ['reactor_type'] + ['Simulation number']
+        cols = (
+            ['Temperature']
+            + ['Pressure']
+            + self.species_names
+            + ['enthalpy']
+            + ['Progress_variable']
+            + ['Heat_release_rate']
+            + ['reactor_type']
+            + ['Simulation number']
+        )
         self.df = pd.DataFrame(data=[], columns=cols)
 
         # Progress variable setup
         self.pv_species = data_gen_parameters["pv_species"]
         self.npvspec = len(self.pv_species)
-        #
-        #: int: list of progress variable species indices
-        self.pv_ind = []
-        for i in range(self.npvspec):
-            self.pv_ind.append(gas.species_index(self.pv_species[i]))
+        # int: list of progress variable species indices
+        self.pv_ind = [gas.species_index(spec) for spec in self.pv_species]
 
 
     def compute_0d_reactors(self, zerod_params):
@@ -112,9 +137,9 @@ class DatabaseFlamelets(object):
 
         data = []
 
-        # Split the training rows across MPI ranks
+        # Split the training rows across MPI ranks (simple round-robin split)
         rows = list(self.df_ODE_train_0D.iterrows())
-        rows_local = rows[self.rank::self.size]        # simple round-robin split
+        rows_local = rows[self.rank::self.size]
 
         data_local = []
         curves_local = []  # (t_array, T_array) pairs, gathered later for the combined plot
@@ -238,7 +263,7 @@ class DatabaseFlamelets(object):
         # Gather results from all ranks onto rank 0
         all_data = self.comm.gather(data_local, root=0)
         all_curves = self.comm.gather(curves_local, root=0)
- 
+
         if self.rank == 0:
             # Flatten list of lists -> single list of dataframes
             data = [df for sublist in all_data for df in sublist]
@@ -328,9 +353,9 @@ class DatabaseFlamelets(object):
         tol_ts = [1.0e-5, 1.0e-5]  # [rtol atol] for time stepping
         loglevel = 0  # amount of diagnostic output (0 to 8)
 
-        # Split the training rows across MPI ranks
+        # Split the training rows across MPI ranks (simple round-robin split)
         rows = list(self.df_ODE_train_1D_prem.iterrows())
-        rows_local = rows[self.rank::self.size]        # simple round-robin split
+        rows_local = rows[self.rank::self.size]
 
         data_local = []
         curves_local = []  # (t_array, T_array) pairs, gathered later for the combined plot
@@ -429,7 +454,7 @@ class DatabaseFlamelets(object):
         # Gather results from all ranks onto rank 0
         all_data = self.comm.gather(data_local, root=0)
         all_curves = self.comm.gather(curves_local, root=0)
- 
+
         if self.rank == 0:
             # Flatten list of lists -> single list of dataframes
             data = [df for sublist in all_data for df in sublist]
@@ -518,9 +543,9 @@ class DatabaseFlamelets(object):
 
         loglevel = 0  # amount of diagnostic output (0 to 8)
 
-        # Split the training rows across MPI ranks
+        # Split the training rows across MPI ranks (simple round-robin split)
         rows = list(self.df_ODE_train_1D_diff.iterrows())
-        rows_local = rows[self.rank::self.size]        # simple round-robin split
+        rows_local = rows[self.rank::self.size]
 
         data_local = []
         curves_local = []  # (t_array, T_array) pairs, gathered later for the combined plot
@@ -661,7 +686,7 @@ class DatabaseFlamelets(object):
         # Gather results from all ranks onto rank 0
         all_data = self.comm.gather(data_local, root=0)
         all_curves = self.comm.gather(curves_local, root=0)
- 
+
         if self.rank == 0:
             # Flatten list of lists -> single list of dataframes
             data = [df for sublist in all_data for df in sublist]
