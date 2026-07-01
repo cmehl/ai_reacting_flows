@@ -3,8 +3,6 @@ import oyaml as yaml
 
 from time import perf_counter
 
-from ai_reacting_flows.tools.utilities import PRINT, react_multi_dt
-
 import numpy as np
 import h5py
 import pandas as pd
@@ -14,40 +12,35 @@ from mpi4py import MPI
 
 h5py.get_config().mpi
 
-def GenerateVariable_dt(params, comm : 'MPI.Comm'):
+def GenerateVariable_dt(dtb_type, params, comm : 'MPI.Comm'):
+
     rank = comm.Get_rank()
     size = comm.Get_size()
 
     np.random.seed(1234)
 
+    if dtb_type=="stoch":
+        dtb_prefix = "STOCH"
+    elif dtb_type=="flamelets":
+        dtb_prefix = "FLAMELETS"
+
     # Opening h5 file
     run_folder = os.getcwd()
-    stoch_results_folder = f"{run_folder:s}/STOCH_DTB_" + params["results_folder_suffix"]
-    # h5file_r = h5py.File(f"{stoch_results_folder:s}/{params['dtb_file'].split('.')[0]:s}_resamp{int(params['T_threshold'])}K.h5", 'r')
-    h5file_r = h5py.File(f"{stoch_results_folder:s}/{params['dtb_file'].split('.')[0]:s}.h5", 'r')
+    stoch_results_folder = f"{run_folder:s}/{dtb_prefix}_DTB_" + params["results_folder_suffix"]
+    file_h5 = f"{stoch_results_folder:s}/{params['dtb_file'].split('.')[0]:s}.h5"
 
-    # Solution 0 read to get columns names
-    col_names_X = h5file_r["ITERATION_00000/X"].attrs["cols"][:-2]    # -2 because we remove c and HRR which are in those arrays in the h5 file
-    col_names_Y = h5file_r["ITERATION_00000/Y"].attrs["cols"][:-2]
+    if dtb_type=="stoch":
+        X, col_names_X, col_names_Y= read_database_stoch(file_h5)
+    elif dtb_type=="flamelets":
+        X, col_names_X, col_names_Y = read_database_flmts(file_h5)
 
-    print(f"X columns: {col_names_X} \n")
+    if rank==0: print(f"X columns: {col_names_X} \n")
 
-    # Loop on solutions
-    list_df_X = []
-
-    nb_solutions = len(h5file_r.keys())
-
-    for i in range(nb_solutions):
-        data_X = h5file_r.get(f"ITERATION_{i:05d}/X")[:,:-2]
-        list_df_X.append(pd.DataFrame(data=data_X, columns=col_names_X))
-
-    h5file_r.close()
-
-    X = pd.concat(list_df_X, ignore_index=True).to_numpy().copy()
     Y = np.empty(X.shape)
-    np.random.shuffle(X) # DAK: check why we shuffle X
+    # np.random.shuffle(X) # DAK: check why we shuffle X
     state_list = np.dstack((X,Y)) # DAK : check why we dstack with Y (np.empty)
 
+    #CM: that doubles the threshold already applied in database processing and might lead to confusion
     # Temperature threshold
     T_thresh = params['T_threshold']
 
@@ -109,11 +102,16 @@ def GenerateVariable_dt(params, comm : 'MPI.Comm'):
         X_new_full = np.concatenate(all_X_new, axis=0)
         Y_new_full = np.concatenate(all_Y_new, axis=0)
 
-        # For multi-dt all data is written by default in "ITERATION_00000" as it is too complex to keep the per iteration structure 
+        # For multi-dt stochastic all data is written by default in "ITERATION_00000" as it is too complex to keep the per iteration structure 
         # (and useless as it is not considered when creating processed database)
+        if dtb_type=="stoch":
+            group_name = "ITERATION_00000"
+        elif dtb_type=="flamelets":
+            group_name = "FLAMELETS"
+        #
         print('WRITING', rank)
         f = h5py.File(f"{stoch_results_folder:s}/{params['new_file_name']:s}", "w")
-        grp = f.create_group("ITERATION_00000")
+        grp = f.create_group(group_name)
         dset_X = grp.create_dataset('X', data=X_new_full)
         dset_Y = grp.create_dataset('Y', data=Y_new_full)
         dset_X.attrs["cols"] = np.append(col_names_X, 'dt')
@@ -124,3 +122,90 @@ def GenerateVariable_dt(params, comm : 'MPI.Comm'):
     comm.Barrier()
     
     return 'Done'
+
+
+#TODO : mutualize these 2 functions with other scripts (e.g. data processing) by adding them to utilities
+
+def read_database_stoch(file_h5):
+
+    h5file_r = h5py.File(file_h5, 'r')
+
+    col_names_X = h5file_r[f"ITERATION_00000/X"].attrs["cols"] #[:-2]    # -2 because we remove c and HRR which are in those arrays in the h5 file
+    col_names_Y = h5file_r[f"ITERATION_00000/Y"].attrs["cols"] #[:-2]
+
+    # Loop on solutions
+    list_df_X = []
+
+    nb_solutions = len(h5file_r.keys())
+
+    for i in range(nb_solutions):
+        data_X = h5file_r.get(f"ITERATION_{i:05d}/X") #[:,:-2]
+        list_df_X.append(pd.DataFrame(data=data_X, columns=col_names_X))
+
+    h5file_r.close()
+
+    X = pd.concat(list_df_X, ignore_index=True).to_numpy().copy()
+
+    return X, col_names_X, col_names_Y
+
+
+def read_database_flmts(file_h5):
+
+    h5file_r = h5py.File(file_h5, 'r')
+
+    col_names_X = h5file_r[f"FLAMELETS/X"].attrs["cols"] #[:-2]    # -2 because we remove c and HRR which are in those arrays in the h5 file
+    col_names_Y = h5file_r[f"FLAMELETS/Y"].attrs["cols"] #[:-2]
+
+    data_X = h5file_r.get(f"FLAMELETS/X") #[:,:-2]
+    X = pd.DataFrame(data=data_X, columns=col_names_X)
+
+    h5file_r.close()
+
+    return X, col_names_X, col_names_Y
+
+
+def react_multi_dt(state, gas, T_thresh, dt_list):
+
+    # Unsolved pb: if Yk from NN is inputed here; 
+    # it may become negative and mass is lost (output from CVODE is always positive)
+    time_step = np.array([[0, 0]])
+    state = np.append(state, time_step, axis = 0)
+    new_states = np.empty_like([state,])
+
+    if state[0,0] > T_thresh:  
+
+        # Initial value are current's particle state
+        T0 = state[0,0]
+        P0 = state[1,0]
+        Y0 = state[2:-3,0]
+
+        # Advancing to dts
+        for dt in dt_list:
+            
+            gas.TPY = T0, P0, Y0
+                        
+            # Constant pressure reactor
+            r = ct.IdealGasConstPressureReactor(gas)
+            # Initializing reactor
+            sim = ct.ReactorNet([r])
+
+            # Advancing simulation by dt
+            state[-1, 0] = dt
+            sim.advance(dt)
+
+            # Updated state
+            y = np.empty(len(Y0)+4)  # T, p, c, HRR
+            y[0] = gas.T
+            y[1] = gas.P
+            y[2:-2] = gas.Y
+            y[-2] = -1.0  # dummy vlaue for progvar
+            y[-1] = -1.0  # dummy value for HRR
+
+            state[:,1] = np.append(y, [0])
+            new_states = np.append(new_states, np.array([state,]), axis = 0)
+        
+        new_states = new_states[1:,]  # First was empty and only used for using append in loop
+
+        return new_states
+    
+    return None

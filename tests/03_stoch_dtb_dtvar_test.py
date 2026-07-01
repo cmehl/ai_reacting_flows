@@ -61,7 +61,7 @@ def test_h2_multi_dt_dtb_computation():
     os.chdir(current_dir)
     data_gen_parameters["mech_file"] = f"{current_dir:s}{data_gen_parameters['mech_file']:s}"
 
-    GenerateVariable_dt(data_gen_parameters, dc.DummyComm())
+    GenerateVariable_dt("stoch", data_gen_parameters, dc.DummyComm())
 
     tol = np.array([168.86, 8.89, 50.17, 20.32, 139.32, 52.21, 61.66, 13.04, 11.16])
     assert np.max(extract_h2_dtvar_dtb_histograms(f"./STOCH_DTB_{data_gen_parameters['results_folder_suffix']:s}/mech_h2_5dt.h5","H2_dtvar_TEST_histograms", tol)) < np.float64(0.0)
