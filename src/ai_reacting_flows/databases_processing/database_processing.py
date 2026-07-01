@@ -90,9 +90,9 @@ class LearningDatabase(object):
 
         # Extracting some information
         if self.dt_var:
-            self.species_names = self.X.columns[2:-1]
+            self.species_names = self.X.columns[2:-3] # -3 because progvar, HRR and time step
         else:
-            self.species_names = self.X.columns[2:-2]
+            self.species_names = self.X.columns[2:-2] # -2 because progvar and HRR
         print(f" >> species names: {self.species_names}")
         self.nb_species = len(self.species_names)
 
@@ -708,11 +708,8 @@ class LearningDatabase(object):
 
             # Removing useless columns
             X_cols = X_p.columns.to_list()
-            if self.dt_var: 
-                if self.clusterize_on == 'double':
-                    list_to_remove = ["cluster", "cluster_phys", "cluster_time"]
-                else :
-                    list_to_remove = ["cluster"]
+            if self.dt_var and self.clusterize_on == 'double': 
+                list_to_remove = ["Prog_var", "HRR", "cluster", "cluster_phys", "cluster_time"]
             else:
                 list_to_remove = ["Prog_var", "HRR", "cluster"]
             
@@ -726,10 +723,7 @@ class LearningDatabase(object):
             X_p = X_p[X_cols] 
             #
             Y_cols = Y_p.columns.to_list()
-            if self.dt_var:
-                list_to_remove = ["Temperature"]
-            else:
-                list_to_remove = ["Temperature", "Prog_var", "HRR"]
+            list_to_remove = ["Temperature", "Prog_var", "HRR"]
             
             if remove_pressure_Y:
                 list_to_remove.append('Pressure')
