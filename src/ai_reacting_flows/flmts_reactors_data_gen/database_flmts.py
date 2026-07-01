@@ -219,8 +219,8 @@ class DatabaseFlamelets(object):
             arr[1:, 1] = states.P
             arr[1:, 2:2 + nb_spec] = states.Y
             arr[1:, -5] = states.enthalpy_mass
-            arr[1:, -4] = np.asarray([progvar_vect])
-            arr[1:, -3] = np.asarray([hrr_vect])
+            arr[1:, -4] = np.asarray(progvar_vect)
+            arr[1:, -3] = np.asarray(hrr_vect)
             arr[1:, -2] = 0
             arr[1:, -1] = i
 
@@ -232,7 +232,7 @@ class DatabaseFlamelets(object):
             data_local.append(df)
 
             # Store the raw curve (small numpy arrays, easy to pickle/gather)
-            curves_local.append((np.array(states.t), np.array(states.T), np.asarray([progvar_vect]), np.asarray([hrr_vect])))
+            curves_local.append((np.array(states.t), np.array(states.T), np.asarray(progvar_vect), np.asarray(hrr_vect)))
 
 
         # Gather results from all ranks onto rank 0
@@ -742,9 +742,9 @@ class DatabaseFlamelets(object):
             
             tries = 0
             accepted = False
+            rng = np.random.default_rng(42 + i) # per row rng needed to avoid processor dependent results
             while tries<=10 and accepted==False:
                 
-                rng = np.random.default_rng(42 + i) # per row rng needed to avoid processor dependent results
                 tries += 1
                 accepted = True
 
@@ -800,8 +800,8 @@ class DatabaseFlamelets(object):
                     row_new[2 + self.nb_spec] = hnew
                     row_new[3 + self.nb_spec] = row.iloc[3 + self.nb_spec]   #CM: recompute proper progvar 
                     row_new[4 + self.nb_spec] = row.iloc[4 + self.nb_spec]   #CM: recompute proper HRR
-                    row_new[5 + self.nb_spec] = row.iloc[6 + self.nb_spec]
-                    row_new[6 + self.nb_spec] = row.iloc[5 + self.nb_spec]
+                    row_new[5 + self.nb_spec] = row.iloc[5 + self.nb_spec]
+                    row_new[6 + self.nb_spec] = row.iloc[6 + self.nb_spec]
 
                     local_rows_new.append(row_new)
                     local_idx_new.append(i)
@@ -861,7 +861,7 @@ class DatabaseFlamelets(object):
         if self.rank==0:
             cols = ['Temperature'] + ['Pressure'] + self.species_names + ['Prog_var'] + ['HRR']
             f = h5py.File(f"{self.folder}/{self.dtb_file}","w")
-            grp = f.create_group("ITERATION_00000") 
+            grp = f.create_group("FLAMELETS") 
             dset = grp.create_dataset("X", data=self.X.values)
             dset.attrs["cols"] = cols
             dset = grp.create_dataset("Y", data=self.Y.values)
