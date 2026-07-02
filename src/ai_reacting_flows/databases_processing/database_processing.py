@@ -51,7 +51,7 @@ class LearningDatabase(object):
         self.T_threshold  = dtb_processing_parameters["T_threshold"]
         self.clustering_method = dtb_processing_parameters["clustering_method"]
         self.nb_clusters = dtb_processing_parameters["nb_clusters"]
-        self.save_type = = dtb_processing_parameters.get("save_type", "csv")
+        self.save_type = dtb_processing_parameters.get("save_type", "csv")
         self.dt_var = dtb_processing_parameters['dt_var']
 
         if self.database_type not in ["stoch", "flamelets"]:
