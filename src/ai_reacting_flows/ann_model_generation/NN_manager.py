@@ -343,12 +343,27 @@ class NN_manager():
 
     def read_training_data(self, i_cluster):
 
-        X_train = pd.read_csv(filepath_or_buffer= f"{self.dataset_path:s}/cluster{i_cluster}/X_train.csv")
-        Y_train = pd.read_csv(filepath_or_buffer= f"{self.dataset_path:s}/cluster{i_cluster}/Y_train.csv")
+        # X_train = pd.read_csv(filepath_or_buffer= f"{self.dataset_path:s}/cluster{i_cluster}/X_train.csv")
+        # Y_train = pd.read_csv(filepath_or_buffer= f"{self.dataset_path:s}/cluster{i_cluster}/Y_train.csv")
             
-        X_val = pd.read_csv(filepath_or_buffer= f"{self.dataset_path:s}/cluster{i_cluster}/X_val.csv")
-        Y_val = pd.read_csv(filepath_or_buffer= f"{self.dataset_path:s}/cluster{i_cluster}/Y_val.csv")
-
+        # X_val = pd.read_csv(filepath_or_buffer= f"{self.dataset_path:s}/cluster{i_cluster}/X_val.csv")
+        # Y_val = pd.read_csv(filepath_or_buffer= f"{self.dataset_path:s}/cluster{i_cluster}/Y_val.csv")
+       
+        
+        base = f"{self.dataset_path:s}/cluster{i_cluster}/"
+        if os.path.exists(base + "X_train.npy"):
+            X_cols  = np.load(base + "X_cols.npy", allow_pickle=True).tolist()
+            Y_cols  = np.load(base + "Y_cols.npy", allow_pickle=True).tolist()
+            X_train = pd.DataFrame(np.load(base + "X_train.npy"), columns=X_cols)
+            Y_train = pd.DataFrame(np.load(base + "Y_train.npy"), columns=Y_cols)
+            X_val   = pd.DataFrame(np.load(base + "X_val.npy"),   columns=X_cols)
+            Y_val   = pd.DataFrame(np.load(base + "Y_val.npy"),   columns=Y_cols)
+        else:
+            X_train = pd.read_csv(filepath_or_buffer= base + "X_train.csv")
+            Y_train = pd.read_csv(filepath_or_buffer= base + "Y_train.csv")
+            X_val   = pd.read_csv(filepath_or_buffer= base + "X_val.csv")
+            Y_val   = pd.read_csv(filepath_or_buffer= base + "Y_val.csv")
+            
         return X_train, X_val, Y_train, Y_val
     
     def read_scalers(self, i_cluster):

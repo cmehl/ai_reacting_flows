@@ -51,6 +51,7 @@ class LearningDatabase(object):
         self.T_threshold  = dtb_processing_parameters["T_threshold"]
         self.clustering_method = dtb_processing_parameters["clustering_method"]
         self.nb_clusters = dtb_processing_parameters["nb_clusters"]
+        self.save_type = = dtb_processing_parameters.get("save_type", "csv")
         self.dt_var = dtb_processing_parameters['dt_var']
 
         if self.database_type not in ["stoch", "flamelets"]:
@@ -808,11 +809,21 @@ class LearningDatabase(object):
 
             # Saving datasets
             print(">> Saving datasets")
-            X_train.to_csv(self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/X_train.csv", index=False)
-            X_val.to_csv(self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/X_val.csv", index=False)
-            Y_train.to_csv(self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/Y_train.csv", index=False)
-            Y_val.to_csv(self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/Y_val.csv", index=False)
-
+            if self.save_type =="csv" : 
+                X_train.to_csv(self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/X_train.csv", index=False)
+                X_val.to_csv(self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/X_val.csv", index=False)
+                Y_train.to_csv(self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/Y_train.csv", index=False)
+                Y_val.to_csv(self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/Y_val.csv", index=False)
+            
+            elif self.save_type == "npy" : 
+                base = self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/"
+                np.save(base + "X_train.npy", X_train.values)
+                np.save(base + "X_val.npy",   X_val.values)
+                np.save(base + "Y_train.npy", Y_train.values)
+                np.save(base + "Y_val.npy",   Y_val.values)
+                np.save(base + "X_cols.npy",  np.array(X_train.columns.tolist()))
+                np.save(base + "Y_cols.npy",  np.array(Y_train.columns.tolist()))
+                
             # Plotting distributions if necessary
             if plot_distributions:
                 print(">> Plotting distributions")
