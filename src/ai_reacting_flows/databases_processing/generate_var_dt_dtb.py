@@ -95,6 +95,7 @@ def GenerateVariable_dt(dtb_type: str, params: dict, comm: "MPI.Comm") -> str:
     # Build state array with empty target column, later filled by `react_multi_dt`.
     Y = np.empty(X.shape)
     # Stack features and responses along the third axis: state[..., 0] / state[..., 1]
+    np.random.shuffle(X) # DAK: check why we shuffle X
     state_list = np.dstack((X, Y))
 
     # Temperature threshold (same quantity as database processing; keep explicit).
