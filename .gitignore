@@ -148,7 +148,6 @@ dmypy.json
 /articles/*/*.png
 /articles/*/*.xlsx
 /articles/*/plots_*
-/script/H2_IGN_KERNEL/*
 # VSCode
 *.code-workspace
 .vscode
