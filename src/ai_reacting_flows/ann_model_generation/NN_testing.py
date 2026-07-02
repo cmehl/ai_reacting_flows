@@ -1367,6 +1367,264 @@ class NNTesting():
         Y_new = Y_new.T
 
         return T_new, Y_new
+    
+    def advance_state_NN_MK(self, T_old, Y_old, pressure, dt):
+        # Boolean for IA computation success (used for hybrid model)
+        self.ia_success = True
+
+        # Gas object — needed for H_target and later HPY solve
+        self.gas.TPY = T_old, pressure, Y_old
+        H_target = self.gas.enthalpy_mass
+
+        # Grouping temperature and mass fractions in a "state" vector
+        state_vector = np.append(T_old, Y_old)
+
+        # If N2 is not considered, remove it from state_vector
+        if self.remove_N2:
+            n2_index = self.spec_list_ANN.index("N2")
+            n2_value = state_vector[n2_index + 1]
+            state_vector = np.delete(state_vector, n2_index + 1)
+
+        # Clipping before log/BCT transform
+        if self.log_transform_X == 1:
+            state_vector[state_vector < self.threshold] = self.threshold
+        elif self.log_transform_X == 2:
+            state_vector[state_vector < 0.0] = 0.0
+
+        # Build transformed input vector
+        log_state = np.zeros(self.nb_species_ref + 1)
+        log_state[0] = state_vector[0]  # Temperature: no transform
+        if self.log_transform_X == 1:
+            log_state[1:] = np.log(state_vector[1:])
+        elif self.log_transform_X == 2:
+            log_state[1:] = (state_vector[1:] ** self.lambda_bct - 1.0) / self.lambda_bct
+        else:
+            log_state[1:] = state_vector[1:]
+
+        # Save pre-scaled log_state for output_omegas reconstruction (FIX PB3)
+        log_state = log_state.reshape(1, -1)
+        log_state_pretransform = log_state.copy()
+
+        # Normalize input and run through network
+        NN_input = self.Xscaler_list[self.cluster].transform(log_state)
+        NN_input = torch.tensor(NN_input, dtype=torch.float64).to(self.device)
+        state_new = self.models_list[self.cluster](NN_input)
+        state_new = state_new.detach().cpu().numpy()
+
+        # Inverse-scale network output
+        Y_new = self.Yscaler_list[self.cluster].inverse_transform(state_new)
+
+        # Reconstruct physical Y_new from log/BCT space
+        if self.log_transform_Y > 0:
+            if self.output_omegas:
+                # FIX PB3: use pre-scaled log(Y_old) as reference, matching process_database
+                log_state_updated = log_state_pretransform[0, 1:] + Y_new
+                if self.log_transform_Y == 1:
+                    Y_new = np.exp(log_state_updated)
+                elif self.log_transform_Y == 2:
+                    Y_new = (self.lambda_bct * log_state_updated + 1.0) ** (1.0 / self.lambda_bct)
+            else:
+                if self.log_transform_Y == 1:
+                    Y_new = np.exp(Y_new)
+                elif self.log_transform_Y == 2:
+                    Y_new = (self.lambda_bct * Y_new + 1.0) ** (1.0 / self.lambda_bct)
+
+        # Direct delta-Y case (no log transform)
+        if self.output_omegas and self.log_transform_Y == 0:
+            Y_new += state_vector[1:]
+
+        # Reinsert N2 before T computation
+        if self.remove_N2:
+            Y_new = np.insert(Y_new, n2_index, n2_value)
+
+        # Flatten to 1D
+        Y_new = Y_new.reshape(-1)
+
+        # Store pre-renorm sum for diagnostics
+        self.sum_Yk_before_renorm = Y_new.sum()
+
+        # Hybrid model: mass conservation check
+        if self.hybrid_ann_cvode:
+            cons_criterion = np.abs(np.sum(Y_new) - 1.0)
+            if cons_criterion > self.hybrid_ann_cvode_tol:
+                self.ia_success = False
+
+        # Renormalization — driven by yk_renormalization string value
+        if self.yk_renormalization:
+            Y_new = np.clip(Y_new, 0.0, None)
+
+            if self.yk_renormalization == "sum":
+                # Simple sum renorm, N2-aware if remove_N2
+                if self.remove_N2:
+                    iN2 = self.gas.species_index("N2")
+                    YN2 = Y_new[iN2]
+                    s = np.sum(Y_new) - YN2
+                    if s > 0.0:
+                        factor = (1.0 - YN2) / s
+                        for k in range(len(Y_new)):
+                            if k != iN2:
+                                Y_new[k] *= factor
+                        Y_new[iN2] = YN2
+                else:
+                    s = np.sum(Y_new)
+                    if s > 0.0:
+                        Y_new = Y_new / s
+
+            elif self.yk_renormalization == "enforce":
+                Y_new = self.enforce_elements_balance(self.gas, Y_old, Y_new)
+                Y_new = np.clip(Y_new, 0.0, None)  # FIX PB4: avoid negative Yk after element correction
+
+        # FIX PB1: exact T via enthalpy conservation (Cantera HPY)
+        # The linearised formula T_old - (1/cp)*Σ(h_k/W_k * ΔY_k) diverges near ignition
+        try:
+            self.gas.HPY = H_target, pressure, Y_new
+        except Exception as e:
+            print("HPY FAILED")
+            print(f"  T_old={T_old:.2f}  P={pressure:.2f}  H_target={H_target:.4e}")
+            print(f"  sumY={Y_new.sum():.6f}  minY={Y_new.min():.4e}  maxY={Y_new.max():.4e}")
+            np.savez(f"crash.npz", T_old=T_old, P=pressure,
+                    H_target=H_target, Y_new=Y_new, Y_old=Y_old)
+            raise
+
+        T_new = float(self.gas.T)
+        return T_new, Y_new.reshape(-1)
+    
+    def advance_state_NN_new(self, T_old, Y_old, pressure, dt):
+        # Boolean for IA computation success (used for hybrid model)
+        self.ia_success = True
+
+        # Gas object modification — état (T_old, P, Y_old) nécessaire pour T_new plus bas
+        self.gas.TPY = T_old, pressure, Y_old 
+        H_target = self.gas.enthalpy_mass
+
+        # Grouping temperature and mass fractions in a "state" vector
+        state_vector = np.append(T_old, Y_old)
+
+        # If N2 is not considered, it needs to be removed from the state_vector
+        if self.remove_N2:
+            n2_index = self.spec_list_ANN.index("N2")
+            n2_value = state_vector[n2_index + 1]
+            state_vector = np.delete(state_vector, n2_index + 1)
+
+        # Clipping avant transformation
+        if self.log_transform_X == 1:
+            state_vector[state_vector < self.threshold] = self.threshold
+        elif self.log_transform_X == 2:
+            state_vector[state_vector < 0.0] = 0.0
+
+        # Construction du vecteur transformé (log ou BCT)
+        log_state = np.zeros(self.nb_species_ref + 1)
+        log_state[0] = state_vector[0]  # Temperature : pas de transformation
+        if self.log_transform_X == 1:
+            log_state[1:] = np.log(state_vector[1:])
+        elif self.log_transform_X == 2:
+            log_state[1:] = (state_vector[1:] ** self.lambda_bct - 1.0) / self.lambda_bct
+        else:
+            log_state[1:] = state_vector[1:]
+
+        # ── FIX PB3 : sauvegarder log_state AVANT le Xscaler
+        # Dans process_database, le target Y est : log(Y_après) - log(Y_avant_non_normalisé)
+        # Donc pour reconstruire Y_new il faut additionner log(Y_avant_non_normalisé), pas le vecteur normalisé
+        log_state = log_state.reshape(1, -1)
+        log_state_pretransform = log_state.copy()          # ← référence pour la reconstruction
+
+        # Normalisation de l'entrée réseau
+        NN_input = self.Xscaler_list[self.cluster].transform(log_state)
+
+        # Passage dans le réseau
+        NN_input = torch.tensor(NN_input, dtype=torch.float64).to(self.device)
+        state_new = self.models_list[self.cluster](NN_input)
+        state_new = state_new.detach().cpu().numpy()
+
+        # Dénormalisation de la sortie réseau → on récupère Δlog(Y) dans l'espace physique
+        Y_new = self.Yscaler_list[self.cluster].inverse_transform(state_new)
+
+        # Reconstruction de Y_new dans l'espace physique
+        if self.log_transform_Y > 0:
+            if self.output_omegas:
+                # ── FIX PB3 : utiliser log_state_pretransform[0, 1:] = log(Y_avant) non normalisé
+                # C'est exactement la référence utilisée dans process_database ligne 728 :
+                # Y_p = Y_p.subtract(X_p.loc[:, X_cols[1:]])  où X_p est déjà loggué mais pas encore scalé
+                log_state_updated = log_state_pretransform[0, 1:] + Y_new
+                if self.log_transform_Y == 1:
+                    Y_new = np.exp(log_state_updated)
+                elif self.log_transform_Y == 2:
+                    Y_new = (self.lambda_bct * log_state_updated + 1.0) ** (1.0 / self.lambda_bct)
+            else:
+                # Pas de output_omegas : la sortie réseau est directement log(Y_après)
+                if self.log_transform_Y == 1:
+                    Y_new = np.exp(Y_new)
+                elif self.log_transform_Y == 2:
+                    Y_new = (self.lambda_bct * Y_new + 1.0) ** (1.0 / self.lambda_bct)
+
+        # Cas sans transformation log : output_omegas signifie ΔY dans l'espace physique direct
+        if self.output_omegas and self.log_transform_Y == 0:
+            Y_new += state_vector[1:]   # state_vector contient déjà l'info sur N2
+
+        # Remise en place de N2 avant le calcul de T
+        if self.remove_N2:
+            Y_new = np.insert(Y_new, n2_index, n2_value)
+
+        # Aplatissement pour garantir shape (N,)
+        Y_new = Y_new.reshape(-1)
+        
+        
+
+        # Somme des Yk avant renormalisation (pour analyse)
+        self.sum_Yk_before_renorm = Y_new.sum()
+
+        # Hybrid model : vérification de la conservation de masse
+        if self.hybrid_ann_cvode:
+            cons_criterion = np.abs(np.sum(Y_new, axis=0) - 1.0)
+            if cons_criterion > self.hybrid_ann_cvode_tol:
+                self.ia_success = False
+
+        # Enforcing element conservation # OLD renorm 
+        if self.yk_renormalization:
+            Y_new = np.clip(Y_new, 0.0, None)
+            
+            if self.new_renorm : 
+                if self.remove_N2:
+                    iN2 = self.gas.species_index("N2") 
+                    YN2 = Y_new[iN2]
+
+                    s = np.sum(Y_new) - YN2  # somme sans N2
+
+                    if s > 0.0:
+                        factor = (1.0 - YN2) / s
+                        for k in range(len(Y_new)):
+                            if k != iN2:
+                                Y_new[k] *= factor
+
+                        Y_new[iN2] = YN2
+                else : 
+                    s = np.sum(Y_new) 
+                    if s > 0.0: 
+                        Y_new = Y_new / s
+            else : 
+                Y_new = self.enforce_elements_balance(self.gas, Y_old, Y_new)
+                Y_new = np.clip(Y_new, 0.0, None)   # ── FIX PB4 : éviter Yk négatifs après correction éléments
+        
+        
+                
+                        
+        # ── FIX PB1 : calcul de T_new via conservation d'enthalpie exacte (Cantera)
+        # L'ancienne formule linéarisée T_new = T_old - (1/cp)*Σ(h_k/W_k * ΔY_k) diverge près de l'inflammation
+        # car cp et h_k sont évalués à l'état initial alors que ΔY peut être très grand
+        try :
+            self.gas.HPY = H_target, pressure, Y_new
+        except Exception as e:
+            print("HPY FAILED")
+            print("T_old =", T_old)
+            print("P =", pressure)
+            print("H_target =", H_target)
+            print("sumY =", Y_new.sum(), "minY =", Y_new.min(), "maxY =", Y_new.max())
+            
+            np.savez(f"{self.stoch}/crash.npz", T_old=T_old, P=pressure, H_target=H_target, Y_new=Y_new, Y_old=Y_old)
+            raise  
+        T_new = float(self.gas.T)
+
+        return T_new, Y_new.reshape(-1)
 
 #-----------------------------------------------------------------------
 #   ANALYZING ERRORS
