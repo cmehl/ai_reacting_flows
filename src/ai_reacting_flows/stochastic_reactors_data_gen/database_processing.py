@@ -238,7 +238,7 @@ class LearningDatabase(object):
                     elif self.log_transform_X==2:
                         data[:, -1] = (data[:, -1]**self.lambda_bct - 1.0)/self.lambda_bct
             else:
-                data = self.X[spec_list].values
+                data = self.X[spec_list].values.copy()
             # If log transform, we also apply it when clustering
             if self.log_transform_X>0:
                 data[data < self.threshold] = self.threshold
