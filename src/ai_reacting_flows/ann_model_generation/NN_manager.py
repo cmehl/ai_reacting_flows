@@ -37,13 +37,22 @@ class NN_manager():
         
         with open(f"{self.dataset_path}/dtb_processing.yaml", "r") as file:
             dtb_processing_params = yaml.safe_load(file)
+
+        dtb_type = dtb_processing_params["database_type"]
         
         self.remove_N2 = not dtb_processing_params["with_N_chemistry"]
         self.log_transform_Y = dtb_processing_params["log_transform_Y"]
         self.clustering_type = dtb_processing_params["clustering_method"]
         self.nb_clusters = dtb_processing_params["nb_clusters"]
 
-        with open(os.path.join(self.run_folder, f"STOCH_DTB_{dtb_processing_params['dtb_folder_suffix']}","dtb_params.yaml"), "r") as file:
+        if dtb_type == "stoch":
+            params_file = "dtb_params.yaml"
+            prefix = "STOCH"
+        elif dtb_type == "flamelets":
+            params_file = "dtb_params_flmts.yaml"
+            prefix = "FLAMELETS"
+
+        with open(os.path.join(self.run_folder, f"{prefix}_DTB_{dtb_processing_params['dtb_folder_suffix']}",params_file), "r") as file:
             dtb_parameters = yaml.safe_load(file)
 
         self.fuel = dtb_parameters["fuel"]
@@ -96,18 +105,17 @@ class NN_manager():
             os.mkdir(self.directory + "/training")
             os.mkdir(self.directory + "/evaluation" )
 
-            if (self.nb_clusters > 1):
-                for i_cluster in range(self.nb_clusters):
-                    os.mkdir(f"{self.directory}/training/cluster_{i_cluster}")
-                    os.mkdir(f"{self.directory}/training/cluster_{i_cluster}/training_curves/")
-                    os.mkdir(f"{self.directory}/evaluation/cluster_{i_cluster}")
-            else:
-                os.mkdir(self.directory + "/training/training_curves")
+            for i_cluster in range(self.nb_clusters):
+                os.mkdir(f"{self.directory}/training/cluster_{i_cluster}")
+                os.mkdir(f"{self.directory}/training/cluster_{i_cluster}/training_curves/")
+                os.mkdir(f"{self.directory}/evaluation/cluster_{i_cluster}")
 
-            # Adding copies of clustering parameters for later use in inference
-            self.copy_clusterer()
+            if (self.nb_clusters > 1):
+                # Adding copies of clustering parameters for later use in inference
+                self.copy_clusterer()
 
     def create_model(self, i_cluster, X_val, Y_val):
+
         network_type = self.networks_types[i_cluster]
         if (network_type not in model_type.keys()):
             sys.exit(f"ERROR: network_type \"{network_type}\" does not exist")
@@ -159,6 +167,7 @@ class NN_manager():
     
 
     def train_model(self, i_cluster, model, loss_fn, optimizer, scheduler, X_train, X_val, Y_train, Y_val, Yscaler_mean, Yscaler_std):
+
         X_train = torch.tensor(X_train.values, dtype=torch.float64)
         Y_train = torch.tensor(Y_train.values, dtype=torch.float64)
         X_val = torch.tensor(X_val.values, dtype=torch.float64)
@@ -258,6 +267,7 @@ class NN_manager():
         return epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements
 
     def train_all_clusters(self):
+
         for i_cluster in range(self.nb_clusters):
             X_train, X_val, Y_train, Y_val = self.read_training_data(i_cluster)            
             Xscaler_mean, Xscaler_var, Yscaler_mean, Yscaler_var = self.get_scalers_stats(i_cluster)

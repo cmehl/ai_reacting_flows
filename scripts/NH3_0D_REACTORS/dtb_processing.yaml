@@ -3,12 +3,12 @@ dtb_folder_suffix: NH3_1ATM
 database_name: dtb_nh3_0D
 log_transform_X: 1
 log_transform_Y: 1
-threshold: 1.0e-10
+threshold: 1.0e-20
 T_threshold: 600.0
-output_omegas: true
-with_N_chemistry: false
+output_omegas: false
+with_N_chemistry: true
 clusterize_on: phys
-train_set_size: 0.75
+train_set_size: 0.85
 clustering_method: kmeans
 nb_clusters: 1
 dt_var:  false

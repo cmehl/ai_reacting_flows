@@ -2,7 +2,7 @@ mech_file: ../../data/chemical_mechanisms/mech_nh3_noArHe.yaml
 pv_species:
 - H2O
 fuel:
-- H2
+- NH3
 results_folder_suffix: NH3_1ATM
 dtb_file: solutions.h5
 pressure: 101325.0
@@ -17,7 +17,7 @@ zerod_params:
   T0_bounds:
   - 1800.0
   - 2000.0
-  n_samples: 100
+  n_samples: 200
   max_sim_time: 1.0e-2
   solve_mode: "dt_cfd"
 oned_prem_params:
