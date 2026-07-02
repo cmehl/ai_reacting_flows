@@ -1,13 +1,14 @@
 import os
 import oyaml as yaml
 import numpy as np
-from ai_reacting_flows.stochastic_reactors_data_gen.database_processing import LearningDatabase
+from ai_reacting_flows.databases_processing.database_processing import LearningDatabase
 from misc import check_h2_training_histograms
 
 # Dictionary to store data processing parameters
 dtb_processing_parameters = {}
 
 # Input / output database files
+dtb_processing_parameters["database_type"] = "stoch"              # Type of database
 dtb_processing_parameters["dtb_folder_suffix"] = "TEST"       # Stochastic reactors simulation folder
 dtb_processing_parameters["database_name"] = "dtb_resampled" # "database_log_log_resampled_kmeans_3clusters"                   # Resulting database name
 dtb_processing_parameters["dtb_file"] = "solutions.h5"

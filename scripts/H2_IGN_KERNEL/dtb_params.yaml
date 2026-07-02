@@ -30,6 +30,7 @@ fuel:
 - H2
 calc_mean_traj: false
 ML_inference_flag: false
+# For multi dt generation
 time_step_type: random
 time_step_range:
 - 1.0e-07
