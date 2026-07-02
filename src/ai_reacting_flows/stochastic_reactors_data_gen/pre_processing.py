@@ -22,9 +22,33 @@ class Inlet(object):
             self.set_state = self.set_state_cold_premixed
         elif inlet_type=="burnt_premixed":
             self.set_state = self.set_state_burnt_premixed
-        else:
-            sys.exit("ERROR Inlet type must be one of the following: \n - blank \n - cold_premixed \n - burnt_premixed")
         
+        elif inlet_type == "pure_species":
+            self.set_state = self.set_state_pure_species
+            
+        elif inlet_type == "premixed_from_flowrates":
+            self.set_state = self.set_state_premixed_from_flowrates
+
+        elif inlet_type == "burnt_from_flowrates":
+            self.set_state = self.set_state_burnt_from_flowrates
+
+        elif inlet_type == "premixed_from_massfractions":
+            self.set_state = self.set_state_premixed_from_massfractions
+        
+        elif inlet_type =="air" : 
+            self.set_state = self.set_air
+        
+        else:
+            sys.exit(
+                "ERROR Inlet type must be one of the following:\n"
+                " - blank\n"
+                " - cold_premixed\n"
+                " - burnt_premixed\n"
+                " - pure_species\n"
+                " - premixed_from_flowrates\n"
+                " - burnt_from_flowrates\n"
+                " - premixed_from_massfractions\n"
+            )
         
     def set_state_blank(self, mech, T, p):
         
@@ -118,4 +142,121 @@ class Inlet(object):
         state[2] = gas.P
         state[3:] = gas.Y
         
+        self.state = state
+        
+    def set_state_pure_species(self, mech, species, T, p):
+
+        gas = ct.Solution(mech)
+        nb_cols = gas.n_species + 3
+
+        state = np.zeros(nb_cols)
+        state[0] = self.nb_particles
+        state[1] = T
+        state[2] = p
+
+        idx = gas.species_index(species)
+        state[3 + idx] = 1.0
+
+        self.state = state
+        
+        
+    def _convert_flowrates_to_X(self, flowrates_dict):
+        """
+        Convert flowrates (L/min) into molar fractions Xk.
+        Assumes perfect gas so L/min proportional to mol/min.
+        Supports key "air" -> expands into O2 and N2.
+        """
+
+        flow = dict(flowrates_dict)
+
+        # Expand air if present
+        if "air" in flow:
+            air_val = flow.pop("air")
+            flow["O2"] = flow.get("O2", 0.0) + 0.21 * air_val
+            flow["N2"] = flow.get("N2", 0.0) + 0.79 * air_val
+
+        # Merge possible "N2_air" key into N2
+        if "N2_air" in flow:
+            flow["N2"] = flow.get("N2", 0.0) + flow.pop("N2_air")
+
+        # Total flow
+        tot = sum(flow.values())
+        if tot <= 0.0:
+            raise ValueError("ERROR: total flowrate is zero or negative.")
+
+        # Molar fractions
+        X = {sp: val / tot for sp, val in flow.items() if val > 0.0}
+        return X
+    
+    def set_state_premixed_from_flowrates(self, mech, flowrates, T, p):
+
+        gas = ct.Solution(mech)
+
+        X = self._convert_flowrates_to_X(flowrates)
+
+        gas.TPX = T, p, X
+
+        nb_cols = gas.n_species + 3
+
+        state = np.zeros(nb_cols)
+        state[0] = self.nb_particles
+        state[1] = T
+        state[2] = p
+        state[3:] = gas.Y
+
+        self.state = state
+        
+        
+    def set_state_burnt_from_flowrates(self, mech, flowrates, T, p):
+
+        gas = ct.Solution(mech)
+
+        X = self._convert_flowrates_to_X(flowrates)
+
+        gas.TPX = T, p, X
+        gas.equilibrate("HP")
+
+        nb_cols = gas.n_species + 3
+
+        state = np.zeros(nb_cols)
+        state[0] = self.nb_particles
+        state[1] = gas.T
+        state[2] = gas.P
+        state[3:] = gas.Y
+
+        self.state = state
+        
+    def set_state_premixed_from_massfractions(self, mech, Y, T, p):
+
+        gas = ct.Solution(mech)
+        Y_sum = sum(Y.values())
+        for sp in Y:
+            Y[sp] /= Y_sum
+        gas.TPY = T, p, Y
+
+        nb_cols = gas.n_species + 3
+
+        state = np.zeros(nb_cols)
+        state[0] = self.nb_particles
+        state[1] = T
+        state[2] = p
+        state[3:] = gas.Y
+
+        self.state = state
+        
+    def set_air(self, mech, T, p):
+
+        gas = ct.Solution(mech)
+
+        # Dry air composition (mole fractions)
+        gas.TPX = T, p, {"O2": 0.21, "N2": 0.79}
+
+        nb_cols = gas.n_species + 3
+
+        state = np.zeros(nb_cols)
+        state[0] = self.nb_particles
+        state[1] = T
+        state[2] = p
+        state[3:] = gas.Y
+
         self.state = state

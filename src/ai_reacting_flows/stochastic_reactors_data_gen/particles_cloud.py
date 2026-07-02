@@ -83,15 +83,42 @@ class ParticlesCloud(object):
         inlet_list = []
         for inlet_name in self.inlets_config:
 
-            type = self.inlets_config[inlet_name]["type"]
-            nb_part = self.inlets_config[inlet_name]["nb_particles"]
-            fuel = self.inlets_config[inlet_name]["fuel"]
-            phi = self.inlets_config[inlet_name]["phi"]
-            T = self.inlets_config[inlet_name]["T"]
-            P = self.inlets_config[inlet_name]["P"]
-            
-            inlet = Inlet(type, nb_particles=nb_part)
-            inlet.set_state(fuel=fuel, mech=self.mech_file, phi=phi, T=T, p=P)
+            cfg = self.inlets_config[inlet_name]
+
+            inlet_type = cfg["type"]
+            nb_part = cfg["nb_particles"]
+            T = cfg["T"]
+            P = cfg["P"]
+
+            inlet = Inlet(inlet_type, nb_particles=nb_part)
+
+            # ---- Backward compatible default behavior ----
+            # If inlet type is not explicitly handled, assume old premixed inlet behavior
+            if inlet_type in ["cold_premixed", "burnt_premixed"] or ("fuel" in cfg and "phi" in cfg):
+                fuel = cfg["fuel"]
+                phi = cfg["phi"]
+                inlet.set_state(fuel=fuel, mech=self.mech_file, phi=phi, T=T, p=P)
+
+            elif inlet_type == "pure_species":
+                species = cfg["species"]
+                inlet.set_state(mech=self.mech_file, species=species, T=T, p=P)
+
+            elif inlet_type in ["premixed_from_flowrates", "burnt_from_flowrates"]:
+                flowrates = cfg["flowrates"]
+                inlet.set_state(mech=self.mech_file, flowrates=flowrates, T=T, p=P)
+
+            elif inlet_type == "blank":
+                inlet.set_state(mech=self.mech_file, T=T, p=P)
+                
+            elif inlet_type =="air" : 
+                inlet.set_state(mech = self.mech_file,T=T,p=P)
+
+            elif inlet_type == "premixed_from_massfractions":
+                Y = dict(cfg["Y"])
+                inlet.set_state(mech=self.mech_file, Y=Y, T=T, p=P)
+
+            else:
+                raise ValueError(f"Unknown inlet type: {inlet_type}")
 
             inlet_list.append(inlet)
         
