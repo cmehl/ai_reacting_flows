@@ -43,7 +43,7 @@ class DatabaseFlamelets(object):
         # Core input parameters
         self.mech_file = data_gen_parameters["mech_file"]
         self.fuel = data_gen_parameters["fuel"][0]
-        self.dt_cfd = data_gen_parameters["dt_cfd"]
+        self.time_step = data_gen_parameters["time_step"]
 
         self.include_zerod = data_gen_parameters["include_zerod"]
         self.include_oned_prem = data_gen_parameters["include_oned_prem"]
@@ -186,7 +186,7 @@ class DatabaseFlamelets(object):
             while (equil_bool == False) and (time < max_sim_time):
                 
                 if solve_mode=="dt_cfd":
-                    time += self.dt_cfd
+                    time += self.time_step
                     sim.advance(time)
                     states.append(r.thermo.state, t=time)
                 elif solve_mode=="dt_cvode":
@@ -957,7 +957,7 @@ class DatabaseFlamelets(object):
             sim = ct.ReactorNet([r])
 
             # Advancing to dt
-            sim.advance(self.dt_cfd)
+            sim.advance(self.time_step)
 
             # Updated state
             Y_local[k_local, 0] = self.gas.T

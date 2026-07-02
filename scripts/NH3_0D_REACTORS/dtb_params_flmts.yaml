@@ -6,7 +6,7 @@ fuel:
 results_folder_suffix: NH3_1ATM
 dtb_file: solutions.h5
 pressure: 101325.0
-dt_cfd:  1.0e-6
+time_step:  1.0e-6
 include_zerod: True
 include_oned_prem: False
 include_oned_diff: False
@@ -38,3 +38,11 @@ oned_diff_params:
   n_samples: 3
   width: 0.02
 augment_dataset: False
+# For multi dt generation
+T_threshold: 600.0
+time_step_type: random
+time_step_range:
+- 1.0e-07
+- 1.0e-06
+nb_dt: 5
+new_file_name: solutions_5dt.h5

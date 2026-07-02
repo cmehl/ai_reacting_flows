@@ -8,9 +8,9 @@ import oyaml as yaml
 comm = MPI.COMM_WORLD
 
 run_folder = os.getcwd()
-with open(os.path.join(run_folder, "dtb_params.yaml"), "r") as file:
+with open(os.path.join(run_folder, "dtb_params_flmts.yaml"), "r") as file:
     data_gen_parameters = yaml.safe_load(file)
 
-dtb_type = "stoch"
+dtb_type = "flamelets"
 
 GenerateVariable_dt(dtb_type, data_gen_parameters, comm)
