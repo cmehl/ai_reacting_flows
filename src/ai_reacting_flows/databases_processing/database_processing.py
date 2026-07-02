@@ -1052,3 +1052,314 @@ class LearningDatabase(object):
         self.X["PC2"] = PCs[:,1]
 
         self.is_pca_computed = True
+        
+        
+        
+    def augment_database(self):
+
+        if self.augmentation is None:
+            print(">> No augmentation config")
+            return
+
+        if not self.augmentation.get("enable", False):
+            print(">> Augmentation disabled")
+            return
+
+        mode = self.augmentation.get("mode", None)
+
+        print(f">> Augmentation mode = {mode}")
+
+        if mode == "radical_region":
+            self._augment_radical_regions()
+            
+        elif mode == "noise" : 
+            self._apply_noise()
+            
+        else:
+            raise ValueError(f"Unknown augmentation mode: {mode}")
+    
+    
+    def _apply_noise(self):
+
+
+        print(">> Applying global noise augmentation")
+
+        factor = self.augmentation.get("factor", 1)
+        noise = self.augmentation.get("noise_level", 0.02)
+
+        species_cols = [c for c in self.X.columns 
+                if c not in ["Temperature", "Pressure", "Prog_var", "HRR", "cluster"]
+                and not c.startswith("PC")]
+        print(species_cols)
+
+        X_aug_list = []
+        Y_aug_list = []
+
+        for i in range(factor):
+
+            print(f">> Noise realization {i+1}/{factor}")
+
+            # -----------------------------
+            # COPY ORIGINAL DATA
+            # -----------------------------
+            X_pert = self.X.copy()
+            Y_copy = self.Y.copy()
+
+            # -----------------------------
+            # APPLY LOG-NORMAL NOISE
+            # -----------------------------
+            Y_species = X_pert[species_cols].values.copy()
+
+            perturbation = np.exp(
+                np.random.normal(
+                    loc=0.0,
+                    scale=noise,
+                    size=Y_species.shape
+                )
+            )
+
+            Y_species *= perturbation
+
+            # positivity
+            Y_species = np.clip(Y_species, 0.0, None)
+
+            # renormalization
+            Y_species /= (
+                np.sum(Y_species, axis=1, keepdims=True) + 1e-30
+            )
+
+            X_pert[species_cols] = Y_species
+            
+            # -----------------------------
+            # STORE
+            # -----------------------------
+            X_aug_list.append(X_pert)
+            Y_aug_list.append(Y_copy)
+
+        # -----------------------------
+        # CONCATENATE
+        # -----------------------------
+        X_aug = pd.concat(X_aug_list, ignore_index=True)
+        Y_aug = pd.concat(Y_aug_list, ignore_index=True)
+
+        self.X = pd.concat([self.X, X_aug], ignore_index=True)
+        self.Y = pd.concat([self.Y, Y_aug], ignore_index=True)
+
+        print(">> Noise augmentation completed")
+        print(f">> New dataset size: X {len(self.X)}") 
+        print(f">> New dataset size: Y {len(self.Y)}")   
+        
+    def _augment_radical_regions(self):
+
+        import pandas as pd
+        import numpy as np
+
+        print(">> Starting radical-focused augmentation")
+
+        radicals = self.augmentation.get(
+            "radical_species",
+            ["O", "H", "OH"]
+        )
+
+        factor = self.augmentation.get("factor", 1)
+
+        T_min = self.augmentation.get(
+            "target_temperature_min",
+            700
+        )
+
+        T_max = self.augmentation.get(
+            "target_temperature_max",
+            1600
+        )
+
+        q = self.augmentation.get(
+            "radical_quantile",
+            0.8
+        )
+
+        batch_size = self.augmentation.get(
+            "batch_size",
+            2000
+        )
+
+        X = self.X
+
+        # ==================================================
+        # TEMPERATURE MASK
+        # ==================================================
+
+        mask = (
+            (X["Temperature"] > T_min)
+            &
+            (X["Temperature"] < T_max)
+        )
+
+
+        # ==================================================
+        # RADICAL FILTER
+        # ==================================================
+
+        radical_mask = np.zeros(len(X), dtype=bool)
+
+        for sp in radicals:
+
+            col = sp
+
+            if col not in X.columns:
+
+                if f"Y_{sp}" in X.columns:
+                    col = f"Y_{sp}"
+                else:
+                    continue
+
+            threshold = X[col].quantile(q)
+
+            radical_mask |= (X[col] > threshold)
+
+        mask &= radical_mask
+
+        X_target = X[mask].copy()
+
+        print(f">> Selected {len(X_target)} radical points")
+
+        # ==================================================
+        # SPECIES COLUMNS
+        # ==================================================
+
+        species_cols = [
+            c for c in X.columns
+            if c.startswith("Y_")
+        ]
+
+        X_aug_all = []
+        Y_aug_all = []
+
+        # ==================================================
+        # BATCH LOOP
+        # ==================================================
+
+        n_batches = int(np.ceil(len(X_target) / batch_size))
+
+        for b in range(n_batches):
+
+            i0 = b * batch_size
+            i1 = min((b + 1) * batch_size, len(X_target))
+
+            X_batch = X_target.iloc[i0:i1].copy()
+
+            print(
+                f">> Batch {b+1}/{n_batches}"
+                f" ({len(X_batch)} pts)"
+            )
+
+            for k in range(factor):
+
+                X_pert = self._perturb_X(
+                    X_batch,
+                    species_cols
+                )
+
+                Y_pert = self._recompute_Y_cantera(
+                    X_pert
+                )
+
+                X_aug_all.append(X_pert)
+                Y_aug_all.append(Y_pert)
+
+        # ==================================================
+        # FINAL CONCAT
+        # ==================================================
+
+        X_aug = pd.concat(X_aug_all, ignore_index=True)
+        Y_aug = pd.concat(Y_aug_all, ignore_index=True)
+
+        self.X = pd.concat(
+            [self.X, X_aug],
+            ignore_index=True
+        )
+
+        self.Y = pd.concat(
+            [self.Y, Y_aug],
+            ignore_index=True
+        )
+
+        print(">> Radical augmentation completed")
+
+        print(f">> New size = {len(self.X)}")
+        
+    def _perturb_X(self, X_batch, species_cols):
+
+        Xp = X_batch.copy()
+
+        noise = self.augmentation.get("noise_level", 0.01)
+
+        # --- log-normal noise (chimie-friendly) ---
+        Y = Xp[species_cols].values
+
+        Y *= np.exp(np.random.normal(0, noise, size=Y.shape))
+
+        # --- physical constraints ---
+        Y = np.clip(Y, 0.0, None)
+
+        # renormalisation mass fractions
+        Y = Y / (np.sum(Y, axis=1, keepdims=True) + 1e-30)
+
+        Xp[species_cols] = Y
+
+        return Xp
+    
+    def _recompute_Y_cantera(self, X_batch):
+
+        import cantera as ct
+        import pandas as pd
+        import numpy as np
+
+        gas = ct.Solution(self.detailed_mechanism)
+
+        Y_out = []
+
+        # dt global depuis dtb_params.yaml
+
+        for _, row in X_batch.iterrows():
+
+            T = row["Temperature"]
+            P = row["Pressure"]
+
+            Y_init = row[gas.species_names].values
+
+            gas.TPY = T, P, Y_init
+
+            reactor = ct.IdealGasConstPressureReactor(gas)
+
+            sim = ct.ReactorNet([reactor])
+
+            # UN SEUL STEP
+            sim.advance(self.time_step)
+
+            gas_out = reactor.thermo
+
+            row_out = [gas_out.T, P]
+
+            row_out.extend(gas_out.Y)
+
+            # conserver variables annexes si présentes
+            if "Prog_var" in row.index:
+                row_out.append(row["Prog_var"])
+
+            if "HRR" in row.index:
+                row_out.append(row["HRR"])
+
+            Y_out.append(row_out)
+
+        # reconstruction colonnes
+        cols = ["Temperature", "Pressure"]
+        cols += list(gas.species_names)
+
+        if "Prog_var" in X_batch.columns:
+            cols.append("Prog_var")
+
+        if "HRR" in X_batch.columns:
+            cols.append("HRR")
+
+        return pd.DataFrame(Y_out, columns=cols)
