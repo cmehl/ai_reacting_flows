@@ -317,7 +317,7 @@ class NN_manager():
         plt.savefig( f"{self.directory}/training/cluster_{i_cluster}/training_curves/mass_conservation.png")
 
         # ELEMENTS CONSERVATION
-        fig, ((ax1, ax2)) = plt.subplots(1,2)
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2,2)
 
         # C
         ax1.plot(epochs_small, 100*stats_A_elements[:,0,0], color="k")
@@ -334,6 +334,22 @@ class NN_manager():
 
         ax2.set_xlabel("Epoch")
         ax2.set_ylabel(r"$\Delta Y_H$ $(\%)$")
+
+        # O
+        ax3.plot(epochs_small, 100*stats_A_elements[:,2,0], color="k")
+        ax3.plot(epochs_small, 100*stats_A_elements[:,2,1], color="k", ls="--")
+        ax3.plot(epochs_small, 100*stats_A_elements[:,2,2], color="k", ls="--")
+
+        ax3.set_xlabel("Epoch")
+        ax3.set_ylabel(r"$\Delta Y_O$ $(\%)$")
+
+        # N
+        ax4.plot(epochs_small, 100*stats_A_elements[:,3,0], color="k")
+        ax4.plot(epochs_small, 100*stats_A_elements[:,3,1], color="k", ls="--")
+        ax4.plot(epochs_small, 100*stats_A_elements[:,3,2], color="k", ls="--")
+
+        ax4.set_xlabel("Epoch")
+        ax4.set_ylabel(r"$\Delta Y_N$ $(\%)$")
 
         fig.tight_layout()
 
