@@ -401,7 +401,7 @@ class NN_manager():
             for param_name, param in module.named_parameters(recurse=False):
                 data = param.detach().cpu().numpy()
                 if param_name == "weight":
-                    layer_group.create_dataset("kernel:0", data=data)
+                    layer_group.create_dataset("kernel:0", data=data.T)   # We noticed that transpose of matrix need to be considered (differences in pytorch vs tf layouts)
                 elif param_name == "bias":
                     layer_group.create_dataset("bias:0", data=data)
 
