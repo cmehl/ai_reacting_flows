@@ -80,18 +80,29 @@ class ParticlesCloud(object):
 
         self.nb_inlets = len(self.inlets_config)
 
+        # Required inputs for each inlet type
+        FIELDS_BY_TYPE = {
+            "blank":          ["T", "P"],
+            "air":            ["T", "P"],
+            "cold_premixed":  ["T", "P", "fuel", "phi"],
+            "burnt_premixed": ["T", "P", "fuel", "phi"],
+        }
+
         inlet_list = []
         for inlet_name in self.inlets_config:
 
-            type = self.inlets_config[inlet_name]["type"]
-            nb_part = self.inlets_config[inlet_name]["nb_particles"]
-            fuel = self.inlets_config[inlet_name]["fuel"]
-            phi = self.inlets_config[inlet_name]["phi"]
-            T = self.inlets_config[inlet_name]["T"]
-            P = self.inlets_config[inlet_name]["P"]
-            
-            inlet = Inlet(type, nb_particles=nb_part)
-            inlet.set_state(fuel=fuel, mech=self.mech_file, phi=phi, T=T, p=P)
+            cfg = self.inlets_config[inlet_name]
+
+            inlet_type = cfg["type"]
+            nb_part = cfg["nb_particles"]
+
+            inlet = Inlet(inlet_type, nb_particles=nb_part)
+
+            state_kwargs = {"mech": self.mech_file}
+            for field in FIELDS_BY_TYPE[inlet_type]:
+                state_kwargs[field] = cfg[field]
+   
+            inlet.set_state(**state_kwargs)
 
             inlet_list.append(inlet)
         

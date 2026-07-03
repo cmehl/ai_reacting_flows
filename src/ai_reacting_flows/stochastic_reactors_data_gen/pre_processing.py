@@ -22,11 +22,13 @@ class Inlet(object):
             self.set_state = self.set_state_cold_premixed
         elif inlet_type=="burnt_premixed":
             self.set_state = self.set_state_burnt_premixed
+        elif inlet_type=="air":
+            self.set_state = self.set_state_air
         else:
-            sys.exit("ERROR Inlet type must be one of the following: \n - blank \n - cold_premixed \n - burnt_premixed")
+            sys.exit("ERROR Inlet type must be one of the following: \n - blank \n - cold_premixed \n - burnt_premixed \n - air")
         
         
-    def set_state_blank(self, mech, T, p):
+    def set_state_blank(self, mech, T, P):
         
         # Cantera gas object
         gas = ct.Solution(mech)
@@ -38,12 +40,12 @@ class Inlet(object):
         state = np.zeros(nb_cols)
         state[0] = self.nb_particles
         state[1] = T
-        state[2] = p
+        state[2] = P
         
         self.state = state
         
         
-    def set_state_cold_premixed(self, fuel, mech, phi, T, p):
+    def set_state_cold_premixed(self, fuel, mech, phi, T, P):
         
         # FIRST GET VALUES FOR Y_fuel, Y_N2 and Y_O2
         # Parse fuel species (Remark: might include oxygen)
@@ -82,7 +84,7 @@ class Inlet(object):
         state = np.zeros(nb_cols)
         state[0] = self.nb_particles
         state[1] = T
-        state[2] = p
+        state[2] = P
         state[3 + gas.species_index(fuel)] = Y_fuel
         state[3 + gas.species_index("O2")] = Y_O2
         state[3 + gas.species_index("N2")] = Y_N2
@@ -91,7 +93,7 @@ class Inlet(object):
         
         
         
-    def set_state_burnt_premixed(self, fuel, mech, phi, T, p):
+    def set_state_burnt_premixed(self, fuel, mech, phi, T, P):
         
         # COMPUTE BURNT GAS STATE
         # Cantera gas object
@@ -104,7 +106,7 @@ class Inlet(object):
         compo = f'{fuel}:{phi:3.2f}, O2:{fuel_ox_ratio:3.2f}, N2:{fuel_ox_ratio * 0.79 / 0.21:3.2f}'
         
         # Equilibrium computation
-        gas.TPX = T, p, compo
+        gas.TPX = T, P, compo
         gas.equilibrate('HP')
         
         # FILL STATE        
@@ -117,5 +119,25 @@ class Inlet(object):
         state[1] = gas.T
         state[2] = gas.P
         state[3:] = gas.Y
+        
+        self.state = state
+
+
+    def set_state_air(self, mech, T, P):
+    
+        # FILL STATE
+        # Cantera gas object
+        gas = ct.Solution(mech)
+        
+        # Number of columns in inlet file: nb parts, T, p, species
+        nb_cols = gas.n_species + 3
+        
+        # Creating state with species set to 0
+        state = np.zeros(nb_cols)
+        state[0] = self.nb_particles
+        state[1] = T
+        state[2] = P
+        state[3 + gas.species_index("O2")] = 0.233
+        state[3 + gas.species_index("N2")] = 0.767
         
         self.state = state
