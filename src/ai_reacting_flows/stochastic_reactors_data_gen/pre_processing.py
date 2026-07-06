@@ -11,10 +11,11 @@ import ai_reacting_flows.tools.utilities as utils
 
 class Inlet(object):
     
-    def __init__(self, inlet_type, nb_particles):
+    def __init__(self, inlet_type, nb_particles, activation_time):
         
         self.inlet_type = inlet_type
         self.nb_particles = nb_particles
+        self.activation_time = activation_time
         
         if inlet_type=="blank":
             self.set_state = self.set_state_blank

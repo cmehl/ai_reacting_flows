@@ -7,16 +7,18 @@ inlets:
     phi: 1.0
     T: 2000.0
     P: 101325.0
+    activation_time: 0.0
   inlet_2:
     type: air
     nb_particles: 200
     T: 300.0
     P: 101325.0
+    activation_time: 1.0e-5
 results_folder_suffix: NH3_PYRO
 dtb_file: solutions.h5
 build_ml_dtb: true
 time_step: 1.0e-6
-time_max: 50.0e-6
+time_max: 20.0e-6
 mixing_model: CURL_MODIFIED
 mixing_time: 0.0004
 read_mixing: false

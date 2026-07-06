@@ -95,8 +95,9 @@ class ParticlesCloud(object):
 
             inlet_type = cfg["type"]
             nb_part = cfg["nb_particles"]
+            activation_time = cfg["activation_time"]
 
-            inlet = Inlet(inlet_type, nb_particles=nb_part)
+            inlet = Inlet(inlet_type, nb_particles=nb_part, activation_time = activation_time)
 
             state_kwargs = {"mech": self.mech_file}
             for field in FIELDS_BY_TYPE[inlet_type]:
@@ -130,7 +131,8 @@ class ParticlesCloud(object):
         for i in range(1,self.nb_inlets+1):  # Loop on inlet
             for j in range(self.nb_parts_per_inlet[i]):  # creating Ni particles for inlet i
                 state_ini = self.state_per_inlet[i]
-                particle_current = Particle(state_ini, self.species_names, i, num_part, data_gen_parameters, self)
+                activation_time = inlet_list[i-1].activation_time
+                particle_current = Particle(state_ini, self.species_names, i, num_part, data_gen_parameters, activation_time, self)
                 self.particles_list.append(particle_current)
                 num_part += 1
         
@@ -195,13 +197,26 @@ class ParticlesCloud(object):
                         self.CURL_rate_list = pickle.load(f)
             else:
                 n_ite = int(self.time_max / self.dt) + 1
+                
                 self.pairs_list = []
                 self.CURL_rate_list = []
+
+                activation_times = np.array([p.activation_time for p in self.particles_list])
+
                 for i in range(n_ite): # DAK: vectorize pair generation ?
-                    self.pairs_list.append(utils.sample_comb2((self.nb_parts_tot,self.nb_parts_tot), self.Npairs_curl))
+
+                    time = i * self.dt
+                    active_idx = np.where(activation_times <= time)[0]   # true particle indices, active at this time
+
+                    local_pairs = utils.sample_comb2((active_idx.size, active_idx.size), self.Npairs_curl) # Pairs using active particles indices
+                    real_pairs = active_idx[local_pairs]   # Going back to particles indices
+
+                    self.pairs_list.append(real_pairs)
+
                     if do_CURL_rate:
                         self.CURL_rate_list.append(np.random.random())
                 
+
                 with open(self.results_folder + "/pairs_list.pkl", 'wb') as f:
                     pickle.dump(self.pairs_list, f)
                 if do_CURL_rate:
@@ -383,7 +398,10 @@ class ParticlesCloud(object):
             #     part.react_NN_wrapper(self)
             # else:
             #     part.react(dt, self)
-            part.react(dt, self)
+
+            # Reaction only if time is larger than activation time
+            if self.time >= part.activation_time:
+                part.react(dt, self)
 
         # Allgather regroups the chunks and give the whole list to all the processors (<=> gather + broadcast)
         result = self.comm.allgather(lists_particles)
