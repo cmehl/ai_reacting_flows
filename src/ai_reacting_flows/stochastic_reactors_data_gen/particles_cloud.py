@@ -100,7 +100,7 @@ class ParticlesCloud(object):
 
             inlet_type = cfg["type"]
             nb_part = cfg["nb_particles"]
-            activation_time = cfg["activation_time"]
+            activation_time = float(cfg.get("activation_time", 0.0))  #default to 0 if parameter not present
 
             inlet = Inlet(inlet_type, nb_particles=nb_part, activation_time = activation_time)
 
@@ -140,6 +140,9 @@ class ParticlesCloud(object):
                 particle_current = Particle(state_ini, self.species_names, i, num_part, data_gen_parameters, activation_time, self)
                 self.particles_list.append(particle_current)
                 num_part += 1
+
+        # Setting is_active flag on each particle (and countign active particles)
+        self._count_active_particles()
         
         # =====================================================================
         #     MIXING MODEL INITIALIZATION 
@@ -453,7 +456,7 @@ class ParticlesCloud(object):
             self.print_iteration()
         
         # Check termination of computation
-        self.check_termination()
+        # self.check_termination()    # we suspend that for now, we have cases where we want to run with low temperature variance
 
         # Update time and iteration
         self.time += dt
@@ -509,8 +512,12 @@ class ParticlesCloud(object):
     def _count_active_particles(self) -> None:
 
         activation_times = np.array([p.activation_time for p in self.particles_list])
-        active_idx = np.where(activation_times <= self.time)[0]
-        self.nb_active_particles = active_idx.size
+        is_active_mask = activation_times <= self.time
+        self.nb_active_particles = int(is_active_mask.sum())
+
+        for particle, active in zip(self.particles_list, is_active_mask):
+            particle.is_active = bool(active)
+
 
 # =============================================================================
 #   MIXING MODELING
@@ -850,10 +857,15 @@ class ParticlesCloud(object):
 # =============================================================================    
     
     def _write_solution(self):
+
+        # Keep only active particles
+        active_particles = [p for p in self.particles_list if p.is_active]
+        nb_active = len(active_particles)
+    
         
         # Set current iteration results in a dataframe
-        arr = np.empty((self.nb_parts_tot, len(self.cols_all_states)))
-        for i in range(self.nb_parts_tot):
+        arr = np.empty((nb_active, len(self.cols_all_states)))
+        for i, part in enumerate(active_particles):
             # i-th particle
             part = self.particles_list[i]
             arr[i,0] = part.T
@@ -877,13 +889,15 @@ class ParticlesCloud(object):
         f.close()
 
     def _update_dtb_states(self, which_state):
+
+        # Keep only active particles
+        active_particles = [p for p in self.particles_list if p.is_active]
+        nb_active = len(active_particles)
         
         # Set current iteration results in a dataframe
         cols = ['Temperature'] + ['Pressure'] + self.species_names + ['Prog_var'] + ['HRR']
-        arr = np.empty((self.nb_parts_tot, len(cols)))
-        for i in range(self.nb_parts_tot):
-            # i-th particle
-            part = self.particles_list[i]
+        arr = np.empty((nb_active, len(cols)))
+        for i, part in enumerate(active_particles):
             arr[i,0] = part.T
             arr[i,1] = part.P
             arr[i,2:part.nb_state_vars] = part.Y
@@ -903,10 +917,8 @@ class ParticlesCloud(object):
 
     def calc_statistics(self):
 
-        # Temperature vector
-        Temp_vect = np.empty(self.nb_parts_tot)
-        for i, part in enumerate(self.particles_list):
-            Temp_vect[i] = part.T
+        # Temperature vector (active particles only)
+        Temp_vect = np.array([part.T for part in self.particles_list if part.is_active])
         
         # Mean and standard deviation of temperature
         self.mean_T = Temp_vect.mean()
