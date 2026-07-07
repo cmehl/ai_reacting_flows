@@ -51,15 +51,15 @@ def generate_stochastic_database(comm : 'MPI.Comm'):
                 raise
 
 
-        if (data_gen_parameters["mixing_time"] < data_gen_parameters["time_step"]):
-            # Mixing model choice
-            try:
-                raise ValueError("Input error.")
-            except ValueError:
-                print("")
-                print(">> Curl model diffusion time cannot be lower than the numerical time step.")
-                print("")
-                raise
+        # if (data_gen_parameters["mixing_time"] < data_gen_parameters["time_step"]):
+        #     # Mixing model choice
+        #     try:
+        #         raise ValueError("Input error.")
+        #     except ValueError:
+        #         print("")
+        #         print(">> Curl model diffusion time cannot be lower than the numerical time step.")
+        #         print("")
+        #         raise
             
 
     #==========================================================================
@@ -93,12 +93,11 @@ def generate_stochastic_database(comm : 'MPI.Comm'):
 
     # Initializations
     dt = data_gen_parameters["time_step"]
-    time = 0.0
-
-    while (time<data_gen_parameters["time_max"] and (not particle_cloud.stats_converged)):
+    
+    while (particle_cloud.time<data_gen_parameters["time_max"] and (not particle_cloud.stats_converged)):
         
         # Advancing particles state by one dt
-        time += dt
+        dt = particle_cloud.dt[particle_cloud.iteration]    # to account for possible multi-dt
         particle_cloud.advance_time(dt)
 
     # End of simulation operations

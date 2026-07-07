@@ -17,8 +17,8 @@ inlets:
 results_folder_suffix: NH3_PYRO
 dtb_file: solutions.h5
 build_ml_dtb: true
-time_step: 1.0e-6
-time_max: 20.0e-6
+time_step: {0: 1.0e-6, 1.0e-5: 2.0e-6}
+time_max: 30.0e-6
 mixing_model: CURL_MODIFIED
 mixing_time: 0.0004
 read_mixing: false

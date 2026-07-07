@@ -2,6 +2,7 @@ import sys
 import os
 from time import perf_counter
 import itertools
+import math
 
 import numpy as np
 import matplotlib
@@ -55,7 +56,7 @@ class ParticlesCloud(object):
         self.time_max = data_gen_parameters["time_max"]
         self.time = 0.0
         self.iteration = 0
-        self.dt = data_gen_parameters["time_step"]
+        self.dt_input = data_gen_parameters["time_step"]
         self.calc_mean_traj = data_gen_parameters["calc_mean_traj"]
         
         # Statistics convergence status
@@ -70,6 +71,10 @@ class ParticlesCloud(object):
 
         # Species names
         self.species_names = self.gas.species_names
+
+        # Setting the time-step array (it is an array to account for possible different values of dt in user-presribed time windows)
+        # This is useful in cases where slow chemistry takes places first and more reactive particles are added later
+        self._set_time_step_array()
 
         # =====================================================================
         #     GENERATING INLETS    
@@ -183,7 +188,8 @@ class ParticlesCloud(object):
             N_pairs = 1.5 * self.nb_parts_tot * self.dt/self.tau_min # 1.5 factor used in Ren et al. paper
             
             # Number of mixed particle
-            self.Npairs_curl = int(round(N_pairs))
+            self.Npairs_curl = np.round(N_pairs).astype(int)
+        
 
         if self.mixing_model!="CURL_MODIFIED_DD" and self.mixing_model!="EMST":  
             # Do or read mixing
@@ -196,19 +202,18 @@ class ParticlesCloud(object):
                     with open(f"{self.run_folder:s}/CURL_rate_list.pkl", "rb") as f:
                         self.CURL_rate_list = pickle.load(f)
             else:
-                n_ite = int(self.time_max / self.dt) + 1
-                
+
                 self.pairs_list = []
                 self.CURL_rate_list = []
 
                 activation_times = np.array([p.activation_time for p in self.particles_list])
 
-                for i in range(n_ite): # DAK: vectorize pair generation ?
+                for i in range(self.n_ite): # DAK: vectorize pair generation ?
 
-                    time = i * self.dt
+                    time = i * self.dt[i]
                     active_idx = np.where(activation_times <= time)[0]   # true particle indices, active at this time
 
-                    local_pairs = utils.sample_comb2((active_idx.size, active_idx.size), self.Npairs_curl) # Pairs using active particles indices
+                    local_pairs = utils.sample_comb2((active_idx.size, active_idx.size), self.Npairs_curl[i]) # Pairs using active particles indices
                     real_pairs = active_idx[local_pairs]   # Going back to particles indices
 
                     self.pairs_list.append(real_pairs)
@@ -227,11 +232,13 @@ class ParticlesCloud(object):
             
             # If number is very small, N_pairs_curl might be 0, in this case we set it
             # to 1 and perform diffusion every round(1/N_pairs) time steps
-            if self.Npairs_curl==0:
-                self.Npairs_curl=1
-                self.diffusion_freq = int(round(1/N_pairs))
-            else:
-                self.diffusion_freq = 1
+            self.diffusion_freq = np.zeros_like(self.Npairs_curl)
+            for i in range(self.n_ite):
+                if self.Npairs_curl[i]==0:
+                    self.Npairs_curl[i]=1
+                    self.diffusion_freq[i] = int(round(1/N_pairs[i]))
+                else:
+                    self.diffusion_freq[i] = 1
             
             
         # Initializing particles age in EMST model
@@ -301,10 +308,79 @@ class ParticlesCloud(object):
         if self.rank == 0:
             self.check_species()
 
-# =============================================================================
-#   INLET GENERATION
-# =============================================================================
-    
+
+
+    def _set_time_step_array(self) -> None:
+        """
+        Build self.dt, an array giving the time step used at each iteration,
+        and self.n_ite, the total number of iterations.
+
+        self.dt_input can be:
+            - a number (int/float): constant time step for the whole run.
+            - a dict {t0: dt0, t1: dt1, ...}: dt0 is used from t0 to t1,
+            dt1 from t1 to t2, etc., and the last dt is used until
+            self.time_max. Keys need not be pre-sorted, but the first
+            key must be 0.
+
+        Raises
+        ------
+        TypeError
+            If self.dt_input is neither a number nor a dict.
+        ValueError
+            If the dict is empty, doesn't start at t=0, or contains a
+            non-positive dt or time interval.
+        """
+
+        # Constant dt case
+        if isinstance(self.dt_input, float):
+            dt_cte = float(self.dt_input)
+            if dt_cte <= 0:
+                raise ValueError(f"[Error in dt array] dt must be positive, got {dt_cte}")
+            
+            self.n_ite = int(self.time_max / dt_cte) + 1
+            self.dt = np.ones(self.n_ite) * dt_cte
+
+        # dt changing over time in user-prescribed time intervals
+        elif isinstance(self.dt_input, dict):
+            if not self.dt_input:
+                    raise ValueError("[Error in dt array] dt_input dict is empty")
+            
+            dt_dict = dict(sorted(self.dt_input.items()))
+
+            dt_change_times = list(dt_dict.keys())
+            dt_values = list(dt_dict.values())
+            nb_dt_changes = len(dt_change_times)
+
+            if dt_change_times[0] != 0:
+                raise ValueError("[Error in dt array] The first time step change must start at t=0")
+
+            dt_chunks = []
+            for i in range(nb_dt_changes):
+
+                dt_current = dt_values[i]
+                if dt_current <= 0:
+                    raise ValueError(f"[Error in dt array] dt must be positive, got {dt_current}")
+
+                t_start = dt_change_times[i]
+                t_end = (
+                    self.time_max if i == nb_dt_changes - 1
+                    else dt_change_times[i + 1]
+                )
+                period = t_end - t_start
+
+                if period <= 0:
+                    raise ValueError(
+                        f"[Error in dt array] Time intervals must be increasing (issue at t={dt_change_times[i]})"
+                    )
+                
+                #Number of iteration in this time window
+                n_ite_period = math.ceil(period / dt_current)
+                dt_chunks.append(np.full(n_ite_period, dt_current))
+
+            self.dt = np.concatenate(dt_chunks) if dt_chunks else np.array([])
+            self.n_ite = len(self.dt)
+
+
 # =============================================================================
 #   TIME MARCHING FUNCTIONS
 # =============================================================================
@@ -315,6 +391,9 @@ class ParticlesCloud(object):
         
         # Initial time
         t0 = perf_counter()
+
+        # Counting number of active particles
+        self._count_active_particles()
 
         # Write current iteration solution
         if self.rank==0:
@@ -414,16 +493,24 @@ class ParticlesCloud(object):
         
         if self.mixing_model=="CURL" or self.mixing_model=="CURL_MODIFIED":
 
-            if self.iteration%self.diffusion_freq==0:
+            if self.iteration%self.diffusion_freq[self.iteration]==0:
                 self._mix_curl()
 
         elif self.mixing_model=="CURL_MODIFIED_DD":
 
-            if self.iteration%self.diffusion_freq==0:
+            if self.iteration%self.diffusion_freq[self.iteration]==0:
                 self._mix_curl_dd()
 
         elif self.mixing_model=="EMST":
             self._mix_EMST()
+
+
+
+    def _count_active_particles(self) -> None:
+
+        activation_times = np.array([p.activation_time for p in self.particles_list])
+        active_idx = np.where(activation_times <= self.time)[0]
+        self.nb_active_particles = active_idx.size
 
 # =============================================================================
 #   MIXING MODELING
@@ -581,7 +668,7 @@ class ParticlesCloud(object):
                 # Temperature
                 part.update_ThermoStates(self)
 
-    # EMST model: initialization
+    # EMST model: initialization   -- CM: Obsolete -> to implement simpler EMST in Python
     def _init_EMST(self):
         
         nparts = len(self.particles_list)
@@ -620,8 +707,8 @@ class ParticlesCloud(object):
             i = part.num_part
             part.age = state[i]
         
-    # EMST model: mixing
-    def _mix_EMST(self):
+    # EMST model: mixing  -- CM: Obsolete -> to implement simpler EMST in Python
+    def _mix_EMST(self):  
         
         nparts = len(self.particles_list)
         ncompo = len(self.particles_list[0].state) - 1  # particle 0 arbitrary (pressure not considered)
@@ -872,7 +959,7 @@ class ParticlesCloud(object):
         
         PRINT("")
         PRINT("START OF SIMULATION")
-        PRINT(f">> Total number of iterations: {int(self.time_max/self.dt)}")
+        PRINT(f">> Total number of iterations: {self.n_ite}")
         PRINT(f">> Number of inlets: {self.nb_inlets}")
         PRINT(f">> Total number of particles: {self.nb_parts_tot}")
         if self.mixing_model=="CURL":
@@ -888,8 +975,10 @@ class ParticlesCloud(object):
         
         PRINT("")
         PRINT(f"ITERATION {self.iteration:d}")
+        PRINT(f"Number of active particles: {self.nb_active_particles} (/{self.nb_parts_tot})")
         PRINT("Physics:")
         PRINT(f"  >> Current physical time: {self.time:4.3e} s")
+        PRINT(f"  >> Current time step: {self.dt[self.iteration]:4.3e} s")
         PRINT("PARTICLES STATISTICS:")
         PRINT(f"  >> Mean temperature of particles: {self.mean_T:4.1f} K")
         PRINT(f"  >> Temperature standard deviation: {self.stdev_T:4.1f} K")
