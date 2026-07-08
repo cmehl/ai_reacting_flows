@@ -53,7 +53,7 @@ class ParticlesCloud(object):
             self.pg_thresholds = data_gen_parameters["pg_thresholds"]
         
         # Initialize time and general parameters
-        self.time_max = data_gen_parameters["time_max"]
+        self.time_max = float(data_gen_parameters["time_max"])
         self.time = 0.0
         self.iteration = 0
         self.dt_input = data_gen_parameters["time_step"]
@@ -100,7 +100,7 @@ class ParticlesCloud(object):
             cfg = self.inlets_config[inlet_name]
 
             inlet_type = cfg["type"]
-            nb_part = cfg["nb_particles"]
+            nb_part = int(cfg["nb_particles"])
             activation_time = float(cfg.get("activation_time", 0.0))  #default to 0 if parameter not present
 
             inlet = Inlet(inlet_type, nb_particles=nb_part, activation_time = activation_time)
@@ -142,8 +142,11 @@ class ParticlesCloud(object):
                 self.particles_list.append(particle_current)
                 num_part += 1
 
-        # Setting is_active flag on each particle (and countign active particles)
+        # Setting is_active flag on each particle (and counting active particles)
         self._count_active_particles()
+
+        # Activation times for each particle
+        activation_times = np.array([p.activation_time for p in self.particles_list])
         
         # =====================================================================
         #     MIXING MODEL INITIALIZATION 
@@ -151,13 +154,13 @@ class ParticlesCloud(object):
                 
         # Mixing model
         self.mixing_model = data_gen_parameters["mixing_model"]
-        self.mixing_time = data_gen_parameters["mixing_time"]
+        self.mixing_time = float(data_gen_parameters["mixing_time"])
         if self.mixing_model == "EMST":
             import ai_reacting_flows.stochastic_reactors_data_gen.EMST.emst_mixing as emst_mixing
             self.emst = emst_mixing
         
         # Chemistry temperature threshold
-        self.T_threshold = data_gen_parameters["T_threshold"]
+        self.T_threshold = float(data_gen_parameters["T_threshold"])
 
         # CURL with differential diffusion
         if self.mixing_model=="CURL_MODIFIED_DD":
@@ -184,12 +187,27 @@ class ParticlesCloud(object):
         
         # Number of particles pair to use for CURL model
         if self.mixing_model in ["CURL","CURL_MODIFIED","CURL_MODIFIED_DD"]:
-            # Estimating number of pairs (float)
-            # if self.mixing_model=="CURL_MODIFIED_DD":  # 1.5 factor used in Ren et al. paper
-            #     N_pairs = 1.5 * self.nb_parts_tot * self.dt/self.tau_min
-            # else:
-            #     N_pairs = self.nb_parts_tot * self.dt/self.tau_min
-            N_pairs = 1.5 * self.nb_parts_tot * self.dt/self.tau_min # 1.5 factor used in Ren et al. paper
+
+            N_pairs = np.zeros_like(self.dt)
+
+            for i in range(self.n_ite):
+
+                    # Number of active particles
+                    time = i * self.dt[i]
+                    active_idx = np.where(activation_times <= time)[0]   # true particle indices, active at this time
+                    n_parts_active = active_idx.size
+            
+                    N_pairs[i] = 1.5 * n_parts_active * self.dt[i]/self.tau_min # 1.5 factor used in Ren et al. paper
+
+                    # Case where we select all pairs (pairs where i==j and (i,j)=(j,i) are not considered)
+                    N_pairs_max = n_parts_active * (n_parts_active - 1) // 2
+                    max_attained = []
+                    if N_pairs[i] > N_pairs_max:
+                        max_attained.append(i)
+                        N_pairs[i] = N_pairs_max
+
+            if self.rank==0 and max_attained:
+                PRINT(f"WARNING: number of selected pairs for mixing exceeds maximum for time steps {max_attained} \n -> setting N_pairs = N_pairs_max (the mixing time will be altered)")
             
             # Number of mixed particle
             self.Npairs_curl = np.round(N_pairs).astype(int)
@@ -210,16 +228,14 @@ class ParticlesCloud(object):
                 self.pairs_list = []
                 self.CURL_rate_list = []
 
-                activation_times = np.array([p.activation_time for p in self.particles_list])
-
                 for i in range(self.n_ite): # DAK: vectorize pair generation ?
 
                     time = i * self.dt[i]
                     active_idx = np.where(activation_times <= time)[0]   # true particle indices, active at this time
 
-                    local_pairs = utils.sample_comb2((active_idx.size, active_idx.size), self.Npairs_curl[i]) # Pairs using active particles indices
+                    # local_pairs = utils.sample_comb2((active_idx.size, active_idx.size), self.Npairs_curl[i]) # Pairs using active particles indices
+                    local_pairs = utils.sample_pairs(active_idx.size, self.Npairs_curl[i])
                     real_pairs = active_idx[local_pairs]   # Going back to particles indices
-
                     self.pairs_list.append(real_pairs)
 
                     if do_CURL_rate:
@@ -926,7 +942,7 @@ class ParticlesCloud(object):
         self.stdev_T = Temp_vect.std()
         self.mean_T_vect.append(self.mean_T)
         self.stdev_T_vect.append(self.stdev_T)
-        self.ratio_T_stdev = self.stdev_T / self.mean_T
+        self.ratio_T_stdev = self.stdev_T / self.mean_Tw
 
     def plot_stats(self):
             
