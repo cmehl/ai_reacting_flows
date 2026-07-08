@@ -942,7 +942,7 @@ class ParticlesCloud(object):
         self.stdev_T = Temp_vect.std()
         self.mean_T_vect.append(self.mean_T)
         self.stdev_T_vect.append(self.stdev_T)
-        self.ratio_T_stdev = self.stdev_T / self.mean_Tw
+        self.ratio_T_stdev = self.stdev_T / self.mean_T
 
     def plot_stats(self):
             
