@@ -456,7 +456,7 @@ class ParticlesCloud(object):
             self.print_iteration()
         
         # Check termination of computation
-        # self.check_termination()    # we suspend that for now, we have cases where we want to run with low temperature variance
+        self.check_termination()    # we suspend that for now, we have cases where we want to run with low temperature variance
 
         # Update time and iteration
         self.time += dt
@@ -1005,6 +1005,31 @@ class ParticlesCloud(object):
         PRINT("")      
         
     def check_termination(self):
+        """
+        Check whether the simulation should be flagged as converged. 
+        
+        Only active particles (particle.is_active) are considered.
+
+        Termination criteria:
+          - Temperature standard deviation ratio below threshold.
+
+        TODO: also check progress variable close to 1 for all particles.
+        """
+
+        # If all particles have a strictly equal temperature, we still continue running -> to be updated in the future
+        # We should add termination also checking if progress variable is close to 1 for all particles
+        # We use an absolute tolerance of 0.01K
+        active_particles = [p for p in self.particles_list if p.is_active]
+        same_temperature = all(
+                                    math.isclose(p.T, active_particles[0].T, rel_tol=0.0, abs_tol=0.01) for p in active_particles
+                              )
+
+
+        if same_temperature:
+            if self.rank==0:
+                print("WARNING: all particles have the exact same temperature, we continue simulation \n")
+            return
+        
         
         # Termination based on temperature standard deviation
         threshold = 0.02
