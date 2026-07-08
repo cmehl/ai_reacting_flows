@@ -1,0 +1,39 @@
+mech_file: ../../data/chemical_mechanisms/mech_nh3_noArHe.yaml
+inlets:
+  inlet_1:
+    type: cold_premixed
+    nb_particles: 100
+    fuel: NH3
+    phi: 1.0
+    T: 2000.0
+    P: 101325.0
+    activation_time: 0.0
+  inlet_2:
+    type: air
+    nb_particles: 200
+    T: 300.0
+    P: 101325.0
+    activation_time: 1.0e-5
+results_folder_suffix: NH3_PYRO
+dtb_file: solutions.h5
+build_ml_dtb: true
+time_step: {0: 1.0e-6, 1.0e-5: 2.0e-6}
+time_max: 30.0e-6
+mixing_model: CURL_MODIFIED
+mixing_time: 0.0004
+read_mixing: false
+T_threshold: 600.0
+calc_progvar: true
+pv_species:
+- H2O
+fuel:
+- H2
+calc_mean_traj: true
+ML_inference_flag: false
+# For multi dt generation
+time_step_type: random
+time_step_range:
+- 1.0e-07
+- 1.0e-06
+nb_dt: 5
+new_file_name: solutions_5dt.h5

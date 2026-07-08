@@ -23,13 +23,16 @@ class Particle(object):
 #     INITIALIZATION
 # =============================================================================    
 
-    def __init__(self, state_ini, species_names, num_inlet, num_part, data_gen_parameters, parent : 'ParticlesCloud'):
+    def __init__(self, state_ini, species_names, num_inlet, num_part, data_gen_parameters, activation_time, parent : 'ParticlesCloud'):
         
         # Inlet number from which it is issued
         self.num_inlet = num_inlet
         
         # Particle numerotation
         self.num_part = num_part
+
+        # Particle activation time (before that time it is frozen)
+        self.activation_time = activation_time
         
         # Chemical mechanism
         self.mech_file = data_gen_parameters["mech_file"]
