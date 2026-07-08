@@ -25,8 +25,10 @@ class Inlet(object):
             self.set_state = self.set_state_burnt_premixed
         elif inlet_type=="air":
             self.set_state = self.set_state_air
+        elif inlet_type=="fuel":
+            self.set_state = self.set_state_fuel    
         else:
-            sys.exit("ERROR Inlet type must be one of the following: \n - blank \n - cold_premixed \n - burnt_premixed \n - air")
+            sys.exit("ERROR Inlet type must be one of the following: \n - blank \n - cold_premixed \n - burnt_premixed \n - air \n - fuel")
         
         
     def set_state_blank(self, mech, T, P):
@@ -140,5 +142,49 @@ class Inlet(object):
         state[2] = P
         state[3 + gas.species_index("O2")] = 0.233
         state[3 + gas.species_index("N2")] = 0.767
+        
+        self.state = state
+
+
+    def set_state_fuel(self, mech, fuel, T, P):
+        """
+        Initialize self.state as a pure-fuel particle state vector.
+
+        Parameters
+        ----------
+        mech : str
+            Path to the Cantera mechanism file.
+        fuel : str
+            Species name to set to a mass fraction of 1.0.
+        T : float
+            Temperature [K].
+        P : float
+            Pressure [Pa].
+
+        Raises
+        ------
+        ValueError
+            If `fuel` is not a species in the mechanism.
+        """
+
+        # Cantera gas object
+        gas = ct.Solution(mech)
+
+        if fuel not in gas.species_names:
+            raise ValueError(
+                f"Species '{fuel}' not found in mechanism '{mech}'. "
+                f"Available species: {gas.species_names}"
+            )
+    
+        # FILL STATE
+        # Number of columns in inlet file: nb parts, T, p, species
+        nb_cols = gas.n_species + 3
+        
+        # Creating state with species set to 0
+        state = np.zeros(nb_cols)
+        state[0] = self.nb_particles
+        state[1] = T
+        state[2] = P
+        state[3 + gas.species_index(fuel)] = 1.0
         
         self.state = state

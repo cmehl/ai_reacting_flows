@@ -89,6 +89,7 @@ class ParticlesCloud(object):
         FIELDS_BY_TYPE = {
             "blank":          ["T", "P"],
             "air":            ["T", "P"],
+            "fuel":           ["T", "P", "fuel"],
             "cold_premixed":  ["T", "P", "fuel", "phi"],
             "burnt_premixed": ["T", "P", "fuel", "phi"],
         }
