@@ -427,6 +427,22 @@ def sample_comb2(dims, nsamp):
     idx = np.random.choice(np.prod(dims), nsamp, replace=False)
     return np.vstack(np.unravel_index(idx, dims)).T
 
+
+def sample_pairs(n, nsamp):
+
+    max_pairs = n * (n - 1) // 2
+
+    # sample unique "ranks" in the space of all i<j pairs
+    ranks = np.random.choice(max_pairs, nsamp, replace=False)
+
+    # unrank: convert a linear index into (i, j) with i < j
+    # using the standard combinatorial unranking for k=2
+    i = (np.floor((2 * n - 1 - np.sqrt((2 * n - 1) ** 2 - 8 * ranks)) / 2)).astype(np.int64)
+    j = ranks - i * (2 * n - i - 1) // 2 + i + 1
+
+    return np.vstack([i, j]).T
+
+
 # Compute PDF using KDE method
 def compute_pdf(x, samples):
 
