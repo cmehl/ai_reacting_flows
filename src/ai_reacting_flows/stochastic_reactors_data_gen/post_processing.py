@@ -369,7 +369,7 @@ class StochDatabase(object):
             var2_min = min(var2_min, df[var2].min())
             var2_max = max(var2_max, df[var2].max())
             var_color_min = min(var_color_min, df[var_color].min())
-            var_color_max = max(var_color_max, df['Time'].max())
+            var_color_max = max(var_color_max, df[var_color].max())
 
         h5file_r.close()
 
