@@ -271,9 +271,9 @@ class Particle(object):
         Yc = self.Y[parent.pv_ind].sum()
 
         if Yc_eq - self.Yc_u > 1e-10:
-            self.progvar = (Yc - self.Yc_u) / (Yc_eq - self.Yc_u)
+            self.prog_var = (Yc - self.Yc_u) / (Yc_eq - self.Yc_u)
         else:
-            self.progvar = 0.0
+            self.prog_var = 0.0
             
 
     # Heat release rate
