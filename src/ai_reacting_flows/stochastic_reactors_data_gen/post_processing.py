@@ -511,7 +511,8 @@ class StochDatabase(object):
     # DISTRIBUTIONS
     #--------------------------------------------------------
 
-    def plot_pdf_T_inst(self, iteration):    
+
+    def plot_pdf_inst(self, var, iteration):    
 
         # Loading solution at given iteration
         h5file_r = h5py.File(self.stoch_dtb_folder + "/solutions.h5", 'r')
@@ -519,62 +520,104 @@ class StochDatabase(object):
         col_names = h5file_r[f"ITERATION_{iteration:05d}/all_states"].attrs["cols"]
         h5file_r.close()
         df = pd.DataFrame(data=data, columns=col_names)
+
+        # Smart binwidth via Freedman-Diaconis rule
+        binwidth = self._smart_binwidth(df[var])
             
         # Temperature histogram
         fig, ax = plt.subplots()
         
-        sns.histplot(data=df, x="Temperature", ax=ax, stat="probability",
-                     binwidth=20, kde=True)
+        sns.histplot(data=df, x=var, ax=ax, stat="probability",
+                     binwidth=binwidth, kde=True)
 
         fig.tight_layout()
             
-        fig.savefig(self.save_folder + f"/PDF_T_plot_iteration{iteration:05d}.png")
+        fig.savefig(self.save_folder + f"/PDF_{var}_plot_iteration{iteration:05d}.png")
             
-    def plot_pdf_T_all(self): 
+
+    def plot_pdf_all(self, var): 
             
         # Temperature histogram
         fig, ax = plt.subplots()
+
+        # Smart binwidth via Freedman-Diaconis rule
+        binwidth = self._smart_binwidth(self.df[var])
         
-        sns.histplot(data=self.df, x="Temperature", ax=ax, stat="probability",
-                     binwidth=20, kde=True)
+        sns.histplot(data=self.df, x=var, ax=ax, stat="probability",
+                     binwidth=binwidth, kde=True)
 
         fig.tight_layout()
             
-        fig.savefig(self.save_folder + "/PDF_T_plot.png")
+        fig.savefig(self.save_folder + f"/PDF_{var}_plot.png")
+    
 
-    def plot_pdf_HRR_inst(self, iteration):    
+    @staticmethod
+    def _smart_binwidth(x, fallback_bins=10):
+        """
+        Compute a data-driven bin width using the Freedman-Diaconis rule:
+            binwidth = 2 * IQR(x) / n^(1/3)
+        Falls back to a fixed number of bins if IQR is zero or sample is too small.
+        """
 
-        # Loading solution at given iteration
-        h5file_r = h5py.File(self.stoch_dtb_folder + "/solutions.h5", 'r')
-        data = h5file_r.get(f"ITERATION_{iteration:05d}/all_states")[()]
-        col_names = h5file_r[f"ITERATION_{iteration:05d}/all_states"].attrs["cols"]
-        h5file_r.close()
-        df = pd.DataFrame(data=data, columns=col_names)
+        x = np.asarray(x)
+        x = x[~np.isnan(x)]
+        n = x.size
+
+        if n < 2:
+            return 1.0
+
+        q75, q25 = np.percentile(x, [75, 25])
+        iqr = q75 - q25
+        data_range = x.max() - x.min()
+
+        if iqr <= 0 or data_range <= 0:
+            # Degenerate/near-constant data: just split range into fixed bins
+            return (data_range / fallback_bins) if data_range > 0 else 1.0
+
+        binwidth = 2 * iqr / (n ** (1 / 3))
+
+        # Guard against pathologically small binwidth relative to range
+        # (e.g. huge n with tight IQR) by capping the number of bins
+        min_binwidth = data_range / (fallback_bins * 10)
+        binwidth = max(binwidth, min_binwidth)
+
+        return binwidth
+
+
+    # def plot_pdf_HRR_inst(self, iteration):    
+
+    #     # Loading solution at given iteration
+    #     h5file_r = h5py.File(self.stoch_dtb_folder + "/solutions.h5", 'r')
+    #     data = h5file_r.get(f"ITERATION_{iteration:05d}/all_states")[()]
+    #     col_names = h5file_r[f"ITERATION_{iteration:05d}/all_states"].attrs["cols"]
+    #     h5file_r.close()
+    #     df = pd.DataFrame(data=data, columns=col_names)
             
-        # Temperature histogram
-        fig, ax = plt.subplots()
+    #     # Temperature histogram
+    #     fig, ax = plt.subplots()
         
-        sns.histplot(data=df, x="HRR", ax=ax, stat="probability",
-                     binwidth=20, kde=True)
+    #     sns.histplot(data=df, x="HRR", ax=ax, stat="probability",
+    #                  binwidth=20, kde=True)
 
-        fig.tight_layout()
+    #     fig.tight_layout()
             
-        fig.savefig(self.save_folder + f"/PDF_HRR_plot_iteration{iteration:05d}.png")
+    #     fig.savefig(self.save_folder + f"/PDF_HRR_plot_iteration{iteration:05d}.png")
 
-    def plot_pdf_HRR_all(self): 
+
+    # def plot_pdf_HRR_all(self): 
             
-        # Temperature histogram
-        fig, ax = plt.subplots()
+    #     # Temperature histogram
+    #     fig, ax = plt.subplots()
         
-        sns.histplot(data=self.df, x="log_abs_HRR", ax=ax, stat="probability",
-                     bins=20000, kde=False)
+    #     sns.histplot(data=self.df, x="log_abs_HRR", ax=ax, stat="probability",
+    #                  bins=20000, kde=False)
 
-        ax.set_xlim([-20.0,25])
-        ax.set_ylim([0,0.002])
+    #     ax.set_xlim([-20.0,25])
+    #     ax.set_ylim([0,0.002])
 
-        fig.tight_layout()
+    #     fig.tight_layout()
             
-        fig.savefig(self.save_folder + "/PDF_HRR_plot.png")
+    #     fig.savefig(self.save_folder + "/PDF_HRR_plot.png")
 
     #--------------------------------------------------------
     # Points density

@@ -80,13 +80,13 @@ stoch_dtb.plot_indiv_traj(nb_inlet, "H2")
 # Functions are also available to plot probability density functions (PDF) of the data. At the moment, only temperature PDF is implemented but other variables could easily be used. It may be done for a given iteration:
 
 # %%
-stoch_dtb.plot_pdf_T_inst(iteration=3)
+stoch_dtb.plot_pdf_inst("Temperature", iteration=3)
 
 # %% [markdown]
 # Or for the entire dataset:
 
 # %%
-stoch_dtb.plot_pdf_T_all()
+stoch_dtb.plot_pdf_all("Temperature")
 
 # %% [markdown]
 # Plotting the PDF of heat release rate:

@@ -33,17 +33,14 @@ stoch_dtb = StochDatabase(stoch_dtb_folder, save_folder, with_traj=False)
 # nb_inlet = 2
 # stoch_dtb.plot_indiv_traj(nb_inlet, "H2")
 
-# # Functions are also available to plot probability density functions (PDF) of the data. At the moment, only temperature PDF is implemented but other variables could easily be used. It may be done for a given iteration:
-# stoch_dtb.plot_pdf_T_inst(iteration=3)
-
-# # Or for the entire dataset:
-# stoch_dtb.plot_pdf_T_all()
-
-# # Plotting the PDF of heat release rate:
-# stoch_dtb.plot_pdf_HRR_all()
 
 # # A function to plot the density of points is also available:
 # stoch_dtb.density_scatter("Temperature" , "H2", sort = True, bins = 20)
+
+stoch_dtb.plot_pdf_all("Prog_var")
+stoch_dtb.plot_pdf_all("Temperature")
+stoch_dtb.plot_pdf_all("HRR")
+stoch_dtb.plot_pdf_all("log_abs_HRR")
 
 # Perform animation
 var1 = "Temperature"
