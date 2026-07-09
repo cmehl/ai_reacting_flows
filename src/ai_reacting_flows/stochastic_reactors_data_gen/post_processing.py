@@ -9,6 +9,7 @@ import h5py
 import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize 
 from matplotlib import cm
+from matplotlib import animation
 
 import seaborn as sns
 
@@ -18,7 +19,7 @@ sns.set_style("darkgrid")
 
 class StochDatabase(object):
     
-    def __init__(self, stoch_dtb_folder, save_folder):
+    def __init__(self, stoch_dtb_folder, save_folder, with_traj=True):
         
         self.stoch_dtb_folder = stoch_dtb_folder
 
@@ -33,22 +34,23 @@ class StochDatabase(object):
         h5file_r.close()
         self.get_all_states()
 
-        # Loading trajectories
-        traj_data = stoch_dtb_folder + "/mean_trajectories.h5"
-        f = h5py.File(traj_data,"r")
-        #
-        traj_dataset = f['TRAJECTORIES']
-        nb_inlets = 0 # number of inlets
-        self.inlets_data_list = {}  # dictionary for storing data
-        for inlet in traj_dataset.keys():
-            i = int(inlet[-1])
-            self.inlets_data_list[i] = np.asarray(traj_dataset[inlet])
-            nb_inlets += 1
-        #
-        # Getting number of states variable
-        self.nb_state_vars = self.inlets_data_list[1].shape[1] - 3  # all except Z, phi and time
-        # 
-        f.close()
+        if with_traj:
+            # Loading trajectories
+            traj_data = stoch_dtb_folder + "/mean_trajectories.h5"
+            f = h5py.File(traj_data,"r")
+            #
+            traj_dataset = f['TRAJECTORIES']
+            nb_inlets = 0 # number of inlets
+            self.inlets_data_list = {}  # dictionary for storing data
+            for inlet in traj_dataset.keys():
+                i = int(inlet[-1])
+                self.inlets_data_list[i] = np.asarray(traj_dataset[inlet])
+                nb_inlets += 1
+            #
+            # Getting number of states variable
+            self.nb_state_vars = self.inlets_data_list[1].shape[1] - 3  # all except Z, phi and time
+            # 
+            f.close()
 
         # Additional post_processing
         self.compute_additional_postpros()
@@ -57,6 +59,7 @@ class StochDatabase(object):
         if not os.path.isdir(save_folder):
             os.mkdir(save_folder)
         self.save_folder = save_folder
+
 
     #--------------------------------------------------------
     # READING H5 SOLUTION FILES
@@ -307,6 +310,105 @@ class StochDatabase(object):
 
         # Save
         fig.savefig(self.save_folder + f"/dtb_x{var_x}_y{var_y}_c{var_c}_plot_{iteration:05d}.png", dpi=300)
+
+    #--------------------------------------------------------
+    # ANIMATIONS
+    #--------------------------------------------------------
+
+    def plot_animation(self, var1, var2, var_color, iterations=None, step=100, interval=300, save_path=None, fps=5):
+        """
+        Animate the evolution of the T-Z scatter plot across iterations.
+
+        Parameters
+        ----------
+        var1: str
+            Variable to plot on x.
+        var2: str
+            Variable to plot on y.
+        var_color: str
+            Variable to use to color plot.
+        iterations : list[int] or None
+            Iterations to include. If None, all iterations found in the H5 file are used.
+        step : int
+            Keep only every `step`-th iteration (e.g. step=100 keeps iterations 0, 100, 200, ...).
+            Ignored if `iterations` is explicitly provided.
+        interval : int
+            Delay between frames in milliseconds (for on-screen display).
+        save_path : str or None
+            If given, path to save the animation (.mp4 or .gif). If None, defaults to
+            self.save_folder + "/dtb_TZ_animation.mp4".
+        fps : int
+            Frames per second when saving.
+        """
+
+        h5file_r = h5py.File(self.stoch_dtb_folder + "/solutions.h5", 'r')
+
+        # Discover iterations if not provided
+        if iterations is None:
+            iter_keys = sorted(
+                [k for k in h5file_r.keys() if k.startswith("ITERATION_")],
+                key=lambda k: int(k.split("_")[1])
+            )
+            all_iterations = [int(k.split("_")[1]) for k in iter_keys]
+            iterations = all_iterations[::step]
+
+        # First pass: load all dataframes and compute global limits
+        dfs = []
+        var1_min, var1_max = np.inf, -np.inf
+        var2_min, var2_max = np.inf, -np.inf
+        var_color_min, var_color_max = np.inf, -np.inf
+
+        for it in iterations:
+            data = h5file_r.get(f"ITERATION_{it:05d}/all_states")[()]
+            col_names = h5file_r[f"ITERATION_{it:05d}/all_states"].attrs["cols"]
+            df = pd.DataFrame(data=data, columns=col_names)
+            dfs.append(df)
+
+            var1_min = min(var1_min, df[var1].min())
+            var1_max = max(var1_max, df[var1].max())
+            var2_min = min(var2_min, df[var2].min())
+            var2_max = max(var2_max, df[var2].max())
+            var_color_min = min(var_color_min, df[var_color].min())
+            var_color_max = max(var_color_max, df['Time'].max())
+
+        h5file_r.close()
+
+        # Creating axis
+        fig, ax = plt.subplots()
+
+        scat = ax.scatter([], [], c=[], cmap='viridis', vmin=var_color_min, vmax=var_color_max)
+        cbar = fig.colorbar(scat, ax=ax)
+        cbar.set_label(var_color)
+
+        ax.set_xlabel(fr"{var1}")
+        ax.set_ylabel(fr"{var2}")
+        ax.set_xlim([0.9 * var1_min, 1.1 * var1_max])
+        ax.set_ylim([0.9 * var2_min, 1.1 * var2_max])
+
+        title = ax.set_title("")
+
+        fig.tight_layout()
+
+        def update(frame_idx):
+            df = dfs[frame_idx]
+            it = iterations[frame_idx]
+
+            scat.set_offsets(np.column_stack([df[var1], df[var2]]))
+            scat.set_array(df[var_color])
+            title.set_text(f"Iteration {it:05d}")
+
+            return scat, title
+
+        anim = animation.FuncAnimation(
+            fig, update, frames=len(iterations), interval=interval, blit=False
+        )
+
+        save_path = self.save_folder + "/dtb_animation.mp4"
+
+        anim.save(save_path, fps=fps, dpi=300)
+        plt.close(fig)
+
+        return anim
 
     #--------------------------------------------------------
     # TRAJECTORIES PLOTS
