@@ -583,42 +583,6 @@ class StochDatabase(object):
 
         return binwidth
 
-
-    # def plot_pdf_HRR_inst(self, iteration):    
-
-    #     # Loading solution at given iteration
-    #     h5file_r = h5py.File(self.stoch_dtb_folder + "/solutions.h5", 'r')
-    #     data = h5file_r.get(f"ITERATION_{iteration:05d}/all_states")[()]
-    #     col_names = h5file_r[f"ITERATION_{iteration:05d}/all_states"].attrs["cols"]
-    #     h5file_r.close()
-    #     df = pd.DataFrame(data=data, columns=col_names)
-            
-    #     # Temperature histogram
-    #     fig, ax = plt.subplots()
-        
-    #     sns.histplot(data=df, x="HRR", ax=ax, stat="probability",
-    #                  binwidth=20, kde=True)
-
-    #     fig.tight_layout()
-            
-    #     fig.savefig(self.save_folder + f"/PDF_HRR_plot_iteration{iteration:05d}.png")
-
-
-    # def plot_pdf_HRR_all(self): 
-            
-    #     # Temperature histogram
-    #     fig, ax = plt.subplots()
-        
-    #     sns.histplot(data=self.df, x="log_abs_HRR", ax=ax, stat="probability",
-    #                  bins=20000, kde=False)
-
-    #     ax.set_xlim([-20.0,25])
-    #     ax.set_ylim([0,0.002])
-
-    #     fig.tight_layout()
-            
-    #     fig.savefig(self.save_folder + "/PDF_HRR_plot.png")
-
     #--------------------------------------------------------
     # Points density
     #--------------------------------------------------------
