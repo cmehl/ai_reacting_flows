@@ -23,7 +23,7 @@ class Particle(object):
 #     INITIALIZATION
 # =============================================================================    
 
-    def __init__(self, state_ini, species_names, num_inlet, num_part, data_gen_parameters, activation_time, parent : 'ParticlesCloud'):
+    def __init__(self, state_ini, species_names, num_inlet, num_part, data_gen_parameters, activation_time, Yc_u_ini, parent : 'ParticlesCloud'):
         
         # Inlet number from which it is issued
         self.num_inlet = num_inlet
@@ -83,17 +83,8 @@ class Particle(object):
         # Compute initial mixture fraction
         self.compute_mixture_fraction()
         
-        # Compute initial progress variable
-        self.calc_progvar = data_gen_parameters["calc_progvar"]
-        if self.calc_progvar==True:
-            self.pv_species = data_gen_parameters["pv_species"]
-            self.npvspec = len(self.pv_species)
-            #
-            #: int: list of progress variable species indices
-            self.pv_ind = []
-            for i in range(self.npvspec):
-                self.pv_ind.append(parent.gas.species_index(self.pv_species[i]))
         #
+        self.Yc_u = Yc_u_ini
         self.compute_progress_variable(parent)
         #
         self.compute_heat_release_rate(parent)
@@ -272,19 +263,18 @@ class Particle(object):
         self.prog_var = 0.0
         
         # Progress variable computed using true equilibrium
-        if self.calc_progvar:
-            
-            # Equilibrium state in present conditions
-            parent.gas.TPX = self.T, self.P, self.X
-            parent.gas.equilibrate('HP')
+        # Equilibrium state in present conditions
+        parent.gas.TPX = self.T, self.P, self.X
+        parent.gas.equilibrate('HP')
 
-            Yc_eq = 0.0
-            Yc = 0.0
-            for i in self.pv_ind:
-                Yc_eq += parent.gas.Y[i]
-                Yc += self.Y[i]
+        Yc_eq = parent.gas.Y[parent.pv_ind].sum()
+        Yc = self.Y[parent.pv_ind].sum()
+
+        if Yc_eq - self.Yc_u > 1e-10:
+            self.prog_var = (Yc - self.Yc_u) / (Yc_eq - self.Yc_u)
+        else:
+            self.prog_var = 0.0
             
-            self.prog_var = Yc/Yc_eq
 
     # Heat release rate
     def compute_heat_release_rate(self, parent : 'ParticlesCloud'):

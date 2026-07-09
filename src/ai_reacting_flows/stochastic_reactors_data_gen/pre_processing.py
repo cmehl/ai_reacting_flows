@@ -11,139 +11,152 @@ import ai_reacting_flows.tools.utilities as utils
 
 class Inlet(object):
     
-    def __init__(self, inlet_type, nb_particles, activation_time):
+    def __init__(self, inlet_type, nb_particles, activation_time, pv_ind):
         
         self.inlet_type = inlet_type
         self.nb_particles = nb_particles
         self.activation_time = activation_time
-        
-        if inlet_type=="blank":
-            self.set_state = self.set_state_blank
-        elif inlet_type=="cold_premixed":
-            self.set_state = self.set_state_cold_premixed
-        elif inlet_type=="burnt_premixed":
-            self.set_state = self.set_state_burnt_premixed
-        elif inlet_type=="air":
-            self.set_state = self.set_state_air
-        elif inlet_type=="fuel":
-            self.set_state = self.set_state_fuel    
-        else:
-            sys.exit("ERROR Inlet type must be one of the following: \n - blank \n - cold_premixed \n - burnt_premixed \n - air \n - fuel")
+        self.pv_ind = pv_ind
+
+        self.Yc_u = 0.0
+
+        state_setters = {
+            "blank": self.set_state_blank,
+            "cold_premixed": self.set_state_cold_premixed,
+            "burnt_premixed": self.set_state_burnt_premixed,
+            "air": self.set_state_air,
+            "fuel": self.set_state_fuel,
+        }
+
+        try:
+            self.set_state = state_setters[inlet_type]
+        except KeyError:
+            raise ValueError(
+                f"Invalid inlet_type '{inlet_type}'. Must be one of: "
+                f"{', '.join(state_setters)}"
+            )
         
         
     def set_state_blank(self, mech, T, P):
-        
-        # Cantera gas object
+        """
+        Initialize self.state as a particle state with all species mass
+        fractions set to zero (e.g. placeholder / inert particle).
+
+        Parameters
+        ----------
+        mech : str   Path to the Cantera mechanism file.
+        T    : float Temperature [K].
+        P    : float Pressure [Pa].
+        """
         gas = ct.Solution(mech)
-        
-        # Number of columns in inlet file: nb parts, T, p, species
-        nb_cols = gas.n_species + 3
-        
-        # Creating state with species set to 0
-        state = np.zeros(nb_cols)
-        state[0] = self.nb_particles
-        state[1] = T
-        state[2] = P
-        
-        self.state = state
+
+        Y = np.zeros(gas.n_species)
+
+        # State layout: [nb_particles, T, P, Y_0, ..., Y_nsp-1]
+        self.state = np.concatenate(([self.nb_particles, T, P], Y))
+        self.Yc_u = 0.0
         
         
     def set_state_cold_premixed(self, fuel, mech, phi, T, P):
-        
-        # FIRST GET VALUES FOR Y_fuel, Y_N2 and Y_O2
-        # Parse fuel species (Remark: might include oxygen)
-        x, y, z, _= utils.parse_species(fuel)
-            
-        # Molar mass of elements (in g/mol)
-        W_C = 12.011
-        W_H = 1.008
-        W_O = 15.999
-        W_N = 14.007
-    
-        # Molar mass of species
-        W_fuel, W_O2, W_N2 = x*W_C + y*W_H + z*W_O, 2*W_O, 2*W_N
-        
-        # Total number of moles
-        n_tot = (phi + (x + y/4 - z/2)*4.76)
-    
-        # Molar fractions
-        X_fuel, X_O2, X_N2 = phi/n_tot, (x + y/4 - z/2)/n_tot, 3.76*(x + y/4 - z/2)/n_tot
-        
-        # Molar mass of the mixture
-        W = X_fuel*W_fuel + X_O2*W_O2 + X_N2*W_N2
-        
-        # desired mass fractions
-        Y_fuel, Y_O2, Y_N2 = (W_fuel/W) * X_fuel, (W_O2/W) * X_O2, (W_N2/W) * X_N2
-    
-    
-        # FILL STATE
-        # Cantera gas object
+        """
+        Build a cold (unburnt) premixed particle state at equivalence ratio `phi`.
+
+        Sets self.state = [nb_particles, T, P, Y_0, ..., Y_nsp-1]
+        and self.Yc_u    = sum of progress-variable species mass fractions
+                            in the unburnt mixture.
+
+        Parameters
+        ----------
+        fuel : str   Fuel species name (must exist in `mech`).
+        mech : str   Cantera mechanism file.
+        phi  : float Equivalence ratio.
+        T    : float Temperature [K].
+        P    : float Pressure [Pa].
+        """
+
         gas = ct.Solution(mech)
         
-        # Number of columns in inlet file: nb parts, T, p, species
-        nb_cols = gas.n_species + 3
+        if fuel not in gas.species_names:
+            raise ValueError(f"Fuel '{fuel}' not found in mechanism '{mech}'")
         
-        # Creating state with species set to 0
-        state = np.zeros(nb_cols)
-        state[0] = self.nb_particles
-        state[1] = T
-        state[2] = P
-        state[3 + gas.species_index(fuel)] = Y_fuel
-        state[3 + gas.species_index("O2")] = Y_O2
-        state[3 + gas.species_index("N2")] = Y_N2
-        
-        self.state = state
+        # Let Cantera handle the stoichiometry (robust to fuels containing
+        # O or N atoms, multi-species fuel blends, etc.)
+        gas.TP = T, P
+        gas.set_equivalence_ratio(phi, fuel, {"O2": 1.0, "N2": 3.76})
+        Y = gas.Y
+
+        # State layout: [nb_particles, T, P, Y_0, ..., Y_nsp-1]
+        self.state = np.concatenate(([self.nb_particles, T, P], Y))
+
+        self.Yc_u = Y[self.pv_ind].sum()
         
         
         
     def set_state_burnt_premixed(self, fuel, mech, phi, T, P):
-        
+        """
+        Build an equilibrium (burnt) premixed particle state at equivalence ratio `phi`.
+
+        Sets self.state = [nb_particles, T_burnt, P, Y_0, ..., Y_nsp-1]
+        and self.Yc_u    = sum of progress-variable species mass fractions
+                            in the *unburnt* mixture.
+
+        Parameters
+        ----------
+        fuel : str   Fuel species name (must exist in `mech`).
+        mech : str   Cantera mechanism file.
+        phi  : float Equivalence ratio.
+        T    : float Unburnt temperature [K].
+        P    : float Pressure [Pa].
+        """
+
         # COMPUTE BURNT GAS STATE
         # Cantera gas object
         gas = ct.Solution(mech)
+
+        if fuel not in gas.species_names:
+            raise ValueError(f"Fuel '{fuel}' not found in mechanism '{mech}'")
         
-        # Determining initial composition using phi (fuel + air)
-        fuel_ox_ratio = gas.n_atoms(species=fuel, element='C') \
-                        + 0.25 * gas.n_atoms(species=fuel, element='H') \
-                        - 0.5 * gas.n_atoms(species=fuel, element='O')
-        compo = f'{fuel}:{phi:3.2f}, O2:{fuel_ox_ratio:3.2f}, N2:{fuel_ox_ratio * 0.79 / 0.21:3.2f}'
+        # Set unburnt composition exactly (no string-formatting precision loss,
+        # robust to fuels containing O or N atoms)
+        gas.TP = T, P
+        gas.set_equivalence_ratio(phi, fuel, {"O2": 1.0, "N2": 3.76})
+
+        self.Yc_u = gas.Y[self.pv_ind].sum()
+
+        gas.equilibrate("HP")
         
-        # Equilibrium computation
-        gas.TPX = T, P, compo
-        gas.equilibrate('HP')
-        
-        # FILL STATE        
-        # Number of columns in inlet file: nb parts, T, p, species
-        nb_cols = gas.n_species + 3
-        
-        # Creating state with species set to 0
-        state = np.zeros(nb_cols)
-        state[0] = self.nb_particles
-        state[1] = gas.T
-        state[2] = gas.P
-        state[3:] = gas.Y
-        
-        self.state = state
+        self.state = np.concatenate(([self.nb_particles, gas.T, gas.P], gas.Y))
 
 
     def set_state_air(self, mech, T, P):
+        """
+        Build a pure-air particle state.
+
+        Sets self.state = [nb_particles, T, P, Y_0, ..., Y_nsp-1]
+        and self.Yc_u    = sum of progress-variable species mass fractions
+                            in air (should be 0 unless O2/N2 are progress
+                            variable species).
+
+        Parameters
+        ----------
+        mech : str   Cantera mechanism file.
+        T    : float Temperature [K].
+        P    : float Pressure [Pa].
+        """
     
         # FILL STATE
         # Cantera gas object
         gas = ct.Solution(mech)
+
+        # Mass fractions of standard air (23.3% O2, 76.7% N2 by mass)
+        Y = np.zeros(gas.n_species)
+        Y[gas.species_index("O2")] = 0.233
+        Y[gas.species_index("N2")] = 0.767
         
-        # Number of columns in inlet file: nb parts, T, p, species
-        nb_cols = gas.n_species + 3
+        self.Yc_u = Y[self.pv_ind].sum()
         
-        # Creating state with species set to 0
-        state = np.zeros(nb_cols)
-        state[0] = self.nb_particles
-        state[1] = T
-        state[2] = P
-        state[3 + gas.species_index("O2")] = 0.233
-        state[3 + gas.species_index("N2")] = 0.767
-        
-        self.state = state
+        # State layout: [nb_particles, T, P, Y_0, ..., Y_nsp-1]
+        self.state = np.concatenate(([self.nb_particles, T, P], Y))
 
 
     def set_state_fuel(self, mech, fuel, T, P):
@@ -175,16 +188,12 @@ class Inlet(object):
                 f"Species '{fuel}' not found in mechanism '{mech}'. "
                 f"Available species: {gas.species_names}"
             )
-    
-        # FILL STATE
-        # Number of columns in inlet file: nb parts, T, p, species
-        nb_cols = gas.n_species + 3
         
-        # Creating state with species set to 0
-        state = np.zeros(nb_cols)
-        state[0] = self.nb_particles
-        state[1] = T
-        state[2] = P
-        state[3 + gas.species_index(fuel)] = 1.0
-        
-        self.state = state
+        # Pure fuel: mass fraction 1.0 for `fuel`, 0 elsewhere
+        Y = np.zeros(gas.n_species)
+        Y[gas.species_index(fuel)] = 1.0
+
+        self.Yc_u = Y[self.pv_ind].sum()
+
+        # State layout: [nb_particles, T, P, Y_0, ..., Y_nsp-1]
+        self.state = np.concatenate(([self.nb_particles, T, P], Y))

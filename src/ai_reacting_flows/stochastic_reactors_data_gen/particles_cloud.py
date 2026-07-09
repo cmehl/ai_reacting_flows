@@ -72,6 +72,10 @@ class ParticlesCloud(object):
         # Species names
         self.species_names = self.gas.species_names
 
+        # Progress variables species
+        self.pv_species = data_gen_parameters["pv_species"]
+        self.pv_ind = [self.gas.species_index(spec) for spec in self.pv_species]
+
         # Setting the time-step array (it is an array to account for possible different values of dt in user-presribed time windows)
         # This is useful in cases where slow chemistry takes places first and more reactive particles are added later
         self._set_time_step_array()
@@ -103,7 +107,7 @@ class ParticlesCloud(object):
             nb_part = int(cfg["nb_particles"])
             activation_time = float(cfg.get("activation_time", 0.0))  #default to 0 if parameter not present
 
-            inlet = Inlet(inlet_type, nb_particles=nb_part, activation_time = activation_time)
+            inlet = Inlet(inlet_type, nb_particles=nb_part, activation_time = activation_time, pv_ind= self.pv_ind)
 
             state_kwargs = {"mech": self.mech_file}
             for field in FIELDS_BY_TYPE[inlet_type]:
@@ -138,7 +142,8 @@ class ParticlesCloud(object):
             for j in range(self.nb_parts_per_inlet[i]):  # creating Ni particles for inlet i
                 state_ini = self.state_per_inlet[i]
                 activation_time = inlet_list[i-1].activation_time
-                particle_current = Particle(state_ini, self.species_names, i, num_part, data_gen_parameters, activation_time, self)
+                Yc_u_ini = inlet_list[i-1].Yc_u
+                particle_current = Particle(state_ini, self.species_names, i, num_part, data_gen_parameters, activation_time, Yc_u_ini, self)
                 self.particles_list.append(particle_current)
                 num_part += 1
 
@@ -563,15 +568,20 @@ class ParticlesCloud(object):
             h1_ini = part_1.hs
             Y2_ini = part_2.Y.copy()
             h2_ini = part_2.hs
+            #
+            Yc_u_1_ini = part_1.Yc_u.copy()
+            Yc_u_2_ini = part_2.Yc_u.copy()
                     
             if self.mixing_model=="CURL":
                 
                 # Update particles states
                 part_1.Y = 0.5 * (Y2_ini + Y1_ini)
                 part_1.hs = 0.5 * (h2_ini + h1_ini)
+                part_1.Yc_u = 0.5 * (Yc_u_1_ini + Yc_u_2_ini)
                 #
                 part_2.Y = 0.5 * (Y2_ini + Y1_ini)
                 part_2.hs = 0.5 * (h2_ini + h1_ini)
+                part_2.Yc_u = 0.5 * (Yc_u_1_ini + Yc_u_2_ini)
                 
             elif self.mixing_model=="CURL_MODIFIED":
                     
@@ -581,9 +591,11 @@ class ParticlesCloud(object):
                 # Update particles states
                 part_1.Y += 0.5 * a * (Y2_ini - Y1_ini)
                 part_1.hs += 0.5 * a * (h2_ini - h1_ini)
+                part_1.Yc_u += 0.5 * a * (Yc_u_2_ini - Yc_u_1_ini)
                 #
                 part_2.Y += 0.5 * a * (Y1_ini - Y2_ini)
                 part_2.hs += 0.5 * a * (h1_ini - h2_ini)
+                part_2.Yc_u += 0.5 * a * (Yc_u_1_ini - Yc_u_2_ini)
             
             
             part_1.state[0] = part_1.hs
@@ -593,6 +605,7 @@ class ParticlesCloud(object):
             part_2.state[0] = part_2.hs
             part_2.state[2:] = part_2.Y
             part_2.update_ThermoStates(self)
+            
 
     # CURL model: with differential diffusion => we work with species masses
     def _mix_curl_dd(self):
