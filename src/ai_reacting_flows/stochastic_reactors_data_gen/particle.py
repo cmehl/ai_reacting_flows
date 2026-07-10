@@ -76,7 +76,6 @@ class Particle(object):
 
         self.W_atoms = np.array([parent.gas.atomic_weight("C"), parent.gas.atomic_weight("H"), parent.gas.atomic_weight("O"), parent.gas.atomic_weight("N")]) # Order: C, H, O, N
         
-        
         # Compute initial equivalence ratio
         self.compute_equiv_ratio()
         
@@ -85,6 +84,7 @@ class Particle(object):
         
         #
         self.Yc_u = Yc_u_ini
+        self.recompute_Yc_eq = True  # We initially need to compute Yc_eq
         self.compute_progress_variable(parent)
         #
         self.compute_heat_release_rate(parent)
@@ -95,43 +95,171 @@ class Particle(object):
     
     # Standard (Cantera) function to update chemistry
     def react(self, dt, parent : 'ParticlesCloud'):
+        """Advance particle chemistry by dt with a constant-pressure Cantera reactor.
+        """
         
         # Unsolved pb: if Yk from NN is inputed here; 
         # it may become negative and mass is lost (output from CVODE is always positive)
+
+        if self.T <= parent.T_threshold:
+            return
         
-        if self.T>parent.T_threshold:
-            
-            # Initial value are current's particle state
-            parent.gas.HPY = self.hs, self.P, self.Y
-            
-            # Constant pressure reactor
-            r = ct.IdealGasConstPressureReactor(parent.gas)
-            
-            # Initializing reactor
-            sim = ct.ReactorNet([r])
-            
-            # Advancing to dt
+        # Initial value are current's particle state
+        parent.gas.HPY = self.hs, self.P, self.Y
+        
+        # Constant pressure reactor
+        r = ct.IdealGasConstPressureReactor(parent.gas)
+        
+        # Initializing reactor
+        sim = ct.ReactorNet([r])
+        
+        # Advancing to dt
+        try:
             sim.advance(dt)
-            
-            # Updated state
-            state_new = np.empty(self.nb_state_vars)
-            state_new[0] = parent.gas.HP[0]
-            state_new[1] = parent.gas.P
-            state_new[2:] = parent.gas.Y
-            self.state = state_new
-            
-            # Variables from state
-            self.hs = self.state[0]
-            self.P = self.state[1]
-            self.Y = self.state[2:]
-            self.X = parent.gas.X
-            self.T = parent.gas.T
+        except ct.CanteraError as e:
+            raise RuntimeError(f"Cantera integration failed: {e}") from e
+        
+        # Updated state
+        state_new = np.empty(self.nb_state_vars)
+        state_new[0] = parent.gas.HP[0]
+        state_new[1] = parent.gas.P
+        state_new[2:] = parent.gas.Y
+        self.state = state_new
+        
+        # Variables from state
+        self.hs = self.state[0]
+        self.P = self.state[1]
+        self.Y = self.state[2:]
+        self.X = parent.gas.X
+        self.T = parent.gas.T
 
-            # We need to update masses of species and enthalpies (total mass in reactor is preserved)
-            self.mass_k = self.mass * self.Y
-            self.Hs = self.mass * self.hs
+        # We need to update masses of species and enthalpies (total mass in reactor is preserved)
+        self.mass_k = self.mass * self.Y
+        self.Hs = self.mass * self.hs
 
-    # def react_NN_wrapper(self, ML_models, prog_var_thresholds, dt, T_threshold):
+    
+# =============================================================================
+#     FUNCTIONS TO COMPUTE COMPOSITION-DERIVED QUANTITIES
+# =============================================================================
+
+    # Equivalence ratio based on atomic balance
+    def compute_equiv_ratio(self):
+        """Equivalence ratio based on atomic (C, H, O) balance."""
+
+        # Cache atomic composition per species the first time it's needed;
+        # this never changes across calls, so avoid re-parsing every time.
+        if not hasattr(self, '_atomic_comp'):
+            self._atomic_comp = np.array([
+                utils.parse_species(spec)[:3] for spec in self.species_names
+            ])  # shape (n_species, 3) -> columns [n_C, n_H, n_O]  ([:3] because N is not considered here)
+
+        local_c, local_h, local_o = self._atomic_comp.T @ self.X
+
+        o_stoich = 2.0 * local_c + 0.5 * local_h
+        self.equiv_ratio = o_stoich / (local_o + 1.0e-20)
+
+
+    def _compute_Yc_eq(self, parent : 'ParticlesCloud'):
+        """Equilibrium progress-variable species mass fraction at current (T, P, X)."""
+
+        # Equilibrium state in present conditions
+        parent.gas.TPX = self.T, self.P, self.X
+        parent.gas.equilibrate('HP')
+        self.Yc_eq = parent.gas.Y[parent.pv_ind].sum()
+
+    
+    # Equivalence ratio based on atomic balance
+    def compute_progress_variable(self, parent : 'ParticlesCloud'):
+        """Progress variable based on true chemical equilibrium."""
+
+        # We compute Yc_eq only if particle has mixed in current time step (the value stays the same for reacting-only particles)
+        if self.recompute_Yc_eq:
+            self._compute_Yc_eq(parent)
+            self.recompute_Yc_eq = False # now that it is computed we can reset flag to False
+
+        # Initializing
+        self.prog_var = 0.0
+        
+        Yc = self.Y[parent.pv_ind].sum()
+
+        denom = self.Yc_eq - self.Yc_u
+        self.prog_var = (Yc - self.Yc_u) / denom if denom > 1e-10 else 0.0
+            
+
+    # Heat release rate
+    def compute_heat_release_rate(self, parent : 'ParticlesCloud'):
+        """Heat release rate = -sum_k( wdot_k * h_k^0 )."""
+
+        parent.gas.TPX = self.T, self.P, self.X
+
+        # Vectorized over all species at once (both arrays already indexed
+        # by species order, no need for repeated species_index lookups)
+        standard_enthalpies = parent.gas.standard_enthalpies_RT * ct.gas_constant * parent.gas.T
+        self.hrr = -np.dot(parent.gas.net_production_rates, standard_enthalpies)
+
+
+    # Mixture fraction based on atomic balance
+    def compute_mixture_fraction(self):
+        """Mixture fraction based on atomic (C, H) mass balance."""
+
+         # Precompute per-species C/H mass contribution coefficients once;
+        # only self.Y changes call-to-call, not composition or molar masses.
+        if not hasattr(self, '_mixfrac_coeff'):
+            coeff = np.empty(len(self.species_names))
+            for idx, spec in enumerate(self.species_names):
+                n_C, n_H, _, _ = utils.parse_species(spec)
+                coeff[idx] = (n_C * 12.011 + n_H * 1.008) / self.spec_mol_weights[idx]
+            self._mixfrac_coeff = coeff
+
+        self.mix_frac = np.dot(self._mixfrac_coeff, self.Y)
+
+        
+# =============================================================================
+#     FUNCTIONS TO COMPUTE THERMODYNAMICS QUANTITIES
+# =============================================================================
+    
+    # Sensible enthalpy from temperature
+    def compute_hs_from_T(self, parent : 'ParticlesCloud'):
+        """Sensible enthalpy from temperature, pressure, and composition."""
+
+        # Initial value are current's particle state
+        parent.gas.TPY = self.T, self.P, self.Y
+        
+        # Enthalpy
+        self.hs = parent.gas.HP[0]
+        
+
+    # Update states from H/Y after diffusion
+    def update_ThermoStates(self, parent : 'ParticlesCloud'):
+        """Update T, X from current H, P, Y state (e.g. after a diffusion step)."""
+
+        # Initial value are current's particle state
+        parent.gas.HPY = self.hs, self.P, self.Y
+        
+        # Add required states if needed
+        self.T = parent.gas.T
+        self.X = parent.gas.X
+
+
+    def compute_lewis_numbers(self, parent : 'ParticlesCloud'):
+        """Species Lewis numbers: Le_k = lambda / (rho * cp * D_k)."""
+
+        parent.gas.TPY = self.T, self.P, self.Y
+
+        # Lewis numbers
+        cond = parent.gas.thermal_conductivity
+        cp = parent.gas.cp_mass
+        Dk =  parent.gas.mix_diff_coeffs_mass
+        rho = parent.gas.density
+        # mu = parent.parent.gas.viscosity
+        #
+        self.Le_k = cond / (rho*cp*Dk)
+
+
+
+
+
+# def react_NN_wrapper(self, ML_models, prog_var_thresholds, dt, T_threshold):
                     
     #     # Single model
     #     if len(ML_models)==1:
@@ -233,104 +361,3 @@ class Particle(object):
             
     #         # Clear memory to avoid overflow
     #         # tf.keras.backend.clear_session()
-
-# =============================================================================
-#     FUNCTIONS TO COMPUTE COMPOSITION-DERIVED QUANTITIES
-# =============================================================================
-
-    # Equivalence ratio based on atomic balance
-    def compute_equiv_ratio(self):
-        
-        local_o=0.0
-        local_c=0.0
-        local_h=0.0
-        for spec in self.species_names:
-            idx = self.species_names.index(spec)
-            n_C, n_H, n_O, _ = utils.parse_species(spec)
-            
-            local_c += n_C*self.X[idx]
-            local_h += n_H*self.X[idx]
-            local_o += n_O*self.X[idx]
-            
-        o_stoich = 2.0*local_c+0.5*local_h
-        
-        self.equiv_ratio = o_stoich/(local_o+1.0e-20)
-    
-    # Equivalence ratio based on atomic balance
-    def compute_progress_variable(self, parent : 'ParticlesCloud'):
-
-        # Initializing
-        self.prog_var = 0.0
-        
-        # Progress variable computed using true equilibrium
-        # Equilibrium state in present conditions
-        parent.gas.TPX = self.T, self.P, self.X
-        parent.gas.equilibrate('HP')
-
-        Yc_eq = parent.gas.Y[parent.pv_ind].sum()
-        Yc = self.Y[parent.pv_ind].sum()
-
-        if Yc_eq - self.Yc_u > 1e-10:
-            self.prog_var = (Yc - self.Yc_u) / (Yc_eq - self.Yc_u)
-        else:
-            self.prog_var = 0.0
-            
-
-    # Heat release rate
-    def compute_heat_release_rate(self, parent : 'ParticlesCloud'):
-
-        parent.gas.TPX = self.T, self.P, self.X
-
-        self.hrr = 0.0       
-        for spec in parent.gas.species_names:
-            standard_enthalpy_spec = parent.gas.standard_enthalpies_RT[parent.gas.species_index(spec)] * ct.gas_constant * parent.gas.T
-            self.hrr += -parent.gas.net_production_rates[parent.gas.species_index(spec)] * standard_enthalpy_spec
-
-    # Mixture fraction based on atomic balance
-    def compute_mixture_fraction(self):
-        
-        mix_frac_local = 0.0
-        for spec in self.species_names:
-            idx = self.species_names.index(spec)
-            n_C, n_H, _, _ = utils.parse_species(spec)
-            mix_frac_local += n_C * 12.011 * self.Y[idx] / self.spec_mol_weights[idx]
-            mix_frac_local += n_H * 1.008  * self.Y[idx] / self.spec_mol_weights[idx]
-        
-        self.mix_frac = mix_frac_local
-        
-        
-# =============================================================================
-#     FUNCTIONS TO COMPUTE THERMODYNAMICS QUANTITIES
-# =============================================================================
-    
-    # Sensible enthalpy from temperature
-    def compute_hs_from_T(self, parent : 'ParticlesCloud'):
-
-        # Initial value are current's particle state
-        parent.gas.TPY = self.T, self.P, self.Y
-        
-        # Enthalpy
-        self.hs = parent.gas.HP[0]
-        
-    # Update states from H/Y after diffusion
-    def update_ThermoStates(self, parent : 'ParticlesCloud'):
-        # Initial value are current's particle state
-        parent.gas.HPY = self.hs, self.P, self.Y
-        
-        # Add required states if needed
-        self.T = parent.gas.T
-        self.X = parent.gas.X
-
-    def compute_lewis_numbers(self, parent : 'ParticlesCloud'):
-
-        parent.gas.TPY = self.T, self.P, self.Y
-
-        # Lewis numbers
-        cond = parent.gas.thermal_conductivity
-        cp = parent.gas.cp_mass
-        Dk =  parent.gas.mix_diff_coeffs_mass
-        rho = parent.gas.density
-        # mu = parent.parent.gas.viscosity
-        #
-        self.Le_k = cond / (rho*cp*Dk)
-

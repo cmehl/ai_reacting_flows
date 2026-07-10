@@ -608,6 +608,10 @@ class ParticlesCloud(object):
             part_2.state[0] = part_2.hs
             part_2.state[2:] = part_2.Y
             part_2.update_ThermoStates(self)
+
+            # Yc_eq will need to be recomputed as particles have mixed
+            part_1.recompute_Yc_eq = True
+            part_2.recompute_Yc_eq = True
             
 
     # CURL model: with differential diffusion => we work with species masses
