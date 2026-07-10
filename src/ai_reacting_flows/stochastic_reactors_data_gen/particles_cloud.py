@@ -61,6 +61,7 @@ class ParticlesCloud(object):
         
         # Statistics convergence status
         self.stats_converged = False
+        self.automatic_termination = data_gen_parameters.get("automatic_termination", True)
 
         # Mechanism file
         self.mech_file  = data_gen_parameters["mech_file"]
@@ -479,7 +480,8 @@ class ParticlesCloud(object):
             self.print_iteration()
         
         # Check termination of computation
-        self.check_termination()    # we suspend that for now, we have cases where we want to run with low temperature variance
+        if self.automatic_termination:
+            self.check_termination()    # we suspend that for now, we have cases where we want to run with low temperature variance
 
         # Update time and iteration
         self.time += dt
@@ -1049,11 +1051,6 @@ class ParticlesCloud(object):
         # Termination based on temperature standard deviation
         threshold = 0.02
         temp_converged = self.ratio_T_stdev < threshold
-
-        # Termination based on progress variable
-        prog_var_threshold = 0.8   # Not perfect yet, 0.8 is high but necessary to pass unit tests
-        active_particles = [p for p in self.particles_list if p.is_active]
-        prog_var_converged = all(p.prog_var > prog_var_threshold for p in active_particles)
 
         if temp_converged: # and prog_var_converged:
             self.stats_converged = True

@@ -18,6 +18,7 @@ dtb_file: solutions.h5
 build_ml_dtb: true
 time_step: {0: 1.0e-3, 2.0: 5.0e-7}
 time_max: 2.005
+automatic_termination: False
 mixing_model: CURL_MODIFIED
 mixing_time: 1.0e-4
 read_mixing: false
