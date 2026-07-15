@@ -93,13 +93,15 @@ def GenerateVariable_dt(dtb_type: str, params: dict, comm: "MPI.Comm") -> str:
         print(f"X columns: {col_names_X} \n")
 
     # Build state array with empty target column, later filled by `react_multi_dt`.
-    Y = np.empty(X.shape)
+    # Y = np.empty(X.shape)
     # Stack features and responses along the third axis: state[..., 0] / state[..., 1]
     np.random.shuffle(X) # DAK: check why we shuffle X
-    state_list = np.dstack((X, Y))
+    # state_list = np.dstack((X, Y))
+
+    state_list = X.copy()
 
     # Temperature threshold (same quantity as database processing; keep explicit).
-    T_thresh = params["T_threshold"]
+    # T_thresh = params["T_threshold"]
 
     # Time-step list definition.
     dt_simu = params["time_step"]
@@ -132,6 +134,7 @@ def GenerateVariable_dt(dtb_type: str, params: dict, comm: "MPI.Comm") -> str:
 
     count = 0
     all_new_states = []
+    dt_array = []
 
     # React all states.
     for state in state_list:
@@ -148,34 +151,44 @@ def GenerateVariable_dt(dtb_type: str, params: dict, comm: "MPI.Comm") -> str:
             )
             dt_list = np.exp(dt_list)
             dt_list.sort()
+        
+        dt_array.append(dt_list)
 
-        new_states = react_multi_dt(state, gas, T_thresh, dt_list)
+        new_states = react_multi_dt(state, gas, dt_list)
         if new_states is not None:
             all_new_states.append(new_states)
 
-    if not all_new_states:
-        # Nothing above temperature threshold for this rank.
-        X_new = np.empty((0,) + state_list[0].shape[:-1]) if len(state_list) > 0 else np.empty((0, 0))
-        Y_new = np.empty_like(X_new)
-    else:
-        all_new_states = np.concatenate(all_new_states)
-        X_new, Y_new = np.dsplit(all_new_states, 2)
-        X_new, Y_new = np.squeeze(X_new), np.squeeze(Y_new)
-        # Remove last column (dummy variable) from Y.
-        Y_new = Y_new[:, :-1]
+
+    # all_new_states = np.concatenate(all_new_states)
+    # X_new, Y_new = np.dsplit(all_new_states, 2)
+    # X_new, Y_new = np.squeeze(X_new), np.squeeze(Y_new)
+    # # Remove last column (dummy variable) from Y.
+    # Y_new = Y_new[:, :-1]
+    # #
+
+    Y_new = np.stack(all_new_states)
+    dt_array = np.stack(dt_array)
+
 
     print(f"Processor {rank} has built array all_new_states. \n")
 
     comm.Barrier()
 
     # Gather all X_new/Y_new arrays from every rank onto rank 0.
-    all_X_new = comm.gather(X_new, root=0)
+    # all_X_new = comm.gather(X_new, root=0)
+    # all_Y_new = comm.gather(Y_new, root=0)
+    #
+
+    all_dt_array = comm.gather(dt_array, root=0)
     all_Y_new = comm.gather(Y_new, root=0)
 
     if rank == 0:
         # Concatenate per-rank arrays into one global array.
-        X_new_full = np.concatenate(all_X_new, axis=0) if all_X_new else np.empty((0, X_new.shape[1]))
-        Y_new_full = np.concatenate(all_Y_new, axis=0) if all_Y_new else np.empty((0, Y_new.shape[1]))
+        # X_new_full = np.concatenate(all_X_new, axis=0) if all_X_new else np.empty((0, X_new.shape[1]))
+        # Y_new_full = np.concatenate(all_Y_new, axis=0) if all_Y_new else np.empty((0, Y_new.shape[1]))
+        #
+        dt_array_full = np.concatenate(all_dt_array, axis=0)
+        Y_new_full = np.concatenate(all_Y_new, axis=0)
 
         # For multi-dt stochastic all data is written by default in "ITERATION_00000" as it is
         # too complex to keep the per-iteration structure (and useless when creating processed DB).
@@ -190,9 +203,10 @@ def GenerateVariable_dt(dtb_type: str, params: dict, comm: "MPI.Comm") -> str:
         output_path = f"{stoch_results_folder:s}/{params['new_file_name']:s}"
         with h5py.File(output_path, "w") as f:
             grp = f.create_group(group_name)
-            dset_X = grp.create_dataset("X", data=X_new_full)
+            dset_X = grp.create_dataset("X", data=X)
             dset_Y = grp.create_dataset("Y", data=Y_new_full)
-            dset_X.attrs["cols"] = np.append(col_names_X, "dt")
+            dset_DT = grp.create_dataset("DT", data=dt_array_full)
+            dset_X.attrs["cols"] = col_names_X
             dset_Y.attrs["cols"] = col_names_Y
 
         print(f"Processor {rank} has written output file at: {output_path}. \n")
@@ -266,7 +280,7 @@ def read_database_flmts(file_h5: str):
     return X, col_names_X, col_names_Y
 
 
-def react_multi_dt(state: np.ndarray, gas: ct.Solution, T_thresh: float, dt_list: np.ndarray):
+def react_multi_dt(state: np.ndarray, gas: ct.Solution, dt_list: np.ndarray):
 
     """React one state for multiple time steps and return computed states.
 
@@ -277,8 +291,6 @@ def react_multi_dt(state: np.ndarray, gas: ct.Solution, T_thresh: float, dt_list
         the current values and column 1 will be filled with the reacted ones.
     gas : ct.Solution
         Cantera solution used for reactor integration.
-    T_thresh : float
-        Temperature threshold; states with `T < T_thresh` are ignored.
     dt_list : ndarray
         Time steps for which the reactor will be advanced.
 
@@ -292,42 +304,33 @@ def react_multi_dt(state: np.ndarray, gas: ct.Solution, T_thresh: float, dt_list
     # Unsolved pb: if Yk from NN is inputed here;
     # it may become negative and mass is lost (output from CVODE is always positive)
 
-    time_step = np.array([[0, 0]])
-    state = np.append(state, time_step, axis=0)
-    new_states = np.empty_like([state])
+    nb_dt = len(dt_list)
 
-    if state[0,0] > T_thresh:
-        # Initial values are current particle state.
-        T0 = state[0, 0]
-        P0 = state[1, 0]
-        Y0 = state[2:-3, 0]
+    new_states = np.empty((state.shape[0], nb_dt))
 
-        # Advancing to dts.
-        for dt in dt_list:
-            gas.TPY = T0, P0, Y0
+    # Initial values are current particle state.
+    T0 = state[0]
+    P0 = state[1]
+    Y0 = state[2:-2]
 
-            # Constant-pressure reactor.
-            r = ct.IdealGasConstPressureReactor(gas)
-            sim = ct.ReactorNet([r])
+    # Advancing to dts.
+    for i_dt, dt in enumerate(dt_list):
 
-            # Advancing simulation by dt
-            state[-1, 0] = dt
-            sim.advance(dt)
+        gas.TPY = T0, P0, Y0
 
-            # Updated state.
-            y = np.empty(len(Y0) + 4)  # T, p, c, HRR
-            y[0] = gas.T
-            y[1] = gas.P
-            y[2:-2] = gas.Y
-            y[-2] = -1.0  # dummy value for progvar
-            y[-1] = -1.0  # dummy value for HRR
+        # Constant-pressure reactor.
+        r = ct.IdealGasConstPressureReactor(gas)
+        sim = ct.ReactorNet([r])
 
-            state[:, 1] = np.append(y, [0])
-            new_states = np.append(new_states, np.array([state]), axis=0)
+        # Advancing simulation by dt
+        sim.advance(dt)
 
-        # First was empty and only used to enable append in loop.
-        new_states = new_states[1:,]
+        # Updated state.
+        new_states[0, i_dt] = gas.T
+        new_states[1, i_dt] = gas.P
+        new_states[2:-2, i_dt] = gas.Y
+        new_states[-2, i_dt] = -1.0  # dummy value for progvar
+        new_states[-1, i_dt] = -1.0  # dummy value for HRR
 
-        return new_states
+    return new_states
 
-    return None
