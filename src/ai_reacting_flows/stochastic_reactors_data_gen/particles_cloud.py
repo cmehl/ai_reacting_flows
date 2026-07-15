@@ -828,21 +828,28 @@ class ParticlesCloud(object):
         # --------------------------------------------------------------
         active_particles = [p for p in self.particles_list if p.is_active]
         Y_all = np.array([p.Y for p in active_particles])
+        #
         hs_all = np.array([p.hs for p in active_particles])
-        extra_all = np.array([p.Yc_u for p in active_particles])
+        Yc_u_all = np.array([p.Yc_u for p in active_particles])
+
+        # Question: should we inlude enthalpy in tree construction ?
 
         # --------------------------------------------------------------
         # Phase-space used to build the EMST (normalized)
         # --------------------------------------------------------------
-        phi_tree_raw = np.column_stack((Y_all, hs_all))
+        # Question: do we need to normalize ?
+        # phi_tree_raw = np.column_stack((Y_all))
 
-        sigma = phi_tree_raw.std(axis=0)
-        sigma[sigma < 1e-30] = 1.0
+        # sigma = phi_tree_raw.std(axis=0)
+        # sigma[sigma < 1e-30] = 1.0
 
-        phi_tree = phi_tree_raw / sigma
+        # phi_tree = phi_tree_raw  / sigma
+        # phi_tree = phi_tree_raw.copy()
+
+        phi_tree = Y_all.copy()
 
         # Variables actually mixed (can include extra scalars such as Yc_u)
-        phi_old = np.column_stack((Y_all, hs_all, extra_all))
+        phi_old = np.column_stack((Y_all, hs_all, Yc_u_all))
 
         # --------------------------------------------------------------
         # Compute Euclidean MST
@@ -864,17 +871,20 @@ class ParticlesCloud(object):
         
         # Stability safeguard (prevents overshooting on a single edge)
         mixing_coeff = min(mixing_coeff, 0.5)
-        
-        dphi = np.zeros_like(phi_old)
 
-        for i, j in edges:
+        phi_new = phi_old.copy()
+
+        # Randomize edge order
+        rng = np.random.default_rng(seed=42)
+        edge_order = rng.permutation(len(edges))
+
+        for idx in edge_order:
             
-            delta = phi_old[i] - phi_old[j]
+            i, j = edges[idx]
+            delta = phi_new[i] - phi_new[j]
 
-            dphi[i] -= mixing_coeff * delta
-            dphi[j] += mixing_coeff * delta
-
-        phi_new = phi_old + dphi
+            phi_new[i] -= mixing_coeff * delta
+            phi_new[j] += mixing_coeff * delta
 
         # --------------------------------------------------------------
         # Write back particle states
@@ -886,8 +896,8 @@ class ParticlesCloud(object):
             p.Yc_u = phi_new[k, self.nb_species + 1]
 
             # For safety
-            p.Y = np.clip(p.Y, 0.0, None)
-            p.Y /= p.Y.sum() + 1e-30
+            # p.Y = np.clip(p.Y, 0.0, None)
+            # p.Y /= p.Y.sum() + 1e-30
 
             p.state[0] = p.hs
             p.state[2:] = p.Y
