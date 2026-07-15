@@ -15,13 +15,13 @@ stoch_dtb = StochDatabase(stoch_dtb_folder, save_folder)
 
 # # Function to scatter plot Y_k=f(T) for all time steps on a list on specified species:
 # # stoch_dtb.compute_1D_premixed(0.4, 101325.0, 300.0, "H2", "../data/chemical_mechanisms/mech_H2.yaml", "Mix")
-# stoch_dtb.plot_T_Yk(["H2", "H", "H2O", "O2"])
+# stoch_dtb.plot_T_Yk(["H2", "H2O", "NH3"])
 
-# # A generic function is available to scatter plot *var_x* as a function of *var_y*, colored by *var_c*:
-# var_x = "Temperature"
-# var_y = "H2"
-# var_c = "log_abs_HRR"
-# stoch_dtb.plot_generic(var_x, var_y, var_c)
+# A generic function is available to scatter plot *var_x* as a function of *var_y*, colored by *var_c*:
+var_x = "Temperature"
+var_y = "NH3"
+var_c = "Prog_var"
+stoch_dtb.plot_generic(var_x, var_y, var_c)
 
 # # Some functions are also available to plot individual iterations, here is an example for $(T,Y_k)$ plots:
 # stoch_dtb.plot_T_Yk_indiv(["H2", "H"], iteration=3)
@@ -29,15 +29,16 @@ stoch_dtb = StochDatabase(stoch_dtb_folder, save_folder)
 # # Function to plot $T_{mean}=f(t)$ for each inlet:
 # stoch_dtb.plot_traj_T_time()
 
-# # Function to plot the evolution of some particle variables (here $H_2$) over time for a given inlet:
+# Function to plot the evolution of some particle variables (here $H_2$) over time for a given inlet:
 # nb_inlet = 2
-# stoch_dtb.plot_indiv_traj(nb_inlet, "H2")
+# stoch_dtb.plot_indiv_traj(nb_inlet, "Temperature")
 
 # # Functions are also available to plot probability density functions (PDF) of the data. At the moment, only temperature PDF is implemented but other variables could easily be used. It may be done for a given iteration:
 # stoch_dtb.plot_pdf_inst("Temperature", iteration=3)
 
 # # Or for the entire dataset:
-# stoch_dtb.plot_pdf_all("Temperature")
+stoch_dtb.plot_pdf_all("Temperature")
+stoch_dtb.plot_pdf_all("Prog_var")
 
 # # Plotting the PDF of heat release rate:
 # stoch_dtb.plot_pdf_all("HRR")

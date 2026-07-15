@@ -2,25 +2,25 @@ mech_file: ../../data/chemical_mechanisms/mech_nh3_noArHe.yaml
 inlets:
   inlet_1:
     type: fuel
-    nb_particles: 200
+    nb_particles: 300
     fuel: NH3
     T: 2000.0
     P: 101325.0
     activation_time: 0.0
   inlet_2:
     type: air
-    nb_particles: 200
+    nb_particles: 300
     T: 300.0
     P: 101325.0
-    activation_time: 2.0
+    activation_time: 1.0
 results_folder_suffix: NH3_PYRO
 dtb_file: solutions.h5
 build_ml_dtb: true
-time_step: {0: 1.0e-3, 2.0: 5.0e-7}
-time_max: 2.005
+time_step: {0: 5.0e-4, 1.0: 5.0e-7}
+time_max: 1.002
 automatic_termination: False
 mixing_model: CURL_MODIFIED
-mixing_time: 1.0e-4
+mixing_time: 2.0e-4
 read_mixing: false
 T_threshold: 600.0
 pv_species:
