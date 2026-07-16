@@ -812,13 +812,13 @@ class ParticlesCloud(object):
     #         p.recompute_Yc_eq = True
 
 
-    # EMST mixing model using Pope-style EMST micro-mixing.
+    # EMST mixing model
     def _mix_emst(self):
-        """Perform one EMST micro-mixing step using Pope's EMST model.
+        """Perform one EMST micro-mixing.
 
         The implementation follows the Euclidean Minimum Spanning Tree (EMST)
         approach:
-          - build an MST in normalized composition/enthalpy space,
+          - build an MST in normalized composition space,
           - compute an exponential pairwise relaxation coefficient,
           - distribute mixing conservatively along tree edges.
         """
