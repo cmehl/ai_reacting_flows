@@ -267,18 +267,18 @@ class LearningDatabase(object):
         #     nb_clusters_phys, nb_clusters_time = self.nb_clusters
         #     self.nb_clusters_tot = nb_clusters_phys * nb_clusters_time
         # else :
-        self.nb_clusters_tot = self.nb_clusters
+        # self.nb_clusters_tot = self.nb_clusters
 
         assert (not self.is_processed)
 
         # Creating empty folders for storing datasets
-        for i in range(1, self.nb_clusters_tot):
+        for i in range(1, self.nb_clusters):
             os.mkdir(self.dtb_folder + "/" + self.database_name + f"/cluster{i}")
 
         if self.clustering_method=="progvar":
 
             # assert self.clusterize_on != 'double'
-            assert self.nb_clusters_tot == len(c_bounds) - 1
+            assert self.nb_clusters == len(c_bounds) - 1
 
             # Saving bounds for progress variables
             with open(self.dtb_folder + "/" + self.database_name + "/c_bounds.pkl", 'wb') as f:
@@ -353,7 +353,7 @@ class LearningDatabase(object):
             #     kmeans_phys = KMeans(n_clusters=nb_clusters_phys, random_state=42).fit(data_kmeans_phys)
             #     kmeans_time = KMeans(n_clusters=nb_clusters_time, random_state=42).fit(data_kmeans_time)
             # else :
-            kmeans = KMeans(n_clusters=self.nb_clusters_tot, random_state=42).fit(data_kmeans)
+            kmeans = KMeans(n_clusters=self.nb_clusters, random_state=42).fit(data_kmeans)
 
             # if self.dt_var and self.clusterize_on=='double':
             #     print(kmeans_phys.labels_)
@@ -649,7 +649,7 @@ class LearningDatabase(object):
             X = self.X.copy()
             Y = self.Y.copy()
 
-        for i_cluster in range(self.nb_clusters_tot):
+        for i_cluster in range(self.nb_clusters):
             
             print("")
             print(f"CLUSTER {i_cluster}:")
@@ -842,7 +842,7 @@ class LearningDatabase(object):
         size_total = 0
 
         if self.dt_var and self.clusterize_on == "dt":
-            for i in range(self.nb_clusters_tot):
+            for i in range(self.nb_clusters):
 
                 size_cluster_i = self.time_clusters[self.time_clusters==i].shape[0]
                 size_total += size_cluster_i
@@ -857,7 +857,7 @@ class LearningDatabase(object):
         #         print(f">> There are {size_cluster_i} points in cluster{i}")
 
         else:
-            for i in range(self.nb_clusters_tot):
+            for i in range(self.nb_clusters):
 
                 size_cluster_i = self.X[self.X["cluster"]==i].shape[0]
                 size_total += size_cluster_i
