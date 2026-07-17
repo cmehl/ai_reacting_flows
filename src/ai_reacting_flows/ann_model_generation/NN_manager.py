@@ -24,11 +24,13 @@ activation_functions = {"ReLU": nn.ReLU, "GeLU" : nn.GELU, "tanh" : nn.Tanh, "Id
 model_type = {"MLP": MLPModel, "DeepONet": DeepONet, "DeepONetShift": DeepONet_shift}
 
 class NN_manager():
-    def __init__(self):
+    def __init__(self, run_folder: str | None = None):
 
+        # Select device for training
         self.device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
         
-        self.run_folder = os.getcwd()
+        # Allow explicit run folder, defaulting to current working directory
+        self.run_folder = os.path.abspath(run_folder) if run_folder is not None else os.getcwd()
         #
         # Networks structures parameters
         #
@@ -81,14 +83,16 @@ class NN_manager():
             os.makedirs(self.directory)
         else:
             if not os.path.exists(self.directory):
-                sys.exit(f"ERROR: new_model_folder is set to False but model {self.directory} does not exist")
+                raise FileNotFoundError(f"new_model_folder is set to False but model {self.directory} does not exist")
             print(f">> Existing model folder {self.directory} is used. \n")
 
         # Get the number of clusters
         assert (self.nb_clusters == len(next(os.walk(self.dataset_path))[1]))
         if ((self.nb_clusters != len(self.networks_defs)) or (self.nb_clusters != len(self.networks_types))):
-            sys.exit((f"ERROR: number of clusters in {self.dataset_path} ({self.nb_clusters}) inconsistent with"
-                     f" \"networks_types\" and/or \"networks_files \" length ({len(self.networks_defs)} and {len(self.networks_types)})"))
+            raise ValueError(
+                f"number of clusters in {self.dataset_path} ({self.nb_clusters}) inconsistent with "
+                f"'networks_types' and/or 'networks_files' length ({len(self.networks_defs)} and {len(self.networks_types)})"
+            )
         print("CLUSTERING:")
         print(f">> Number of clusters is: {self.nb_clusters}")
 
@@ -119,7 +123,7 @@ class NN_manager():
 
         network_type = self.networks_types[i_cluster]
         if (network_type not in model_type.keys()):
-            sys.exit(f"ERROR: network_type \"{network_type}\" does not exist")
+            raise ValueError(f"network_type '{network_type}' does not exist; valid types: {list(model_type.keys())}")
         else:
             network_parameters = self.clusters[self.networks_defs[i_cluster]]
             if (network_type == "MLP"):
@@ -163,6 +167,18 @@ class NN_manager():
         return model
     
 
+    def _inverse_scale(self, scaled_tensor, mean, std, log_transform: bool):
+        """Inverse scaling helper for mass fractions.
+
+        scaled_tensor: tensor in scaled space
+        mean, std: scaling statistics (tensors on same device)
+        log_transform: whether data were log-transformed
+        """
+        y = mean + (std + 1e-7) * scaled_tensor
+        if log_transform:
+            y = torch.exp(y)
+        return y
+
     def train_model(self, i_cluster, model, loss_fn, optimizer, scheduler, X_train, X_val, Y_train, Y_val, Yscaler_mean, Yscaler_std):
 
         X_train = torch.tensor(X_train.values, dtype=torch.float64)
@@ -186,20 +202,30 @@ class NN_manager():
         n_epochs = self.learning["epochs_list"][i_cluster]
 
         loss_list = np.empty(n_epochs)
-        val_loss_list = np.empty(n_epochs//10)
+
+        # Validation / conservation computed every "val_every" epochs (default 10)
+        val_every = int(self.learning.get("val_every", 10))
+        n_val_points = max(1, n_epochs // val_every)
 
         # Array to store sum of mass fractions: mean, min and max
-        stats_sum_yk = np.empty((n_epochs//10,3))
+        stats_sum_yk = np.empty((n_val_points, 3))
 
         # Array to store elements conservation: mean, min and max
-        stats_A_elements = np.empty((n_epochs//10,A_element.shape[0],3))
+        stats_A_elements = np.empty((n_val_points, A_element.shape[0], 3))
 
         epochs = np.arange(n_epochs)
-        epochs_small = epochs[::10]
+        epochs_small = epochs[::val_every]
+
+        best_val_loss = float("inf")
+        best_state_dict = None
+
+        val_loss_list = np.empty(n_val_points)
 
         for epoch in range(n_epochs):
 
             # Training parameters
+            epoch_loss = 0.0
+            n_batches = 0
             for i in range(0, len(X_train), self.learning["batch_size"]):
 
                 Xbatch = X_train[i:i+self.learning["batch_size"]]
@@ -209,19 +235,21 @@ class NN_manager():
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
+                epoch_loss += loss.item()
+                n_batches += 1
                 # print("Targets stats:", Y_train.min().item(), Y_train.max().item())
                 # print("Preds stats:", y_pred.min().item(), y_pred.max().item())
                 # input("Press Enter to continue.")
 
-            loss_list[epoch] = loss.item()
+            loss_list[epoch] = epoch_loss / max(1, n_batches)
 
             before_lr = optimizer.param_groups[0]["lr"]
             if self.learning["scheduler_option"]!="None":
                 scheduler.step()
             after_lr = optimizer.param_groups[0]["lr"]
 
-            # Computing validation loss and mass conservation metric (only every 10 epochs as it is expensive)
-            if epoch%10==0:
+            # Computing validation loss and mass conservation metric (only every "val_every" epochs as it is expensive)
+            if epoch % val_every == 0:
                 model.eval()  # evaluation mode
                 with torch.no_grad():
 
@@ -230,36 +258,42 @@ class NN_manager():
                     val_loss = loss_fn(y_val_pred, Y_val)
 
                     # SUM OF MASS FRACTION
-                    #Inverse scale done by hand to stay with Torch arrays
-                    yk = Yscaler_mean + (Yscaler_std + 1e-7)*y_val_pred
-                    if self.log_transform_Y:
-                        yk = torch.exp(yk)
+                    # Inverse scale done by hand to stay with Torch arrays
+                    yk = self._inverse_scale(y_val_pred, Yscaler_mean, Yscaler_std, self.log_transform_Y)
                     sum_yk = yk.sum(axis=1)
                     sum_yk = sum_yk.detach().cpu().numpy()
-                    stats_sum_yk[epoch//10,0] = sum_yk.mean() 
-                    stats_sum_yk[epoch//10,1] = sum_yk.min()
-                    stats_sum_yk[epoch//10,2] = sum_yk.max()
+                    idx = epoch // val_every
+                    stats_sum_yk[idx,0] = sum_yk.mean() 
+                    stats_sum_yk[idx,1] = sum_yk.min()
+                    stats_sum_yk[idx,2] = sum_yk.max()
 
                     # ELEMENTS CONSERVATION
-                    yval_in = Yscaler_mean + (Yscaler_std + 1e-7)*X_val[:,1:]
-                    if self.log_transform_Y:
-                        yval_in = torch.exp(yval_in)
+                    yval_in = self._inverse_scale(X_val[:,1:], Yscaler_mean, Yscaler_std, self.log_transform_Y)
                     ye_in = torch.matmul(A_element, torch.transpose(yval_in, 0, 1))
                     ye_out = torch.matmul(A_element, torch.transpose(yk, 0, 1))
                     delta_ye = (ye_out - ye_in)/(ye_in+1e-10)
                     delta_ye = delta_ye.detach().cpu().numpy()
-                    stats_A_elements[epoch//10, :, 0] = delta_ye.mean(axis=1)
-                    stats_A_elements[epoch//10, :, 1] = delta_ye.min(axis=1)
-                    stats_A_elements[epoch//10, :, 2] = delta_ye.max(axis=1)
+                    stats_A_elements[idx, :, 0] = delta_ye.mean(axis=1)
+                    stats_A_elements[idx, :, 1] = delta_ye.min(axis=1)
+                    stats_A_elements[idx, :, 2] = delta_ye.max(axis=1)
 
                 model.train()   # Back to training mode
-                val_loss_list[epoch//10] = val_loss
+
+                if best_state_dict is None or val_loss.item() < best_val_loss:
+                    best_val_loss = val_loss.item()
+                    best_state_dict = copy.deepcopy(model.state_dict())
+
+                val_loss_list[idx] = val_loss.item()
 
             print(f"Finished epoch {epoch}")
             print(f"    >> lr: {before_lr} -> {after_lr}")
-            print(f"    >> Loss: {loss}")
-            if epoch%10==0:
+            print(f"    >> Loss (mean over batches): {loss_list[epoch]}")
+            if epoch % val_every==0:
                 print(f"    >> Validation loss: {val_loss}")
+
+        # Restore best model (based on validation loss) before returning
+        if best_state_dict is not None:
+            model.load_state_dict(best_state_dict)
 
         return epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements
     
@@ -278,14 +312,31 @@ class NN_manager():
             model = self.create_model(i_cluster, X_val.shape[1], Y_val.shape[1])
 
             # Optimizer and loss function
-            optimizer = optim.Adam(model.parameters(), lr=self.learning["initial_learning_rate"])
-            loss_fn = nn.MSELoss()
+            opt_name = str(self.learning.get("optimizer", "adam")).lower()
+            if opt_name == "adam":
+                optimizer = optim.Adam(model.parameters(), lr=self.learning["initial_learning_rate"])
+            elif opt_name == "sgd":
+                optimizer = optim.SGD(model.parameters(), lr=self.learning["initial_learning_rate"])
+            else:
+                raise ValueError(f"Unsupported optimizer '{opt_name}'")
+
+            loss_name = str(self.learning.get("loss", "mse")).lower()
+            if loss_name == "mse":
+                loss_fn = nn.MSELoss()
+            elif loss_name == "l1":
+                loss_fn = nn.L1Loss()
+            else:
+                raise ValueError(f"Unsupported loss '{loss_name}'")
 
             # Set scheduler
-            if self.scheduler_option=="ExpLR":
+            scheduler_option = self.learning["scheduler_option"]
+            if scheduler_option=="ExpLR":
                 scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=self.learning["decay_rate"])
+            elif scheduler_option == "None" or scheduler_option is None:
+                # Identity scheduler (no LR change)
+                scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda _: 1.0)
             else:
-                raise ValueError("Only scheduler implemented yet is ExpLR")
+                raise ValueError("Only scheduler implemented yet is ExpLR or None")
             
             # Perform training
             epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements = self.train_model(i_cluster, model, loss_fn, optimizer, scheduler, X_train, X_val, Y_train, Y_val, Yscaler_mean, np.sqrt(Yscaler_var))
@@ -379,7 +430,7 @@ class NN_manager():
             shutil.copy(self.dataset_path + "/km_centroids.dat", self.directory)
         else:
             if self.nb_clusters > 1:
-                sys.exit("ERROR: nb_cluster > 1 but cluster_type undefined (should be 'progvar' or 'kmeans')")
+                raise ValueError("nb_cluster > 1 but cluster_type undefined (should be 'progvar' or 'kmeans')")
 
     def read_training_data(self, i_cluster):
 
@@ -410,6 +461,12 @@ class NN_manager():
 
 
     def save_pt_model_to_h5(self, model, h5_path):
+        """Export PyTorch model parameters to HDF5 format.
+
+        Layout is designed for cross-framework compatibility (e.g., TensorFlow),
+        using 'kernel:0' and 'bias:0' datasets with weights transposed to match
+        expected dense layer formats.
+        """
         model.eval()
 
         def save_module(group, module, module_name, parent_activation_map):
@@ -443,67 +500,3 @@ class NN_manager():
             # Save each top-level layer directly, no 'model' group
             for layer_name, module in model.model.named_children():  # note: model.model is nn.Sequential
                 save_module(f, module, layer_name, getattr(model, 'activation_map', {}))
-
-    # def save_pt_model_to_h5(self, model, h5_path):
-
-    #     model.eval()
-
-    #     # Example: map PyTorch module types to simple names
-    #     activation_map = {
-    #         'ReLU': 'relu',
-    #         'Tanh': 'tanh',
-    #         'Identity': 'identity',
-    #         'Sigmoid': 'sigmoid',
-    #         'LeakyReLU': 'leaky_relu'
-    #     }
-
-    #     with h5py.File(h5_path, "w") as f:
-    #         for layer_name, module in model.named_modules():
-
-    #             # Skip top-level module (empty name)
-    #             if layer_name == "":
-    #                 continue
-
-    #             # Remove 'model.' prefix if it exists
-    #             if layer_name.startswith("model."):
-    #                 layer_name = layer_name[len("model."):]
-
-    #             if layer_name=="model":
-    #                 layer_name="input_layer"
-
-    #             # Only layers with parameters
-    #             if len(list(module.parameters())) == 0:
-    #                 continue
-
-    #             # Create group for layer
-    #             layer_group = f.create_group(layer_name)
-
-    #             # Create subgroup with same name
-    #             sub_group = layer_group.create_group(layer_name)
-
-    #             # Save weights
-    #             for param_name, param in module.named_parameters(recurse=False):
-    #                 data = param.detach().cpu().numpy()
-
-    #                 if param_name == "weight":
-    #                     sub_group.create_dataset("kernel:0", data=data)
-    #                 elif param_name == "bias":
-    #                     sub_group.create_dataset("bias:0", data=data)
-
-
-    #             # Save activation from the activation_map
-    #             activation_name = getattr(model, 'activation_map', {}).get(layer_name, 'none')
-    #             layer_group.attrs['activation'] = activation_name
-
-
-
-    # def read_learning_config(self):
-        # relics from previous TensorFlow version of ARF --> might be re-integrated later
-        # self.use_final_lr = learning_parameters["use_final_lr"]
-        # if (self.use_final_lr):
-        #     self.final_learning_rate = learning_parameters["final_learning_rate"]
-        # Parameters of the exponential decay schedule (learning rate decay)
-        #
-        # self.decay_steps = learning_parameters["decay_steps"]
-        # self.decay_rate = learning_parameters["decay_rate"]
-        # self.staircase = learning_parameters["staircase"]
