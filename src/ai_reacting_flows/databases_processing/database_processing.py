@@ -1,9 +1,15 @@
+"""Database processing utilities for AI reacting flows.
+
+This module exposes the :class:`LearningDatabase` class used to read raw
+stochastic/flamelet databases, apply filtering, clustering, resampling and
+produce machine‑learning ready train/validation datasets.
+"""
+
 import os
 import sys
 import shutil
 import pickle
-import shelve
-import random
+
 import oyaml as yaml
 import joblib
 import pandas as pd
@@ -12,7 +18,6 @@ from scipy.interpolate import interpn
 # from scipy.interpolate import interp1d
 # from scipy.stats.kde import gaussian_kde
 import h5py
-import cantera as ct
 
 # import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -30,7 +35,14 @@ import ai_reacting_flows.tools.utilities as utils
 
 sns.set_style("darkgrid")
 
+
 class LearningDatabase(object):
+    """Main entry point for database processing.
+
+    The class reads raw HDF5 databases, optionally applies temperature
+    thresholds, clustering and resampling, and finally produces
+    train/validation datasets along with scalers and diagnostic plots.
+    """
 
     def __init__(self):
 
@@ -82,10 +94,9 @@ class LearningDatabase(object):
             sys.exit("ERROR: chemical mechanism should be in yaml format !")
 
         # Read H5 files to get databases in pandas format
-        h5file_r = h5py.File(self.dtb_folder + "/" + self.input_dtb_file, 'r')
-        names = h5file_r.keys()
-        self.nb_solutions = len(names)
-        h5file_r.close()
+        with h5py.File(os.path.join(self.dtb_folder, self.input_dtb_file), 'r') as h5file_r:
+            names = h5file_r.keys()
+            self.nb_solutions = len(names)
         self.get_database_from_h5()
 
         # Extracting some information
@@ -176,26 +187,32 @@ class LearningDatabase(object):
 
 
     def database_to_h5(self, file_path, file_name):
+        """Export current X/Y to a single-iteration HDF5 file.
 
-        # Opening h5 file
-        
-        h5file_r = h5py.File(self.dtb_folder + '/' + self.input_dtb_file, 'r')
+        Parameters
+        ----------
+        file_path : str
+            Directory where the file should be created.
+        file_name : str
+            Name of the HDF5 file to create.
+        """
 
-        # Solution 0 read to get columns names
-        col_names_X = h5file_r["ITERATION_00000/X"].attrs["cols"]
-        col_names_Y = h5file_r["ITERATION_00000/Y"].attrs["cols"]
+        # Read column names from the original database
+        with h5py.File(os.path.join(self.dtb_folder, self.input_dtb_file), 'r') as h5file_r:
+            col_names_X = h5file_r["ITERATION_00000/X"].attrs["cols"]
+            col_names_Y = h5file_r["ITERATION_00000/Y"].attrs["cols"]
 
-        h5file_w = h5py.File(file_path + file_name, 'w')
-        # Loop on solutions        
+        # Create output file
+        with h5py.File(os.path.join(file_path, file_name), 'w') as h5file_w:
+            grp = h5file_w.create_group(f"ITERATION_{0:05d}")
 
-        grp = h5file_w.create_group(f"ITERATION_{0:05d}")
-        dset_X = grp.create_dataset('X', data = self.X.drop(columns = ['cluster', 'PC1', 'PC2']))
-        dset_X.attrs['cols'] = col_names_X
-        
-        dset_Y = grp.create_dataset('Y', data = self.Y)
-        dset_Y.attrs['cols'] = col_names_Y
+            # Drop internal columns (cluster label, PCA coordinates) if present.
+            cols_to_drop = [c for c in ["cluster", "PC1", "PC2"] if c in self.X.columns]
+            dset_X = grp.create_dataset('X', data=self.X.drop(columns=cols_to_drop))
+            dset_X.attrs['cols'] = col_names_X
 
-        h5file_r.close()
+            dset_Y = grp.create_dataset('Y', data=self.Y)
+            dset_Y.attrs['cols'] = col_names_Y
 
         print("\n H5PY dataset created")
 
@@ -225,7 +242,11 @@ class LearningDatabase(object):
             self.Y = self.Y[is_above_temp].reset_index(drop=True)
 
 
-    def clusterize_dataset(self, c_bounds = []):
+    def clusterize_dataset(self, c_bounds=None):
+
+        # Avoid mutable default for c_bounds
+        if c_bounds is None:
+            c_bounds = []
 
         self.clusterized_dataset = True
 
