@@ -112,7 +112,6 @@ class LearningDatabase(object):
             print(f">> Processed dataset {self.database_name} already exists => deleting")
             shutil.rmtree(self.dtb_folder + "/" + self.database_name)  # We remove previous generated case if still here
         os.mkdir(self.dtb_folder + "/" + self.database_name)
-        os.mkdir(self.dtb_folder + "/" + self.database_name + "/cluster0")
 
         # By default, we attribute cluster 0 to everyone
         self.X["cluster"] = 0.0
@@ -260,10 +259,6 @@ class LearningDatabase(object):
         # self.nb_clusters_tot = self.nb_clusters
 
         assert (not self.is_processed)
-
-        # Creating empty folders for storing datasets
-        for i in range(1, self.nb_clusters):
-            os.mkdir(self.dtb_folder + "/" + self.database_name + f"/cluster{i}")
 
         if self.clustering_method=="progvar":
 
@@ -641,8 +636,8 @@ class LearningDatabase(object):
 
         for i_cluster in range(self.nb_clusters):
             
-            print("")
-            print(f"CLUSTER {i_cluster}:")
+            print("", flush=True)
+            print(f"CLUSTER {i_cluster}:", flush=True)
 
             # Isolate cluster i
             X_p = X[X["cluster"]==i_cluster]
@@ -744,14 +739,7 @@ class LearningDatabase(object):
 
             Y_train = pd.DataFrame(Y_train_array, columns=Y_train.columns, index=Y_train.index)
             Y_val = pd.DataFrame(Y_val_array, columns=Y_val.columns, index=Y_val.index)
-            
-            # Saving scalers
-            joblib.dump(Xscaler, f"{self.dtb_folder}/{self.database_name}/cluster{i_cluster}/Xscaler.save")
-            joblib.dump(Yscaler, f"{self.dtb_folder}/{self.database_name}/cluster{i_cluster}/Yscaler.save")
-
-            # print(f"X_train mean / std = {X_train.mean()} / {X_train.std()}")
-            # print(f"Y_train mean / std = {Y_train.mean()} / {Y_train.std()}")
-            # print(f"Y_train max / min = {Y_train.max()} / {Y_train.min()}")
+        
 
             # Forcing constant N2
             # n2_cte = not self.with_N_chemistry
@@ -763,9 +751,21 @@ class LearningDatabase(object):
             #         Y_train["N2_Y"] = X_train["N2_X"]
             #         Y_val["N2_Y"] = X_val["N2_X"]
 
+            print(">> Saving datasets", flush=True)
+
             # Saving in h5 format
             grp = h5file_w.create_group(f"CLUSTER_{i_cluster}")
+
+            # Saving scalers
+            Xscaler_array = np.column_stack([Xscaler.mean_, Xscaler.var_])
+            dset_Xscaler = grp.create_dataset('Xscaler', data = Xscaler_array)
+            dset_Xscaler.attrs['cols'] = np.array(["mean", "std"], dtype=object)
+            #
+            Yscaler_array = np.column_stack([Yscaler.mean_, Yscaler.var_])
+            dset_Yscaler = grp.create_dataset('Yscaler', data = Yscaler_array)
+            dset_Yscaler.attrs['cols'] = np.array(["mean", "std"], dtype=object)
             
+            # Saving data
             dset_X_train = grp.create_dataset('X_train', data = X_train)
             dset_X_train.attrs['cols'] = np.array(X_train.columns, dtype=object)
             #
@@ -778,16 +778,17 @@ class LearningDatabase(object):
             dset_Y_val = grp.create_dataset('Y_val', data = Y_val)
             dset_Y_val.attrs['cols'] = np.array(Y_val.columns, dtype=object)
 
+
             # Saving datasets
-            print(">> Saving datasets")
-            X_train.to_csv(self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/X_train.csv", index=False)
-            X_val.to_csv(self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/X_val.csv", index=False)
-            Y_train.to_csv(self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/Y_train.csv", index=False)
-            Y_val.to_csv(self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/Y_val.csv", index=False)
+            # print(">> Saving datasets")
+            # X_train.to_csv(self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/X_train.csv", index=False)
+            # X_val.to_csv(self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/X_val.csv", index=False)
+            # Y_train.to_csv(self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/Y_train.csv", index=False)
+            # Y_val.to_csv(self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/Y_val.csv", index=False)
 
             # Plotting distributions if necessary
             if plot_distributions:
-                print(">> Plotting distributions")
+                print(">> Plotting distributions", flush=True)
                 for spec in distribution_species:
                    self.plot_distributions(X_train, X_val, Y_train, Y_val, spec, i_cluster)
 
@@ -913,8 +914,8 @@ class LearningDatabase(object):
         fig1.tight_layout()
         fig2.tight_layout()
 
-        fig1.savefig(self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/distrib_{species}_train.png", dpi=300, bbox_inches='tight')
-        fig2.savefig(self.dtb_folder + "/" + self.database_name + f"/cluster{i_cluster}/distrib_{species}_val.png", dpi=300, bbox_inches='tight')
+        fig1.savefig(self.dtb_folder + "/" + self.database_name + f"/distrib_{species}_train_cluster_{i_cluster}.png", dpi=300, bbox_inches='tight')
+        fig2.savefig(self.dtb_folder + "/" + self.database_name + f"/distrib_{species}_val_cluster_{i_cluster}.png", dpi=300, bbox_inches='tight')
 
     def check_inputs(self):
 

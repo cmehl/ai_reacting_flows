@@ -41,12 +41,16 @@ class NN_manager():
         with open(f"{self.dataset_path}/dtb_processing.yaml", "r") as file:
             dtb_processing_params = yaml.safe_load(file)
 
-        dtb_type = dtb_processing_params["database_type"]
+        database_params = dtb_processing_params["database_params"]
+        dtb_type = database_params["database_type"]
         
-        self.remove_N2 = not dtb_processing_params["with_N_chemistry"]
-        self.log_transform_Y = dtb_processing_params["log_transform_Y"]
-        self.clustering_type = dtb_processing_params["clustering_method"]
-        self.nb_clusters = dtb_processing_params["nb_clusters"]
+        data_processing = dtb_processing_params["data_processing"]
+        self.remove_N2 = not data_processing["with_N_chemistry"]
+        self.log_transform_Y = data_processing["log_transform_Y"]
+
+        data_clustering = dtb_processing_params["data_clustering"]
+        self.clustering_type = data_clustering["clustering_method"]
+        self.nb_clusters = data_clustering["nb_clusters"]
 
         if dtb_type == "stoch":
             params_file = "dtb_params.yaml"
@@ -55,7 +59,7 @@ class NN_manager():
             params_file = "dtb_params_flmts.yaml"
             prefix = "FLAMELETS"
 
-        with open(os.path.join(self.run_folder, f"{prefix}_DTB_{dtb_processing_params['dtb_folder_suffix']}",params_file), "r") as file:
+        with open(os.path.join(self.run_folder, f"{prefix}_DTB_{database_params['dtb_folder_suffix']}",params_file), "r") as file:
             dtb_parameters = yaml.safe_load(file)
 
         self.fuel = dtb_parameters["fuel"]
@@ -86,13 +90,13 @@ class NN_manager():
                 raise FileNotFoundError(f"new_model_folder is set to False but model {self.directory} does not exist")
             print(f">> Existing model folder {self.directory} is used. \n")
 
-        # Get the number of clusters
-        assert (self.nb_clusters == len(next(os.walk(self.dataset_path))[1]))
-        if ((self.nb_clusters != len(self.networks_defs)) or (self.nb_clusters != len(self.networks_types))):
-            raise ValueError(
-                f"number of clusters in {self.dataset_path} ({self.nb_clusters}) inconsistent with "
-                f"'networks_types' and/or 'networks_files' length ({len(self.networks_defs)} and {len(self.networks_types)})"
-            )
+        # Get the number of clusters   CM: TO ADAPT !!!
+        # assert (self.nb_clusters == len(next(os.walk(self.dataset_path))[1]))
+        # if ((self.nb_clusters != len(self.networks_defs)) or (self.nb_clusters != len(self.networks_types))):
+        #     raise ValueError(
+        #         f"number of clusters in {self.dataset_path} ({self.nb_clusters}) inconsistent with "
+        #         f"'networks_types' and/or 'networks_files' length ({len(self.networks_defs)} and {len(self.networks_types)})"
+        #     )
         print("CLUSTERING:")
         print(f">> Number of clusters is: {self.nb_clusters}")
 
@@ -181,10 +185,10 @@ class NN_manager():
 
     def train_model(self, i_cluster, model, loss_fn, optimizer, scheduler, X_train, X_val, Y_train, Y_val, Yscaler_mean, Yscaler_std):
 
-        X_train = torch.tensor(X_train.values, dtype=torch.float64)
-        Y_train = torch.tensor(Y_train.values, dtype=torch.float64)
-        X_val = torch.tensor(X_val.values, dtype=torch.float64)
-        Y_val = torch.tensor(Y_val.values, dtype=torch.float64)
+        X_train = torch.tensor(X_train, dtype=torch.float64)
+        Y_train = torch.tensor(Y_train, dtype=torch.float64)
+        X_val = torch.tensor(X_val, dtype=torch.float64)
+        Y_val = torch.tensor(Y_val, dtype=torch.float64)
         A_element = torch.tensor(self.A_element, dtype=torch.float64)
         Yscaler_mean = torch.from_numpy(Yscaler_mean).to(torch.float64)
         Yscaler_std = torch.from_numpy(Yscaler_std).to(torch.float64)
@@ -268,7 +272,7 @@ class NN_manager():
                     stats_sum_yk[idx,2] = sum_yk.max()
 
                     # ELEMENTS CONSERVATION
-                    yval_in = self._inverse_scale(X_val[:,1:], Yscaler_mean, Yscaler_std, self.log_transform_Y)
+                    yval_in = self._inverse_scale(X_val[:,1:-1], Yscaler_mean, Yscaler_std, self.log_transform_Y)
                     ye_in = torch.matmul(A_element, torch.transpose(yval_in, 0, 1))
                     ye_out = torch.matmul(A_element, torch.transpose(yk, 0, 1))
                     delta_ye = (ye_out - ye_in)/(ye_in+1e-10)
@@ -434,30 +438,34 @@ class NN_manager():
 
     def read_training_data(self, i_cluster):
 
-        X_train = pd.read_csv(filepath_or_buffer= f"{self.dataset_path:s}/cluster{i_cluster}/X_train.csv")
-        Y_train = pd.read_csv(filepath_or_buffer= f"{self.dataset_path:s}/cluster{i_cluster}/Y_train.csv")
-            
-        X_val = pd.read_csv(filepath_or_buffer= f"{self.dataset_path:s}/cluster{i_cluster}/X_val.csv")
-        Y_val = pd.read_csv(filepath_or_buffer= f"{self.dataset_path:s}/cluster{i_cluster}/Y_val.csv")
+        with h5py.File(f"{self.dataset_path:s}/training_data.h5", 'r') as h5file_r:
+
+            grp = h5file_r[f"CLUSTER_{i_cluster}"]
+
+            X_train = grp['X_train'][:]
+            Y_train = grp['Y_train'][:]
+            X_val   = grp['X_val'][:]
+            Y_val   = grp['Y_val'][:]
 
         return X_train, X_val, Y_train, Y_val
     
-    def read_scalers(self, i_cluster):
-        Xscaler = joblib.load(os.path.join(f"{self.dataset_path:s}/cluster{i_cluster}", "Xscaler.save"))
-        Yscaler = joblib.load(os.path.join(f"{self.dataset_path:s}/cluster{i_cluster}", "Yscaler.save"))
-
-        return Xscaler, Yscaler
-    
     def get_scalers_stats(self, i_cluster):
-        Xscaler = joblib.load(os.path.join(f"{self.dataset_path:s}/cluster{i_cluster}", "Xscaler.save"))
-        Yscaler = joblib.load(os.path.join(f"{self.dataset_path:s}/cluster{i_cluster}", "Yscaler.save"))
 
-        return Xscaler.mean_, Xscaler.var_, Yscaler.mean_, Yscaler.var_
+        with h5py.File(f"{self.dataset_path:s}/training_data.h5", 'r') as h5file_r:
+            
+            grp = h5file_r[f"CLUSTER_{i_cluster}"]
 
-    def save_scalers(self, i_cluster, Xscaler, Yscaler):
+            Xscaler_array = grp['Xscaler'][:]
+            Yscaler_array = grp['Yscaler'][:]
 
-        joblib.dump(Xscaler, os.path.join(f"{self.directory:s}/cluster{i_cluster}", "Xscaler.save"))
-        joblib.dump(Yscaler, os.path.join(f"{self.directory:s}/cluster{i_cluster}", "Yscaler.save"))
+            Xscaler_mean = Xscaler_array[:,0]
+            Xscaler_var = Xscaler_array[:,1]
+            #
+            Yscaler_mean = Yscaler_array[:,0]
+            Yscaler_var = Yscaler_array[:,1]
+
+
+        return Xscaler_mean, Xscaler_var, Yscaler_mean, Yscaler_var
 
 
     def save_pt_model_to_h5(self, model, h5_path):
