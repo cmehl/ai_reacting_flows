@@ -90,10 +90,7 @@ class LearningDatabase(object):
         names = h5file_r.keys()
         self.nb_solutions = len(names)
         h5file_r.close()
-        if self.database_type=="stoch":
-            self.get_stoch_database_from_h5()
-        elif self.database_type=="flamelets":
-            self.get_flmts_database_from_h5()
+        self.get_database_from_h5()
 
         # Extracting some information
         if self.dt_var:
@@ -134,7 +131,7 @@ class LearningDatabase(object):
         self.check_inputs()
 
     
-    def get_stoch_database_from_h5(self):
+    def get_database_from_h5(self):
 
         # Opening h5 file
         h5file_r = h5py.File(self.dtb_folder + "/" + self.input_dtb_file, 'r')
@@ -203,32 +200,6 @@ class LearningDatabase(object):
         h5file_r.close()
 
         print("\n H5PY dataset created")
-
-
-    def get_flmts_database_from_h5(self):
-        
-        # Opening h5 file
-        h5file_r = h5py.File(self.dtb_folder + "/" + self.input_dtb_file, 'r')
-
-        # Solution 0 read to get columns names
-        self.col_names_X = h5file_r["FLAMELETS/X"].attrs["cols"]
-        self.col_names_Y = h5file_r["FLAMELETS/Y"].attrs["cols"]
-
-        data_X = h5file_r.get(f"FLAMELETS/X")[()]
-        data_Y = h5file_r.get(f"FLAMELETS/Y")[()]
-        if self.dt_var:
-            data_dt = h5file_r.get(f"FLAMELETS/DT")[()]
-
-        h5file_r.close()
-
-        self.X = pd.DataFrame(data=data_X, columns=self.col_names_X)
-        if self.dt_var:
-            self.Y = np.asarray(data_Y)
-            self.dt_array = np.asarray(data_dt)
-        else:
-            self.Y = pd.DataFrame(data=data_Y, columns=self.col_names_Y)
-
-        return
 
 
     def apply_temperature_threshold(self):

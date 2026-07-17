@@ -172,46 +172,51 @@ def GenerateVariable_dt(dtb_type: str, params: dict, comm: "MPI.Comm") -> str:
 
     print(f"Processor {rank} has built array all_new_states. \n")
 
+    if dtb_type not in {"stoch", "flamelets"}:
+        raise ValueError("dtb_type must be 'stoch' or 'flamelets'")
+    
+    output_path = f"{stoch_results_folder:s}/{params['new_file_name']:s}"
+
     comm.Barrier()
 
-    # Gather all X_new/Y_new arrays from every rank onto rank 0.
-    # all_X_new = comm.gather(X_new, root=0)
-    # all_Y_new = comm.gather(Y_new, root=0)
-    #
+    # Gathering Y_new using mpi gather and then writing everything in one block is not possible because there is a limit of 2 GB for the gather
+    # The solution is to write a group in h5 file per rank and write in the file rank after rank (not possible to write at the same time)
+    # This is done below using send/redv command, ensuring that each rank writes when the previosu has finished. 
 
-    all_dt_array = comm.gather(dt_array, root=0)
-    all_Y_new = comm.gather(Y_new, root=0)
+    token = None
+    TAG_WRITE_TOKEN = 42
 
     if rank == 0:
-        # Concatenate per-rank arrays into one global array.
-        # X_new_full = np.concatenate(all_X_new, axis=0) if all_X_new else np.empty((0, X_new.shape[1]))
-        # Y_new_full = np.concatenate(all_Y_new, axis=0) if all_Y_new else np.empty((0, Y_new.shape[1]))
-        #
-        dt_array_full = np.concatenate(all_dt_array, axis=0)
-        Y_new_full = np.concatenate(all_Y_new, axis=0)
-
-        # For multi-dt stochastic all data is written by default in "ITERATION_00000" as it is
-        # too complex to keep the per-iteration structure (and useless when creating processed DB).
-        if dtb_type == "stoch":
-            group_name = "ITERATION_00000"
-        elif dtb_type == "flamelets":
-            group_name = "FLAMELETS"
-        else:
-            raise ValueError("dtb_type must be 'stoch' or 'flamelets'")
-
-        print("WRITING", rank)
-        output_path = f"{stoch_results_folder:s}/{params['new_file_name']:s}"
+        # Rank 0 creates the file fresh (truncating any old one), then writes first.
         with h5py.File(output_path, "w") as f:
-            grp = f.create_group(group_name)
-            dset_X = grp.create_dataset("X", data=X)
-            dset_Y = grp.create_dataset("Y", data=Y_new_full)
-            dset_DT = grp.create_dataset("DT", data=dt_array_full)
+            grp = f.create_group(f"ITERATION_{rank:05d}")   # ITERATION naming instead of RANK to make it readable straight away in database processing
+            dset_X = grp.create_dataset("X", data=state_list)
+            dset_Y = grp.create_dataset("Y", data=Y_new)
+            dset_DT = grp.create_dataset("DT", data=dt_array)
             dset_X.attrs["cols"] = col_names_X
             dset_Y.attrs["cols"] = col_names_Y
+        print(f"Processor {rank} has written its group to {output_path}. \n", flush=True)
+    else:
+        # Wait for the previous rank to signal it has finished writing.
+        token = comm.recv(source=rank - 1, tag=TAG_WRITE_TOKEN)
 
-        print(f"Processor {rank} has written output file at: {output_path}. \n")
+        with h5py.File(output_path, "a") as f:
+            grp = f.create_group(f"ITERATION_{rank:05d}")
+            dset_X = grp.create_dataset("X", data=state_list)
+            dset_Y = grp.create_dataset("Y", data=Y_new)
+            dset_DT = grp.create_dataset("DT", data=dt_array)
+            dset_X.attrs["cols"] = col_names_X
+            dset_Y.attrs["cols"] = col_names_Y
+        print(f"Processor {rank} has written its group to {output_path}. \n", flush=True)
+
+    # Pass the token to the next rank (if any).
+    if rank < size - 1:
+        comm.send(True, dest=rank + 1, tag=TAG_WRITE_TOKEN)
 
     comm.Barrier()
+
+    if rank == 0:
+        print(f"All {size} processors have written their groups to: {output_path}\n", flush=True)
 
     return "Done"
 

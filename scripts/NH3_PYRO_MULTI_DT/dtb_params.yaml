@@ -13,7 +13,7 @@ inlets:
     T: 300.0
     P: 101325.0
     activation_time: 1.0
-results_folder_suffix: NH3_PYRO
+results_folder_suffix: NH3_PYRO_EMST
 dtb_file: solutions.h5
 build_ml_dtb: true
 time_step: {0: 5.0e-4, 1.0: 5.0e-7}
