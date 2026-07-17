@@ -39,21 +39,30 @@ class LearningDatabase(object):
         with open(os.path.join(self.run_folder, "dtb_processing.yaml"), "r") as file:
             dtb_processing_parameters = yaml.safe_load(file)
 
-        self.database_type = dtb_processing_parameters["database_type"]
-        self.database_name = dtb_processing_parameters["database_name"]
-        self.log_transform_X  = dtb_processing_parameters["log_transform_X"]
-        self.log_transform_Y  = dtb_processing_parameters["log_transform_Y"]
-        self.threshold  = dtb_processing_parameters["threshold"]
-        self.output_omegas  = dtb_processing_parameters["output_omegas"]
-        self.with_N_chemistry = dtb_processing_parameters["with_N_chemistry"]
-        self.clusterize_on = dtb_processing_parameters['clusterize_on']
+        database_params = dtb_processing_parameters["database_params"]
+        self.database_type = database_params["database_type"]
+        self.database_name = database_params["database_name"]
+        self.input_dtb_file = database_params["dtb_file"]
+        self.dt_var = database_params['dt_var']
+        self.detailed_mechanism  = database_params["mech_file"]
+        self.fuel  = database_params["fuel"]
+
+        data_processing = dtb_processing_parameters["data_processing"]
+        self.log_transform_X  = data_processing["log_transform_X"]
+        self.log_transform_Y  = data_processing["log_transform_Y"]
+        self.threshold  = data_processing["threshold"]
+        self.T_threshold  = data_processing["T_threshold"]
+        self.output_omegas  = data_processing["output_omegas"]
+        self.with_N_chemistry = data_processing["with_N_chemistry"]
+
+        data_clustering = dtb_processing_parameters["data_clustering"]
+        self.clusterize_on = data_clustering['clusterize_on']
+        self.clustering_method = data_clustering["clustering_method"]
+
         self.train_set_size = dtb_processing_parameters['train_set_size']
-        self.T_threshold  = dtb_processing_parameters["T_threshold"]
-        self.clustering_method = dtb_processing_parameters["clustering_method"]
-        self.dt_var = dtb_processing_parameters['dt_var']
 
         self.nb_clusters = 1  # default value before clustering
-        self.nb_clusters_input = dtb_processing_parameters["nb_clusters"] # storing for later, if clustering is actually called
+        self.nb_clusters_input = data_clustering["nb_clusters"] # storing for later, if clustering is actually called
 
         if self.database_type not in ["stoch", "flamelets"]:
             sys.exit("Error on database_type. It should be 'stoch' or 'flamelets'")
@@ -61,25 +70,12 @@ class LearningDatabase(object):
         # Parameters depending on database type
         if self.database_type=="stoch":
             folder_prefix = "STOCH"
-            dtb_params_file = "dtb_params.yaml"
         elif self.database_type=="flamelets":
             folder_prefix = "FLAMELETS"
-            dtb_params_file = "dtb_params_flmts.yaml"
         
         # Folder where results are stored
-        self.dtb_folder = f"{self.run_folder:s}/{folder_prefix}_DTB_" + dtb_processing_parameters["dtb_folder_suffix"]
+        self.dtb_folder = f"{self.run_folder:s}/{folder_prefix}_DTB_" + database_params["dtb_folder_suffix"]
 
-        with open(os.path.join(self.dtb_folder, dtb_params_file), "r") as file:
-            data_gen_parameters = yaml.safe_load(file)
-
-        # This is not optimal and can be confusing, to improve in future
-        if self.dt_var:
-            self.input_dtb_file = data_gen_parameters['new_file_name']
-        else:
-            self.input_dtb_file = data_gen_parameters['dtb_file']
-
-        self.detailed_mechanism  = data_gen_parameters["mech_file"]
-        self.fuel  = data_gen_parameters["fuel"]
 
         # Check if mechanism is in YAML format
         if not self.detailed_mechanism.endswith("yaml"):
@@ -133,8 +129,10 @@ class LearningDatabase(object):
     
     def get_database_from_h5(self):
 
+        print(f">> Reading database in file {os.path.join(self.dtb_folder, self.input_dtb_file)}")
+
         # Opening h5 file
-        h5file_r = h5py.File(self.dtb_folder + "/" + self.input_dtb_file, 'r')
+        h5file_r = h5py.File(os.path.join(self.dtb_folder, self.input_dtb_file), 'r')
 
         # Solution 0 read to get columns names
         self.col_names_X = h5file_r["ITERATION_00000/X"].attrs["cols"]

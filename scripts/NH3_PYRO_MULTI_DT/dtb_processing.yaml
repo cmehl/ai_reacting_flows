@@ -1,14 +1,20 @@
-database_type: stoch
-dtb_folder_suffix: H2_POF_2023
-database_name: dtb_resampled
-log_transform_X: 1
-log_transform_Y: 1
-threshold: 1.0e-10
-T_threshold: 600.0
-output_omegas: true
-with_N_chemistry: false
-clusterize_on: phys
-train_set_size: 0.75
-clustering_method: kmeans
-nb_clusters: 2
-dt_var:     true
+database_params:
+  - database_type: stoch
+  - dtb_folder_suffix: NH3_PYRO_EMST
+  - dtb_file: solutions_5dt.h5
+  - database_name: dtb_nh3_pyro_emst
+  - dt_var: true
+  - fuel: NH3
+  - mech_file: ../../data/chemical_mechanisms/mech_nh3_noArHe.yaml
+data_processing:
+  - log_transform_X: 1
+  - log_transform_Y: 1
+  - threshold: 1.0e-40
+  - T_threshold: 600.0
+  - output_omegas: false
+  - with_N_chemistry: true
+data_clustering:
+  - clusterize_on: phys
+  - clustering_method: kmeans
+  - nb_clusters: 2
+train_set_size: 0.8

@@ -1,14 +1,20 @@
-database_type: stoch
-dtb_folder_suffix: H2_POF_2023
-database_name: dtb_resampled
-log_transform_X: 1
-log_transform_Y: 1
-threshold: 1.0e-10
-T_threshold: 600.0
-output_omegas: true
-with_N_chemistry: false
-clusterize_on: phys
+database_params:
+  - database_type: stoch
+  - dtb_folder_suffix: H2_POF_2023
+  - dtb_file: solutions_5dt.h5
+  - database_name: dtb_resampled
+  - dt_var: true
+  - fuel: H2
+  - mech_file: ../../data/chemical_mechanisms/mech_H2.yaml
+data_processing:
+  - log_transform_X: 1
+  - log_transform_Y: 1
+  - threshold: 1.0e-10
+  - T_threshold: 600.0
+  - output_omegas: true
+  - with_N_chemistry: false
+data_clustering:
+  - clusterize_on: phys
+  - clustering_method: kmeans
+  - nb_clusters: 4
 train_set_size: 0.75
-clustering_method: kmeans
-nb_clusters: 4
-dt_var:     true
