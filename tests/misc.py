@@ -75,7 +75,19 @@ def extract_h2_dtvar_dtb_histograms(dtb_file, histo_folder, tol):
     
     col_names = h5file_r["ITERATION_00000/Y"].attrs["cols"]
     data = h5file_r.get("ITERATION_00000/Y")[()]
-    df = pd.DataFrame(data=data, columns=col_names)
+
+    print(data.ndim)
+    if data.ndim == 3:  # multi-dt case
+        N, n_vars, n_dt = data.shape
+
+        data_2d = np.empty((n_dt*N,n_vars))
+        for i_dt in range(n_dt):
+            data_2d[i_dt::n_dt,:] = data[:,:,i_dt]
+
+        df = pd.DataFrame(data=data_2d, columns=col_names)
+
+    else:
+        df = pd.DataFrame(data=data, columns=col_names)
         
     varlist = col_names.tolist()
     varlist = [var for var in varlist if var not in ["Pressure", "N2", "Prog_var", "HRR"]]
