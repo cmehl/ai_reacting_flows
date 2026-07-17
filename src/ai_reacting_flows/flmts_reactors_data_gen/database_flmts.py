@@ -886,7 +886,7 @@ class DatabaseFlamelets(object):
         if self.rank==0:
             cols = ['Temperature'] + ['Pressure'] + self.species_names + ['Prog_var'] + ['HRR']
             f = h5py.File(f"{self.folder}/{self.dtb_file}","w")
-            grp = f.create_group("FLAMELETS") 
+            grp = f.create_group("ITERATION_00000")    # naming to be compatible with stochastic database writing
             dset = grp.create_dataset("X", data=self.X.values)
             dset.attrs["cols"] = cols
             dset = grp.create_dataset("Y", data=self.Y.values)

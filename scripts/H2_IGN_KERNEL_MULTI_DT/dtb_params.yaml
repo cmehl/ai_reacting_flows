@@ -22,7 +22,7 @@ time_max: 0.004
 mixing_model: CURL_MODIFIED
 mixing_time: 0.0004
 read_mixing: false
-T_threshold: 600.0
+T_threshold: 300.0
 pv_species:
 - H2O
 fuel:

@@ -25,6 +25,7 @@ model_type = {"MLP": MLPModel, "DeepONet": DeepONet, "DeepONetShift": DeepONet_s
 
 class NN_manager():
     def __init__(self):
+
         self.device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
         
         self.run_folder = os.getcwd()
@@ -66,9 +67,9 @@ class NN_manager():
         self.networks_defs = networks_parameters["networks_def"] # list[str], keys to network parameters in "clusters", 1 per cluster
         self.clusters = networks_parameters["clusters"]
         self.learning = networks_parameters["learning"] # DA to CM: same learning for all clusters ?
-        self.learning["optimizer"] = "adam"
-        self.learning["loss"] = "MSE"
-        self.learning["scheduler_option"] = "ExpLR"
+        self.learning["optimizer"] = networks_parameters.get("optimizer", "adam")
+        self.learning["loss"] = networks_parameters.get("loss", "MSE")
+        self.learning["scheduler_option"] = networks_parameters.get("scheduler_option", "ExpLR")
 
         # Model's path
         self.directory = f"{self.run_folder:s}/MODELS/{self.model_name:s}"
@@ -114,7 +115,7 @@ class NN_manager():
                 # Adding copies of clustering parameters for later use in inference
                 self.copy_clusterer()
 
-    def create_model(self, i_cluster, X_val, Y_val):
+    def create_model(self, i_cluster, n_in, n_out):
 
         network_type = self.networks_types[i_cluster]
         if (network_type not in model_type.keys()):
@@ -124,15 +125,13 @@ class NN_manager():
             if (network_type == "MLP"):
                 # Network shapes
                 nb_units_in_layers_list = copy.deepcopy(network_parameters["nb_units_in_layers_list"])
-                nb_units_in_layers_list.insert(0, X_val.shape[1])
-                nb_units_in_layers_list.append(Y_val.shape[1])
+                nb_units_in_layers_list.insert(0, n_in)
+                nb_units_in_layers_list.append(n_out)
                 layers_activation_list = [activation_functions[act] for act in network_parameters["layers_activation_list"]]
                 layers_type = network_parameters["layers_type"]
             
                 model = model_type[network_type](self.device, nb_units_in_layers_list, layers_type, layers_activation_list)
             elif ("DeepONet" in network_type):
-                n_in = X_val.shape[1]
-                n_out = Y_val.shape[1]
                 # Network shapes
                 nb_units_in_layers_list = copy.deepcopy(network_parameters["nb_units_in_layers_list"])
                 layers_activation_list = {}
@@ -146,8 +145,6 @@ class NN_manager():
                 nb_units_in_layers_list["trunk"].append(n_neurons*n_out)
                 model = model_type[network_type](self.device, nb_units_in_layers_list, layers_type, layers_activation_list, n_out, n_neurons)
             elif ("DeepONetShift" in network_type):
-                n_in = X_val.shape[1]
-                n_out = Y_val.shape[1]
                 # Network shapes
                 nb_units_in_layers_list = copy.deepcopy(network_parameters["nb_units_in_layers_list"])
                 layers_activation_list = {}
@@ -265,28 +262,45 @@ class NN_manager():
                 print(f"    >> Validation loss: {val_loss}")
 
         return epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements
+    
 
     def train_all_clusters(self):
 
         for i_cluster in range(self.nb_clusters):
-            X_train, X_val, Y_train, Y_val = self.read_training_data(i_cluster)            
+
+            # Reading training and validation data
+            X_train, X_val, Y_train, Y_val = self.read_training_data(i_cluster)
+
+            # Read scalers
             Xscaler_mean, Xscaler_var, Yscaler_mean, Yscaler_var = self.get_scalers_stats(i_cluster)
-            model = self.create_model(i_cluster, X_val, Y_val)
+
+            # Create model
+            model = self.create_model(i_cluster, X_val.shape[1], Y_val.shape[1])
+
+            # Optimizer and loss function
             optimizer = optim.Adam(model.parameters(), lr=self.learning["initial_learning_rate"])
             loss_fn = nn.MSELoss()
-            # if self.scheduler_option=="ExpLR": # DA: not needed yet (only 1 implemented)
-            scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=self.learning["decay_rate"])
+
+            # Set scheduler
+            if self.scheduler_option=="ExpLR":
+                scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=self.learning["decay_rate"])
+            else:
+                raise ValueError("Only scheduler implemented yet is ExpLR")
             
+            # Perform training
             epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements = self.train_model(i_cluster, model, loss_fn, optimizer, scheduler, X_train, X_val, Y_train, Y_val, Yscaler_mean, np.sqrt(Yscaler_var))
 
+            # Plot training monitoring data (loss, conservation,etc...)
             self.plot_losses_conservation(i_cluster, epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements)
 
+            # Save model (torch format and custom h5 format)
             torch.save(model, os.path.join(self.directory, f"cluster{i_cluster}_model.pth"))
-
             self.save_pt_model_to_h5(model, os.path.join(self.directory, f"cluster{i_cluster}_model.h5"))
 
+            # Save normalization parameters
             np.savetxt(os.path.join(self.directory, f"norm_param_X_cluster{i_cluster}.dat"), np.vstack([Xscaler_mean, Xscaler_var]).T)
             np.savetxt(os.path.join(self.directory, f"norm_param_Y_cluster{i_cluster}.dat"), np.vstack([Yscaler_mean, Yscaler_var]).T)
+
 
     def plot_losses_conservation(self, i_cluster, epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements):
         # LOSSES
