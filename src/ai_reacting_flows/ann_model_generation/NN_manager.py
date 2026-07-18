@@ -99,6 +99,10 @@ class NN_manager():
         #         f"number of clusters in {self.dataset_path} ({self.nb_clusters}) inconsistent with "
         #         f"'networks_types' and/or 'networks_files' length ({len(self.networks_defs)} and {len(self.networks_types)})"
         #     )
+
+        # Check if nb_clusters is consistent with the number of groups in training_data.h5
+        self._check_nb_clusters()
+
         print("CLUSTERING:")
         print(f">> Number of clusters is: {self.nb_clusters}")
 
@@ -124,6 +128,17 @@ class NN_manager():
             if (self.nb_clusters > 1):
                 # Adding copies of clustering parameters for later use in inference
                 self.copy_clusterer()
+
+    
+    def _check_nb_clusters(self):
+
+        with h5py.File(f"{self.dataset_path:s}/training_data.h5", 'r') as h5file_r:
+            top_level_groups = [k for k in h5file_r.keys() if isinstance(h5file_r[k], h5py.Group)]
+            nb_clusters_h5 = len(top_level_groups)
+
+            assert self.nb_clusters==nb_clusters_h5
+            
+
 
     def create_model(self, i_cluster, n_in, n_out):
 
