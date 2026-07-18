@@ -43,9 +43,11 @@ class NN_manager():
 
         database_params = dtb_processing_params["database_params"]
         dtb_type = database_params["database_type"]
+        self.dt_var = database_params["dt_var"]
         
         data_processing = dtb_processing_params["data_processing"]
         self.remove_N2 = not data_processing["with_N_chemistry"]
+        self.log_transform_X = data_processing["log_transform_X"]
         self.log_transform_Y = data_processing["log_transform_Y"]
 
         data_clustering = dtb_processing_params["data_clustering"]
@@ -62,7 +64,7 @@ class NN_manager():
         with open(os.path.join(self.run_folder, f"{prefix}_DTB_{database_params['dtb_folder_suffix']}",params_file), "r") as file:
             dtb_parameters = yaml.safe_load(file)
 
-        self.fuel = dtb_parameters["fuel"]
+        self.fuel = dtb_parameters["fuel"][0]   # Only single fuel for the moment
         self.mechanism = dtb_parameters["mech_file"]
 
         # Model folder name
@@ -183,13 +185,15 @@ class NN_manager():
             y = torch.exp(y)
         return y
 
-    def train_model(self, i_cluster, model, loss_fn, optimizer, scheduler, X_train, X_val, Y_train, Y_val, Yscaler_mean, Yscaler_std):
+    def train_model(self, i_cluster, model, loss_fn, optimizer, scheduler, X_train, X_val, Y_train, Y_val, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std):
 
         X_train = torch.tensor(X_train, dtype=torch.float64)
         Y_train = torch.tensor(Y_train, dtype=torch.float64)
         X_val = torch.tensor(X_val, dtype=torch.float64)
         Y_val = torch.tensor(Y_val, dtype=torch.float64)
         A_element = torch.tensor(self.A_element, dtype=torch.float64)
+        Xscaler_mean = torch.from_numpy(Xscaler_mean).to(torch.float64)
+        Xscaler_std = torch.from_numpy(Xscaler_std).to(torch.float64)
         Yscaler_mean = torch.from_numpy(Yscaler_mean).to(torch.float64)
         Yscaler_std = torch.from_numpy(Yscaler_std).to(torch.float64)
 
@@ -200,6 +204,9 @@ class NN_manager():
 
         A_element = A_element.to(self.device)    # Array to store the loss and validation loss
 
+        Xscaler_mean = Xscaler_mean.to(self.device)
+        Xscaler_std = Xscaler_std.to(self.device)
+        #
         Yscaler_mean = Yscaler_mean.to(self.device)
         Yscaler_std = Yscaler_std.to(self.device)
 
@@ -272,7 +279,10 @@ class NN_manager():
                     stats_sum_yk[idx,2] = sum_yk.max()
 
                     # ELEMENTS CONSERVATION
-                    yval_in = self._inverse_scale(X_val[:,1:-1], Yscaler_mean, Yscaler_std, self.log_transform_Y)
+                    if self.dt_var: # Time needs to be removed from X here
+                        yval_in = self._inverse_scale(X_val[:,1:-1], Xscaler_mean[1:-1], Xscaler_std[1:-1], self.log_transform_X)
+                    else:
+                        yval_in = self._inverse_scale(X_val[:,1:], Xscaler_mean[1:], Xscaler_std[1:], self.log_transform_X)
                     ye_in = torch.matmul(A_element, torch.transpose(yval_in, 0, 1))
                     ye_out = torch.matmul(A_element, torch.transpose(yk, 0, 1))
                     delta_ye = (ye_out - ye_in)/(ye_in+1e-10)
@@ -343,7 +353,7 @@ class NN_manager():
                 raise ValueError("Only scheduler implemented yet is ExpLR or None")
             
             # Perform training
-            epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements = self.train_model(i_cluster, model, loss_fn, optimizer, scheduler, X_train, X_val, Y_train, Y_val, Yscaler_mean, np.sqrt(Yscaler_var))
+            epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements = self.train_model(i_cluster, model, loss_fn, optimizer, scheduler, X_train, X_val, Y_train, Y_val, Xscaler_mean, np.sqrt(Xscaler_var), Yscaler_mean, np.sqrt(Yscaler_var))
 
             # Plot training monitoring data (loss, conservation,etc...)
             self.plot_losses_conservation(i_cluster, epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements)
@@ -386,41 +396,39 @@ class NN_manager():
         plt.savefig( f"{self.directory}/training/cluster_{i_cluster}/training_curves/mass_conservation.png")
 
         # ELEMENTS CONSERVATION
-        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2,2)
 
-        # C
-        ax1.plot(epochs_small, 100*stats_A_elements[:,0,0], color="k")
-        ax1.plot(epochs_small, 100*stats_A_elements[:,0,1], color="k", ls="--")
-        ax1.plot(epochs_small, 100*stats_A_elements[:,0,2], color="k", ls="--")
+        # Build the list of elements actually present, in order,
+        # together with the index they occupy in stats_A_elements
+        elements = []
+        idx = 0
 
-        ax1.set_xlabel("Epoch")
-        ax1.set_ylabel(r"$\Delta Y_C$ $(\%$)")
+        elements.append(("H", idx)); idx += 1
+        elements.append(("O", idx)); idx += 1
+        if not self.remove_N2:
+            elements.append(("N", idx)); idx += 1
+        if self.fuel!="H2":
+            elements.append(("C", idx)); idx += 1
 
-        # H
-        ax2.plot(epochs_small, 100*stats_A_elements[:,1,0], color="k")
-        ax2.plot(epochs_small, 100*stats_A_elements[:,1,1], color="k", ls="--")
-        ax2.plot(epochs_small, 100*stats_A_elements[:,1,2], color="k", ls="--")
+        n = len(elements)
+        ncols = 2
+        nrows = -(-n // ncols)  # ceil division
 
-        ax2.set_xlabel("Epoch")
-        ax2.set_ylabel(r"$\Delta Y_H$ $(\%)$")
+        fig, axes = plt.subplots(nrows, ncols, squeeze=False)
+        axes = axes.flat
 
-        # O
-        ax3.plot(epochs_small, 100*stats_A_elements[:,2,0], color="k")
-        ax3.plot(epochs_small, 100*stats_A_elements[:,2,1], color="k", ls="--")
-        ax3.plot(epochs_small, 100*stats_A_elements[:,2,2], color="k", ls="--")
+        for ax, (label, i) in zip(axes, elements):
+            ax.plot(epochs_small, 100*stats_A_elements[:, i, 0], color="k")
+            ax.plot(epochs_small, 100*stats_A_elements[:, i, 1], color="k", ls="--")
+            ax.plot(epochs_small, 100*stats_A_elements[:, i, 2], color="k", ls="--")
+            ax.set_xlabel("Epoch")
+            ax.set_ylabel(rf"$\Delta Y_{{{label}}}$ $(\%)$")
 
-        ax3.set_xlabel("Epoch")
-        ax3.set_ylabel(r"$\Delta Y_O$ $(\%)$")
-
-        # N
-        ax4.plot(epochs_small, 100*stats_A_elements[:,3,0], color="k")
-        ax4.plot(epochs_small, 100*stats_A_elements[:,3,1], color="k", ls="--")
-        ax4.plot(epochs_small, 100*stats_A_elements[:,3,2], color="k", ls="--")
-
-        ax4.set_xlabel("Epoch")
-        ax4.set_ylabel(r"$\Delta Y_N$ $(\%)$")
+        # hide any unused axes (e.g. odd number of elements)
+        for ax in list(axes)[n:]:
+            ax.set_visible(False)
 
         fig.tight_layout()
+
 
         plt.savefig( f"{self.directory}/training/cluster_{i_cluster}/training_curves/elements_conservation.png")
 

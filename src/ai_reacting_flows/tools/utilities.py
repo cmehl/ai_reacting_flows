@@ -268,20 +268,20 @@ def get_molar_mass_atomic_matrix(species, fuel, with_N2_chemistry):
     #
     mass_per_atom = np.array([12.011, 1.008, 15.999, 14.007])
     #
-    A_atomic = np.copy(atomic_array)
+    A_element = np.copy(atomic_array)
     for j in range(4):
-        A_atomic[j,:] *=  mass_per_atom[j]
+        A_element[j,:] *=  mass_per_atom[j]
     for k in range(nb_species):
-        A_atomic[:,k] /=  mol_weights[k]
+        A_element[:,k] /=  mol_weights[k]
 
     # Carbon not considered if fuel -> To make more general (get which atoms are in the list of species)
     if fuel==["H2"]:
-        A_atomic = A_atomic[1:,:]
+        A_element = A_element[1:,:]
 
     if with_N2_chemistry is False:
-        A_atomic = A_atomic[:-1,:]
+        A_element = A_element[:-1,:]
 
-    return A_atomic
+    return A_element
 
 
 def compute_X_element(species, Yk):
