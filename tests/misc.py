@@ -130,57 +130,84 @@ def extract_h2_dtvar_dtb_histograms(dtb_file, histo_folder, tol):
     return res
 
 def check_h2_training_histograms(dtb_folder, histo_folder, tol):
-    files = ['X_train.csv', 'Y_train.csv', 'X_val.csv', 'Y_val.csv']
 
-    i = 0
-    for file in files:
-        print(file)
-        try:
-            data = pd.read_csv(f"{dtb_folder:s}/{file:s}")
-        except FileNotFoundError:
-            print(f"File missing: {file}")
+    datasets = ['X_train', 'Y_train', 'X_val', 'Y_val']
+
+    h5_path = f"{dtb_folder:s}/training_data.h5"
+
+    try:
+        h5file = h5py.File(h5_path, 'r')
+    except (FileNotFoundError, OSError):
+        print(f"File missing: {h5_path}")
+        return False
+    
+    group = "CLUSTER_0"
+
+    with h5file as f:
+
+        if group not in f:
+            print(f"Group missing: {group}")
             return False
+        grp = f[group]
 
-        if data.isnull().sum().sum() > 0:
-            print(f"{file:s} misses values")
-            return False
-        if (data.dtypes == object).any():
-            print(f"{file:s} has NaN")
-            return False
+        i = 0
+        for name in datasets:
+            
+            print(name)
+            if name not in grp:
+                print(f"Dataset missing: {name}")
+                return False
 
-        distances = []
-        for col in data.columns:
-            # references histogram generated using the following code (to use again if reference is to change)
-            # counts, bin_edges = np.histogram(data[col], bins=100)
-            # bin_edges[-1] = bin_edges[-1] * np.float64(1.01) if bin_edges[-1] > 0.0 else bin_edges[-1] * np.float64(0.99)
-            # bin_edges[0] = bin_edges[0] * np.float64(0.99) if bin_edges[0] > 0.0 else bin_edges[0] * np.float64(1.01)
-            # counts, _ = np.histogram(data[col], bins=bin_edges)
-            # np.savez(f"{histo_folder:s}/{file.split('.')[0]:s}_{col:s}_hist.npz", counts=counts, bin_edges=bin_edges)
+            dset = grp[name]
+            raw = dset[()]
+            cols = [c.decode() if isinstance(c, bytes) else c for c in dset.attrs['cols']]
 
-            histo_ref = np.load(f"{histo_folder:s}/{file.split('.')[0]:s}_{col:s}_hist.npz")
-            counts_ref = histo_ref["counts"]
-            bin_edges_ref = histo_ref["bin_edges"]
+            if raw.ndim == 1:
+                raw = raw.reshape(-1, 1)
 
-            #threshold found using the following code
-            # noise = data[col] * (1.0 + np.random.normal(loc=0,scale=0.01,size=len(data)))
-            # counts, _ = np.histogram(noise, bins=bin_edges_ref)
-            # print(f"noise distance for {col:s} is {wasserstein_distance(counts, counts_ref):f}")
+            data = pd.DataFrame(raw, columns=cols)
 
-            # if col in ["Temperature","H2","O2"]:
-            #     print(f"Histograms for {col:s}:")
-            #     print(counts)
-            #     print(counts_ref)
-            #     print(bin_edges_ref)
+            if data.isnull().sum().sum() > 0:
+                print(f"{name} misses values")
+                return False
+            if (data.dtypes == object).any():
+                print(f"{name} has NaN")
+                return False
 
-            counts, _ = np.histogram(data[col], bins=bin_edges_ref)
-            distances.append(wasserstein_distance(counts, counts_ref))
-            print(f"distance for {col:s} is {distances[-1]:f}")
-        
-        res = np.array(distances)
-        res -= tol[i]
-        if np.max(res) > np.float64(0.0):
-            return False
-        i+=1
+            distances = []
+            for col in data.columns:
+                # references histogram generated using the following code (to use again if reference is to change)
+                # counts, bin_edges = np.histogram(data[col], bins=100)
+                # bin_edges[-1] = bin_edges[-1] * np.float64(1.01) if bin_edges[-1] > 0.0 else bin_edges[-1] * np.float64(0.99)
+                # bin_edges[0] = bin_edges[0] * np.float64(0.99) if bin_edges[0] > 0.0 else bin_edges[0] * np.float64(1.01)
+                # counts, _ = np.histogram(data[col], bins=bin_edges)
+                # np.savez(f"{histo_folder:s}/{file.split('.')[0]:s}_{col:s}_hist.npz", counts=counts, bin_edges=bin_edges)
+
+                histo_ref = np.load(f"{histo_folder:s}/{name:s}_{col:s}_hist.npz")
+                counts_ref = histo_ref["counts"]
+                bin_edges_ref = histo_ref["bin_edges"]
+
+                #threshold found using the following code
+                # noise = data[col] * (1.0 + np.random.normal(loc=0,scale=0.01,size=len(data)))
+                # counts, _ = np.histogram(noise, bins=bin_edges_ref)
+                # print(f"noise distance for {col:s} is {wasserstein_distance(counts, counts_ref):f}")
+
+                # if col in ["Temperature","H2","O2"]:
+                #     print(f"Histograms for {col:s}:")
+                #     print(counts)
+                #     print(counts_ref)
+                #     print(bin_edges_ref)
+
+                counts, _ = np.histogram(data[col], bins=bin_edges_ref)
+                distances.append(wasserstein_distance(counts, counts_ref))
+                print(f"distance for {col:s} is {distances[-1]:f}")
+            
+            res = np.array(distances)
+            res -= tol[i]
+            if np.max(res) > np.float64(0.0):
+                return False
+            i+=1
+    
     return True
 
 # def check_csv_files(dtb_folder, ref_folder, tol):

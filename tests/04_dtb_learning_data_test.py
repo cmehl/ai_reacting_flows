@@ -56,4 +56,4 @@ def test_dtvar_dtb_processing():
     tol.append(np.array([31.14, 19.51, 22.92, 58.46, 26.6, 40.58, 22.56, 19.82]))
     tol.append(np.array([15.82, 10.69, 7.92, 8.32, 19.92, 8.42, 12.74, 8.0, 7.06]))
     tol.append(np.array([10.76, 7.95, 9.16, 20.1, 10.25, 14.15, 8.52, 8.15]))
-    assert check_h2_training_histograms(f"./STOCH_DTB_{folder_suffix:s}/dtb_resampled/cluster0","H2_TEST_training_data", tol)
+    assert check_h2_training_histograms(f"./STOCH_DTB_{folder_suffix:s}/dtb_resampled/","H2_TEST_training_data", tol)
