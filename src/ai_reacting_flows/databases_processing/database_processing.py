@@ -100,10 +100,7 @@ class LearningDatabase(object):
         self.get_database_from_h5()
 
         # Extracting some information
-        if self.dt_var:
-            self.species_names = self.X.columns[2:-3] # -3 because progvar, HRR and time step
-        else:
-            self.species_names = self.X.columns[2:-2] # -2 because progvar and HRR
+        self.species_names = self.X.columns[2:-2] # -2 because progvar and HRR
         print(f" >> species names: {self.species_names}")
         self.nb_species = len(self.species_names)
 
@@ -432,6 +429,15 @@ class LearningDatabase(object):
 
     # Re-sampling based on heat release rate
     def undersample_HRR(self, jpdf_var_1, jpdf_var_2, hrr_func, keep_low_c, n_samples=None, n_bins=100, seed=1991, plot_distrib=False):
+
+        if self.clusterized_dataset and self.dt_var and self.clusterize_on in ("dt", "all"):
+            raise NotImplementedError(
+                "undersample_HRR does not currently support resampling after "
+                "clustering on 'dt' or 'all' with dt_var=True, because the "
+                "resulting cluster-label arrays would no longer match the "
+                "resampled data. Cluster on 'phys' before resampling, or "
+                "re-cluster after calling undersample_HRR."
+            )
         
         # Save initial states for later use
         self.X_old = self.X.copy()
