@@ -156,7 +156,7 @@ class NN_manager():
                 layers_type = network_parameters["layers_type"]
             
                 model = model_type[network_type](self.device, nb_units_in_layers_list, layers_type, layers_activation_list)
-            elif ("DeepONet" in network_type):
+            elif (network_type=="DeepONet"):
                 # Network shapes
                 nb_units_in_layers_list = copy.deepcopy(network_parameters["nb_units_in_layers_list"])
                 layers_activation_list = {}
@@ -169,7 +169,7 @@ class NN_manager():
                 nb_units_in_layers_list["trunk"].insert(0,1)
                 nb_units_in_layers_list["trunk"].append(n_neurons*n_out)
                 model = model_type[network_type](self.device, nb_units_in_layers_list, layers_type, layers_activation_list, n_out, n_neurons)
-            elif ("DeepONetShift" in network_type):
+            elif (network_type=="DeepONetShift"):
                 # Network shapes
                 nb_units_in_layers_list = copy.deepcopy(network_parameters["nb_units_in_layers_list"])
                 layers_activation_list = {}
@@ -248,6 +248,10 @@ class NN_manager():
         val_loss_list = np.empty(n_val_points)
 
         for epoch in range(n_epochs):
+
+            # Shuffling training data before each epoch
+            perm = torch.randperm(len(X_train), device=self.device)
+            X_train, Y_train = X_train[perm], Y_train[perm]
 
             # Training parameters
             epoch_loss = 0.0

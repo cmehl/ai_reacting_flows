@@ -1,5 +1,5 @@
-database_path: STOCH_DTB_H2_POF_2023/dtb_resampled
-model_name_suffix: H2_POF_2023
+database_path: STOCH_DTB_NH3_PYRO_EMST/dtb_nh3_pyro_emst
+model_name_suffix: NH3_PYRO_1
 new_model_folder: true
 networks_types:
 - MLP
@@ -10,30 +10,36 @@ networks_def:
 clusters:
   cluster0:
     nb_units_in_layers_list:
-    - 20
-    - 20
+    - 150
+    - 100
+    - 100
     layers_activation_list:
-    - tanh
-    - tanh
+    - GeLU
+    - GeLU
+    - GeLU
     - Id
     layers_type:
+    - dense
     - dense
     - dense
     - dense
   cluster1:
     nb_units_in_layers_list:
-    - 40
-    - 40
+    - 150
+    - 100
+    - 100
     layers_activation_list:
-    - tanh
-    - tanh
+    - GeLU
+    - GeLU
+    - GeLU
     - Id
     layers_type:
     - dense
     - dense
     - dense
+    - dense
 learning:
-  initial_learning_rate: 0.001
+  initial_learning_rate: 0.01
   batch_size: 2048
   epochs_list:
   - 500

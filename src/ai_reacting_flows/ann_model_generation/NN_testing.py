@@ -5,6 +5,7 @@ import joblib
 import pickle
 import shutil
 import oyaml as yaml
+import h5py
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -34,19 +35,24 @@ class NNTesting():
         
         with open(f"{self.dataset_path}/dtb_processing.yaml", "r") as file:
             dtb_processing_params = yaml.safe_load(file)
-        self.log_transform_X = dtb_processing_params["log_transform_X"]
-        self.log_transform_Y = dtb_processing_params["log_transform_Y"]
-        self.threshold = dtb_processing_params["threshold"]
-        self.remove_N2 = not dtb_processing_params["with_N_chemistry"]
-        self.clustering_method  = dtb_processing_params["clustering_method"]
-        self.output_omegas = dtb_processing_params["output_omegas"]
+
+        data_processing = dtb_processing_params["data_processing"]
+        self.log_transform_X = data_processing["log_transform_X"]
+        self.log_transform_Y = data_processing["log_transform_Y"]
+        self.threshold = data_processing["threshold"]
+        self.remove_N2 = not data_processing["with_N_chemistry"]
+        self.output_omegas = data_processing["output_omegas"]
+
+        data_clustering = dtb_processing_params["data_clustering"]
+        self.clustering_method  = data_clustering["clustering_method"]
+
+        database_params = dtb_processing_params["database_params"]
+        self.fuel = database_params["fuel"][0] # fuel is a list, testing only takes 1 component fuel so far
+        self.mech = database_params["mech_file"]
 
         # Getting parameters from ANN model
-        with open(os.path.join(self.run_folder, f"STOCH_DTB_{dtb_processing_params['dtb_folder_suffix']}","dtb_params.yaml"), "r") as file:
+        with open(os.path.join(self.run_folder, f"STOCH_DTB_{database_params['dtb_folder_suffix']}","dtb_params.yaml"), "r") as file:
             dtb_parameters = yaml.safe_load(file)
-        
-        self.fuel = dtb_parameters["fuel"][0] # fuel is a list, testing only takes 1 component fuel so far
-        self.mech = dtb_parameters["mech_file"]
 
         # Chemistry (maybe an information to get from model folder ?)
         self.spec_to_plot = testing_parameters["spec_to_plot"]
@@ -505,15 +511,35 @@ class NNTesting():
         #         summary(self.models_list[i], col_names=["input_size", "output_size", "num_params"])
 
     def load_scalers(self):
+
         self.Xscaler_list = []
         self.Yscaler_list = []
 
-        for i in range(self.nb_clusters):
-            Xscaler = joblib.load(f"{self.dataset_path}/cluster{i}/Xscaler.save")
-            Yscaler = joblib.load(f"{self.dataset_path}/cluster{i}/Yscaler.save") 
+        for i_cluster in range(self.nb_clusters):
 
-            self.Xscaler_list.append(Xscaler)
-            self.Yscaler_list.append(Yscaler)
+            with h5py.File(f"{self.dataset_path:s}/training_data.h5", 'r') as h5file_r:
+
+                grp = h5file_r[f"CLUSTER_{i_cluster}"]
+
+                Xscaler_array = grp['Xscaler'][:]
+                Yscaler_array = grp['Yscaler'][:]
+
+                Xscaler_mean = Xscaler_array[:, 0]
+                Xscaler_var = Xscaler_array[:, 1]
+                #
+                Yscaler_mean = Yscaler_array[:, 0]
+                Yscaler_var = Yscaler_array[:, 1]
+
+                Xscaler_std = np.sqrt(Xscaler_var)
+                Yscaler_std = np.sqrt(Yscaler_var)
+
+                # shape (n_features, 2): column 0 = mean, column 1 = std
+                Xscaler_mean_std = np.column_stack((Xscaler_mean, Xscaler_std))
+                Yscaler_mean_std = np.column_stack((Yscaler_mean, Yscaler_std))
+
+                self.Xscaler_list.append(Xscaler_mean_std)
+                self.Yscaler_list.append(Yscaler_mean_std)
+
 
     def load_clustering_algorithm(self):
 
@@ -560,6 +586,29 @@ class NNTesting():
         # By default if no clustering, we assume that we only have a cluster 0
         else:
             self.cluster = 0
+
+
+    def _inverse_scale(self, scaled_y, mean, std):
+        """Inverse scaling helper for mass fractions.
+
+        scaled_y: array in scaled space
+        mean, std: scaling statistics (tensors on same device)
+        """
+        y = mean + (std + 1e-7) * scaled_y
+
+        return y
+    
+
+    def _scale(self, x, mean, std):
+        """Scaling helper for mass fractions.
+
+        x: array in physical (original) space
+        mean, std: scaling statistics (tensors on same device)
+        """
+        
+        scaled_tensor = (x - mean) / (std + 1e-7)
+
+        return scaled_tensor
 
 #-----------------------------------------------------------------------
 #   TIME ADVANCEMENT FUNTIONS 
@@ -620,6 +669,9 @@ class NNTesting():
         
         # input of NN
         log_state = log_state.reshape(1, -1)
+        mean_X = self.Xscaler_list[self.cluster][:,0]
+        std_X = self.Xscaler_list[self.cluster][:,1]
+        NN_input = self._scale(log_state, mean_X, std_X)
         NN_input = self.Xscaler_list[self.cluster].transform(log_state)
                 
         # New state predicted by ANN
