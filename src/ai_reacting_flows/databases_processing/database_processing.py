@@ -682,9 +682,17 @@ class LearningDatabase(object):
             Y_p = Y_p[Y_cols] 
             
 
-            # Clip if logarithm transformation
+            # Species (and Temperature) columns to which the threshold/clip legitimately applies.
+            # dt (if present) is excluded: it's a timestep, not a mass fraction, and must not be
+            # floored to the same threshold as chemical species.
+            if self.dt_var:
+                clip_cols = X_cols[:-1]   # everything except trailing "dt" column
+            else:
+                clip_cols = X_cols
+
+            # Clip if logarithm transformation (species/Temperature only)
             if self.log_transform_X>0:
-                X_p[X_p < self.threshold] = self.threshold
+                X_p[clip_cols] = X_p[clip_cols].clip(lower=self.threshold)
             if self.log_transform_Y>0:
                 Y_p[Y_p < self.threshold] = self.threshold
 
@@ -695,16 +703,18 @@ class LearningDatabase(object):
                 else:
                     X_p_save = X_p.loc[:, X_cols[1:]]
 
-            # Applying transformation (log of BCT)
+            # Applying transformation (log of BCT) to species/Temperature
             if self.log_transform_X==1:
-                X_p.loc[:, X_cols[1:]] = np.log(X_p[X_cols[1:]])
+                X_p.loc[:, clip_cols[1:]] = np.log(X_p[clip_cols[1:]])
             elif self.log_transform_X==2:
-                X_p.loc[:, X_cols[1:]] = (X_p[X_cols[1:]]**self.lambda_bct - 1.0)/self.lambda_bct
-            #
-            if self.log_transform_Y==1:
-                Y_p.loc[:, Y_cols] = np.log(Y_p[Y_cols])
-            elif self.log_transform_Y==2:
-                Y_p.loc[:, Y_cols] = (Y_p[Y_cols]**self.lambda_bct - 1.0)/self.lambda_bct
+                X_p.loc[:, clip_cols[1:]] = (X_p[clip_cols[1:]]**self.lambda_bct - 1.0)/self.lambda_bct
+
+            # dt gets its own log transform, unclipped by the species threshold.
+            # A tiny epsilon guard is still needed to avoid log(0)/log(negative) if dt can be 0,
+            # but this should NOT be self.threshold (a species-scale quantity).
+            if self.dt_var and self.log_transform_X>0:
+                dt_eps = 1e-300  # or a physically meaningful floor for your smallest real timestep
+                X_p["dt"] = np.log(X_p["dt"].clip(lower=dt_eps))
 
 
             # If differences are considered
