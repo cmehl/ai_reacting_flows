@@ -49,6 +49,8 @@ class NN_manager():
         self.remove_N2 = not data_processing["with_N_chemistry"]
         self.log_transform_X = data_processing["log_transform_X"]
         self.log_transform_Y = data_processing["log_transform_Y"]
+        self.lambda_bct = data_processing.get("lambda_bct", 0.1)
+        self.output_omegas = data_processing["output_omegas"]
 
         data_clustering = dtb_processing_params["data_clustering"]
         self.clustering_type = data_clustering["clustering_method"]
@@ -188,17 +190,31 @@ class NN_manager():
         return model
     
 
-    def _inverse_scale(self, scaled_tensor, mean, std, log_transform: bool):
+    def _inverse_scale(self, scaled_tensor, mean, std, log_transform: int):
         """Inverse scaling helper for mass fractions.
-
+ 
         scaled_tensor: tensor in scaled space
         mean, std: scaling statistics (tensors on same device)
-        log_transform: whether data were log-transformed
+        log_transform: transform code used at database-processing time
+            (0: none, 1: plain log, 2: Box-Cox-type transform with self.lambda_bct).
+            Passing a bool here is still supported for backward compatibility,
+            with True treated as log_transform==1.
         """
         y = mean + (std + 1e-7) * scaled_tensor
-        if log_transform:
+ 
+        # Normalize bool -> int for backward compatibility with old call sites.
+        if isinstance(log_transform, bool):
+            log_transform = 1 if log_transform else 0
+ 
+        if log_transform == 1:
             y = torch.exp(y)
+        elif log_transform == 2:
+            # Inverse of: y_t = (y**lambda - 1) / lambda  =>  y = (y_t * lambda + 1)**(1/lambda)
+            y = (y * self.lambda_bct + 1.0) ** (1.0 / self.lambda_bct)
+        # log_transform == 0: no-op, y already in physical space
+ 
         return y
+    
 
     def train_model(self, i_cluster, model, loss_fn, optimizer, scheduler, X_train, X_val, Y_train, Y_val, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std):
 
@@ -287,10 +303,23 @@ class NN_manager():
                     y_val_pred = model(X_val)
                     val_loss = loss_fn(y_val_pred, Y_val)
 
+                    # Inverse-scale the model's input state (species/Temperature),
+                    # excluding the time-step column when dt_var is used.
+                    if self.dt_var: # Time needs to be removed from X here
+                        yval_in = self._inverse_scale(X_val[:,1:-1], Xscaler_mean[1:-1], Xscaler_std[1:-1], self.log_transform_X)
+                    else:
+                        yval_in = self._inverse_scale(X_val[:,1:], Xscaler_mean[1:], Xscaler_std[1:], self.log_transform_X)
+
                     # SUM OF MASS FRACTION
                     # Inverse scale done by hand to stay with Torch arrays
                     yk = self._inverse_scale(y_val_pred, Yscaler_mean, Yscaler_std, self.log_transform_Y)
-                    sum_yk = yk.sum(axis=1)
+
+                    if self.output_omegas:
+                        yk_abs = yval_in + yk
+                    else:
+                        yk_abs = yk
+
+                    sum_yk = yk_abs.sum(axis=1)
                     sum_yk = sum_yk.detach().cpu().numpy()
                     idx = epoch // val_every
                     stats_sum_yk[idx,0] = sum_yk.mean() 
@@ -298,12 +327,8 @@ class NN_manager():
                     stats_sum_yk[idx,2] = sum_yk.max()
 
                     # ELEMENTS CONSERVATION
-                    if self.dt_var: # Time needs to be removed from X here
-                        yval_in = self._inverse_scale(X_val[:,1:-1], Xscaler_mean[1:-1], Xscaler_std[1:-1], self.log_transform_X)
-                    else:
-                        yval_in = self._inverse_scale(X_val[:,1:], Xscaler_mean[1:], Xscaler_std[1:], self.log_transform_X)
                     ye_in = torch.matmul(A_element, torch.transpose(yval_in, 0, 1))
-                    ye_out = torch.matmul(A_element, torch.transpose(yk, 0, 1))
+                    ye_out = torch.matmul(A_element, torch.transpose(yk_abs, 0, 1))
                     delta_ye = (ye_out - ye_in)/(ye_in+1e-10)
                     delta_ye = delta_ye.detach().cpu().numpy()
                     stats_A_elements[idx, :, 0] = delta_ye.mean(axis=1)
