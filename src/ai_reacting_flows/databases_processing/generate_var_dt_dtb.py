@@ -287,23 +287,33 @@ def read_database_flmts(file_h5: str):
 
 def react_multi_dt(state: np.ndarray, gas: ct.Solution, dt_list: np.ndarray):
 
-    """React one state for multiple time steps and return computed states.
+    """React one state for multiple time steps and return the resulting states.
+
+    The input state is advanced independently for each time step in
+    `dt_list`, i.e. every reaction starts fresh from `state` (not
+    cumulatively from the previous result).
 
     Parameters
     ----------
     state : ndarray
-        Input state array of shape (n_features, 2) where column 0 contains
-        the current values and column 1 will be filled with the reacted ones.
+        1-D input state array of length n_features, laid out as
+        [T, P, Y_1, ..., Y_nsp, progvar, HRR]. Only T, P, and Y are used
+        as input (progvar and HRR are ignored on input and overwritten
+        with dummy values on output).
     gas : ct.Solution
         Cantera solution used for reactor integration.
     dt_list : ndarray
-        Time steps for which the reactor will be advanced.
+        1-D array of time steps (in seconds) for which the reactor will
+        be independently advanced from the initial state.
 
     Returns
     -------
-    new_states : ndarray or None
-        Stacked states (one per dt). Returns None if the initial temperature
-        is below `T_thresh`.
+    new_states : ndarray
+        Array of shape (n_features, len(dt_list)). Column i contains the
+        state reached after advancing from `state` by `dt_list[i]`:
+        rows 0 and 1 are T and P, rows 2:-2 are the mass fractions Y,
+        and the last two rows (progvar, HRR) are set to -1.0 dummy
+        values (not computed here).
     """
 
     # Unsolved pb: if Yk from NN is inputed here;
