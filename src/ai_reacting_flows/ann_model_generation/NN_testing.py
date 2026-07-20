@@ -48,6 +48,7 @@ class NNTesting():
         self.clustering_method  = data_clustering["clustering_method"]
 
         database_params = dtb_processing_params["database_params"]
+        self.dt_var = database_params["dt_var"]
         self.fuel = database_params["fuel"][0] # fuel is a list, testing only takes 1 component fuel so far
         self.mech = database_params["mech_file"]
 
@@ -657,15 +658,35 @@ class NNTesting():
             state_vector[state_vector<self.threshold] = self.threshold
         elif self.log_transform_X==2:
             state_vector[state_vector<0.0] = 0.0
-            
-        log_state = np.zeros(self.nb_species_ANN+1)
-        log_state[0] = state_vector[0]
-        if self.log_transform_X==1:
-            log_state[1:] = np.log(state_vector[1:])
-        elif self.log_transform_X==2:
-            log_state[1:] = (state_vector[1:]**self.lambda_bct - 1.0)/self.lambda_bct
+
+        # Build log_state input vector.
+        # For dt_var=False: [T, species...]
+        # For dt_var=True:  [T, species..., dt] with dt transformed consistently with database_processing.
+        if self.dt_var:
+            # state_vector currently contains [T, species...], dt comes from the argument.
+            # We do NOT clip dt by species threshold; apply its own log transform with a small epsilon.
+            dt_eps = 1e-300
+            dt_logged = np.log(max(dt, dt_eps)) if self.log_transform_X > 0 else dt
+
+            log_state = np.zeros(self.nb_species_ANN + 2)
+            log_state[0] = state_vector[0]
+            if self.log_transform_X == 1:
+                log_state[1:self.nb_species_ANN+1] = np.log(state_vector[1:])
+            elif self.log_transform_X == 2:
+                log_state[1:self.nb_species_ANN+1] = (state_vector[1:]**self.lambda_bct - 1.0)/self.lambda_bct
+            else:
+                log_state[1:self.nb_species_ANN+1] = state_vector[1:]
+            # Last entry is dt (optionally logged)
+            log_state[-1] = dt_logged
         else:
-            log_state[1:] = state_vector[1:]
+            log_state = np.zeros(self.nb_species_ANN+1)
+            log_state[0] = state_vector[0]
+            if self.log_transform_X==1:
+                log_state[1:] = np.log(state_vector[1:])
+            elif self.log_transform_X==2:
+                log_state[1:] = (state_vector[1:]**self.lambda_bct - 1.0)/self.lambda_bct
+            else:
+                log_state[1:] = state_vector[1:]
         
         # input of NN
         log_state = log_state.reshape(1, -1)
@@ -869,7 +890,6 @@ class NNTesting():
 
 
         return Y_new_corr
-
 
 
 
