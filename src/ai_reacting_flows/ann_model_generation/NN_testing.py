@@ -114,23 +114,47 @@ class NNTesting():
         # Some constants used in the code
         self.W_atoms = np.array([12.011, 1.008, 15.999, 14.007]) # Order: C, H, O, N
 
+        # Cached validation data (optional, used by evaluate_on_validation_set)
+        self._val_data_loaded = False
+        self._X_val = []
+        self._Y_val = []
+
 #-----------------------------------------------------------------------
 #   MAIN TESTING FUNCTIONS
 #-----------------------------------------------------------------------
-    def run_0D_ignition_case(self, phi, T0, pressure, dt, nb_ite=100):
-        """Run one 0D ignition case and return structured results.
+    def _run_0D_case(self, T0, pressure, dt, nb_ite, gas_init_compo, label_prefix="ignition"):
+        """Internal helper to run one 0D constant-pressure reactor case.
 
-        This is the core simulation routine, without plotting or printing, so it can be
-        reused programmatically for parameter sweeps and error aggregation.
+        Parameters
+        ----------
+        T0 : float
+            Initial temperature [K].
+        pressure : float
+            Initial pressure [Pa].
+        dt : float
+            Time step used by both CVODE and ANN loops.
+        nb_ite : int
+            Number of time steps.
+        gas_init_compo : str
+            Cantera composition string used for the initial state (e.g. fuel+air
+            for ignition, or pure fuel for pyrolysis).
+        label_prefix : str
+            Label used in the returned dictionary keys for ignition-delay
+            quantities (e.g. "ignition" or "pyrolysis").
+
+        Returns
+        -------
+        dict
+            Structured results containing CVODE and ANN states, ignition-like
+            delays, equilibrium temperatures, error metrics, and conservation
+            diagnostics.
         """
         tau_ign_CVODE = 0.0
         tau_ign_ANN = 0.0
 
         #-------------------- INITIALISATION---------------------------
         # Setting composition
-        fuel_ox_ratio = self.gas.n_atoms(self.fuel,'C') + 0.25*self.gas.n_atoms(self.fuel,'H') - 0.5*self.gas.n_atoms(self.fuel,'O')
-        compo = f'{self.fuel}:{phi:3.2f}, O2:{fuel_ox_ratio:3.2f}, N2:{fuel_ox_ratio * 0.79 / 0.21:3.2f}'
-        self.gas.TPX = T0, pressure, compo
+        self.gas.TPX = T0, pressure, gas_init_compo
 
         # Defining reactor
         r = ct.IdealGasConstPressureReactor(self.gas)
@@ -236,12 +260,13 @@ class NNTesting():
         # Error on equilibrium temperature (percent)
         error_Teq = 100.0*abs(Teq_ref - Teq_ann)/Teq_ref
 
+        # Use configurable prefix to label ignition-like delays
         return {
             "states_cvode": states,
             "state_ref": state_ref,
             "states_ann": state_save,
-            "tau_ign_cvode": tau_ign_CVODE,
-            "tau_ign_ann": tau_ign_ANN,
+            f"tau_{label_prefix}_cvode": tau_ign_CVODE,
+            f"tau_{label_prefix}_ann": tau_ign_ANN,
             "Teq_cvode": Teq_ref,
             "Teq_ann": Teq_ann,
             "error_Teq_percent": error_Teq,
@@ -251,6 +276,64 @@ class NNTesting():
             "ann_calls": ann_calls,
             "cvode_calls": cvode_calls,
         }
+
+    def run_0D_ignition_case(self, phi, T0, pressure, dt, nb_ite=100):
+        """Run one 0D ignition case (fuel+air, parametrized by phi).
+
+        This is the core simulation routine for premixed ignition, without
+        plotting or printing, so it can be reused programmatically for
+        parameter sweeps and error aggregation.
+        """
+
+        # Mixture composition: premixed fuel + air parameterized by phi
+        fuel_ox_ratio = (
+            self.gas.n_atoms(self.fuel, 'C')
+            + 0.25 * self.gas.n_atoms(self.fuel, 'H')
+            - 0.5 * self.gas.n_atoms(self.fuel, 'O')
+        )
+        compo = f"{self.fuel}:{phi:3.2f}, O2:{fuel_ox_ratio:3.2f}, N2:{fuel_ox_ratio * 0.79 / 0.21:3.2f}"
+
+        return self._run_0D_case(T0, pressure, dt, nb_ite, compo, label_prefix="ignition")
+
+    def run_0D_pyrolysis_case(self, T0, pressure, dt, nb_ite=100, diluent=None, X_diluent=0.0):
+        """Run one 0D pyrolysis case (pure fuel or fuel+diluent).
+
+        This uses the same CVODE/ANN integration as the ignition case but
+        initializes the gas with a composition that does not rely on an
+        equivalence ratio.
+
+        Parameters
+        ----------
+        T0 : float
+            Initial temperature [K].
+        pressure : float
+            Initial pressure [Pa].
+        dt : float
+            Time step used by both CVODE and ANN loops.
+        nb_ite : int, optional
+            Number of time steps.
+        diluent : str or None, optional
+            Optional inert species name (e.g. "N2", "Ar"). If None, a pure
+            fuel case is used.
+        X_diluent : float, optional
+            Mole fraction of diluent if present; fuel fraction is 1 - X_diluent.
+
+        Returns
+        -------
+        dict
+            Structured results in the same format as ignition cases, with
+            ignition-like delays labeled under the "pyrolysis" prefix.
+        """
+
+        if diluent is None:
+            # Pure fuel case
+            compo = f"{self.fuel}:1.0"
+        else:
+            # Fuel + inert diluent, simple two-component mixture
+            X_fuel = max(0.0, 1.0 - X_diluent)
+            compo = f"{self.fuel}:{X_fuel:3.2f}, {diluent}:{X_diluent:3.2f}"
+
+        return self._run_0D_case(T0, pressure, dt, nb_ite, compo, label_prefix="pyrolysis")
 
     def run_0D_ignition_series(self, cases):
         """Run a series of 0D ignition cases and aggregate errors.
@@ -331,8 +414,8 @@ class NNTesting():
         state_save = result["states_ann"]
         atomic_cons = result["atomic_cons"]
         sumYs = result["sumYs"]
-        tau_ign_CVODE = result["tau_ign_cvode"]
-        tau_ign_ANN = result["tau_ign_ann"]
+        tau_ign_CVODE = result["tau_ignition_cvode"]
+        tau_ign_ANN = result["tau_ignition_ann"]
         error_Teq = result["error_Teq_percent"]
         ann_calls = result["ann_calls"]
         cvode_calls = result["cvode_calls"]
@@ -421,6 +504,125 @@ class NNTesting():
         # Ignition delays comparison
         print(f" >> CVODE ignition delay: {tau_ign_CVODE}")
         print(f" >> ANN ignition delay: {tau_ign_ANN}")
+
+    def test_0D_pyrolysis(self, T0, pressure, dt, nb_ite=100, diluent=None, X_diluent=0.0):
+        """Wrapper around run_0D_pyrolysis_case with plotting.
+
+        The plotting logic mirrors test_0D_ignition but folder naming and
+        printed labels reflect the pyrolysis case and do not include phi.
+        """
+
+        result = self.run_0D_pyrolysis_case(T0, pressure, dt, nb_ite, diluent=diluent, X_diluent=X_diluent)
+
+        states = result["states_cvode"]
+        state_save = result["states_ann"]
+        atomic_cons = result["atomic_cons"]
+        sumYs = result["sumYs"]
+        tau_pyro_CVODE = result["tau_pyrolysis_cvode"]
+        tau_pyro_ANN = result["tau_pyrolysis_ann"]
+        error_Teq = result["error_Teq_percent"]
+        ann_calls = result["ann_calls"]
+        cvode_calls = result["cvode_calls"]
+
+        if self.verbose:
+            print(f"\nError on equilibrium temperature (pyrolysis case) is: {error_Teq} % \n")
+
+        print("\n NUMBER OF CALLS TO SOLVERS (pyrolysis):")
+        print(f"   >>> Number of ANN calls: {ann_calls}")
+        print(f"   >>> Number of CVODE calls: {cvode_calls}")
+
+        #-------------------- PLOTTING ---------------------------
+        ftsize = 14
+
+        # Create directory with plots (no phi in naming)
+        folder = f'./plots_0D_pyro_T0#{T0}'
+        if os.path.isdir(folder):
+            shutil.rmtree(folder)
+        os.makedirs(folder)
+
+        fig, ax = plt.subplots(1, 1)
+        ax.plot(states.t, states.T, ls="--", color="k", lw=2, label="CVODE")
+        ax.plot(states.t, state_save[:, 0], ls="-", color="b", lw=2, marker='x', label="NN")
+        ax.set_xlabel('$t$ $[ms]$', fontsize=ftsize)
+        ax.set_ylabel('$T$ $[K]$', fontsize=ftsize)
+        ax.legend()
+        fig.tight_layout()
+
+        fig.savefig(folder + "/Temperature.png", dpi=500)
+
+        for spec in self.spec_to_plot:
+            fig, ax = plt.subplots(1, 1)
+            ax.plot(states.t, states.Y[:, self.gas.species_index(spec)], ls="--", color="k", lw=2, label="CVODE")
+            ax.plot(states.t, state_save[:, self.spec_list_ANN.index(spec) + 1], ls="-", color="b", lw=2, marker='x', label="NN")
+            ax.set_xlabel('$t$ $[ms]$', fontsize=ftsize)
+            ax.set_ylabel(f'{spec} mass fraction $[-]$', fontsize=ftsize)
+            if spec == "N2":
+                ax.set_ylim([
+                    states.Y[0, self.gas.species_index(spec)] * 0.95,
+                    states.Y[0, self.gas.species_index(spec)] * 1.05,
+                ])
+            ax.legend()
+            fig.tight_layout()
+
+            fig.savefig(folder + f"/Y{spec}.png", dpi=500)
+
+        # Mass conservation
+        fig2, ax2 = plt.subplots(1, 1)
+        ax2.plot(states.t, sumYs, ls="-", color="b", lw=2)
+        ax2.plot(states.t, np.ones(len(states.t)), ls="--", color="k", lw=2)
+        ax2.plot(states.t, np.ones(len(states.t)) + 0.01, ls="--", color="k", lw=2, alpha=0.5)
+        ax2.plot(states.t, np.ones(len(states.t)) - 0.01, ls="--", color="k", lw=2, alpha=0.5)
+        ax2.set_xlabel('$t$ $[ms]$', fontsize=ftsize)
+        ax2.set_ylabel(r'$\sum_{k} Y_k$ $[-]$', fontsize=ftsize)
+        ax2.set_ylim([0.95, 1.05])
+        fig2.tight_layout()
+
+        fig2.savefig(folder + "/SumYs.png", dpi=500)
+
+        # Atomic conservation
+        fig3, axs3 = plt.subplots(2, 2)
+
+        ratio_scale_down = 0.9
+        ratio_scale_up = 1.1
+
+        axs3[0, 0].plot(states.t, atomic_cons[:, 0], lw=2, color="purple")
+        axs3[0, 0].set_ylabel('$Y_C$ $[-]$', fontsize=ftsize)
+        axs3[0, 0].set_ylim([
+            atomic_cons[0, 0] * ratio_scale_down,
+            atomic_cons[0, 0] * ratio_scale_up,
+        ])
+        axs3[0, 0].xaxis.set_major_formatter(plt.NullFormatter())
+
+        axs3[0, 1].plot(states.t, atomic_cons[:, 1], lw=2, color="purple")
+        axs3[0, 1].set_ylabel('$Y_H$ $[-]$', fontsize=ftsize)
+        axs3[0, 1].set_ylim([
+            atomic_cons[0, 1] * ratio_scale_down,
+            atomic_cons[0, 1] * ratio_scale_up,
+        ])
+        axs3[0, 1].xaxis.set_major_formatter(plt.NullFormatter())
+
+        axs3[1, 0].plot(states.t, atomic_cons[:, 2], lw=2, color="purple")
+        axs3[1, 0].set_xlabel('$t$ $[ms]$', fontsize=ftsize)
+        axs3[1, 0].set_ylabel('$Y_O$ $[-]$', fontsize=ftsize)
+        axs3[1, 0].set_ylim([
+            atomic_cons[0, 2] * ratio_scale_down,
+            atomic_cons[0, 2] * ratio_scale_up,
+        ])
+
+        axs3[1, 1].plot(states.t, atomic_cons[:, 3], lw=2, color="purple")
+        axs3[1, 1].set_xlabel('$t$ $[ms]$', fontsize=ftsize)
+        axs3[1, 1].set_ylabel('$Y_N$ $[-]$', fontsize=ftsize)
+        axs3[1, 1].set_ylim([
+            atomic_cons[0, 3] * ratio_scale_down,
+            atomic_cons[0, 3] * ratio_scale_up,
+        ])
+
+        fig3.tight_layout()
+        fig3.savefig(folder + "/AtomCons.png", dpi=500)
+
+        # Ignition-like delays comparison for pyrolysis case
+        print(f" >> CVODE pyrolysis delay (T rise): {tau_pyro_CVODE}")
+        print(f" >> ANN pyrolysis delay (T rise): {tau_pyro_ANN}")
 
     def run_1D_premixed_case(self, phi, T0, pressure, dt, T_threshold=0.0):
         """Run one 1D premixed flame case and return structured results.
@@ -1015,6 +1217,150 @@ class NNTesting():
         return err_Yk, err_T
 
 
+    def _load_validation_data(self):
+        """Load X_val/Y_val for each cluster from training_data.h5.
+
+        This mirrors NN_manager.read_training_data/get_scalers_stats and is
+        used by evaluate_on_validation_set.
+        """
+
+        if self._val_data_loaded:
+            return
+
+        self._X_val = []
+        self._Y_val = []
+
+        with h5py.File(f"{self.dataset_path:s}/training_data.h5", 'r') as h5file_r:
+            # Infer number of clusters from file (robust to future changes)
+            top_level_groups = [k for k in h5file_r.keys() if isinstance(h5file_r[k], h5py.Group)]
+
+            for grp_name in sorted(top_level_groups):
+                grp = h5file_r[grp_name]
+                X_val = grp['X_val'][:]
+                Y_val = grp['Y_val'][:]
+                self._X_val.append(X_val)
+                self._Y_val.append(Y_val)
+
+        self._val_data_loaded = True
+
+
+    def evaluate_on_validation_set(self, scatter_folder="./plots_validation", max_points_scatter=50000):
+        """Evaluate ANN predictions against Y_val stored in training_data.h5.
+
+        For each cluster:
+          * Read X_val / Y_val from training_data.h5
+          * Run the corresponding ANN model
+          * Compare predicted vs target values in scaled space and (approx.)
+            physical space using the existing inverse-scaling helpers
+          * Compute basic statistics (MSE, MAE, RMSE) per output dimension
+          * Generate scatter plots of errors
+
+        Parameters
+        ----------
+        scatter_folder : str
+            Directory where scatter plots are written. Existing folder is
+            removed.
+        max_points_scatter : int
+            Maximum number of validation points plotted per cluster for
+            scatter plots (random subsampling if larger).
+        """
+
+        # Ensure models and scalers have been loaded
+        self.load_models()
+        self.load_scalers()
+
+        # Load validation data from training_data.h5
+        self._load_validation_data()
+
+        # Prepare output folder
+        if os.path.isdir(scatter_folder):
+            shutil.rmtree(scatter_folder)
+        os.makedirs(scatter_folder)
+
+        all_stats = []
+
+        for i_cluster in range(self.nb_clusters):
+            X_val = self._X_val[i_cluster]
+            Y_val = self._Y_val[i_cluster]
+
+            # Convert to torch tensors on the correct device
+            X_val_t = torch.tensor(X_val, dtype=torch.float64).to(self.device)
+            Y_val_t = torch.tensor(Y_val, dtype=torch.float64).to(self.device)
+
+            # Model and scalers for current cluster
+            model = self.models_list[i_cluster]
+            model.to(self.device)
+            model.eval()
+
+            mean_X = torch.from_numpy(self.Xscaler_list[i_cluster][:, 0]).to(self.device).to(torch.float64)
+            std_X = torch.from_numpy(self.Xscaler_list[i_cluster][:, 1]).to(self.device).to(torch.float64)
+            mean_Y = torch.from_numpy(self.Yscaler_list[i_cluster][:, 0]).to(self.device).to(torch.float64)
+            std_Y = torch.from_numpy(self.Yscaler_list[i_cluster][:, 1]).to(self.device).to(torch.float64)
+
+            # Unscale inputs back to log/physical space to mimic runtime
+            # convention, then rescale using local helper to be fully
+            # consistent. This keeps this routine aligned with advance_state_NN.
+            X_unscaled = self._inverse_scale(X_val_t, mean_X, std_X)
+
+            # Forward pass
+            with torch.no_grad():
+                Y_pred_t = model(X_val_t)
+
+            # Error metrics in scaled space
+            diff_scaled = (Y_pred_t - Y_val_t).detach().cpu().numpy()
+            mse_scaled = np.mean(diff_scaled**2, axis=0)
+            mae_scaled = np.mean(np.abs(diff_scaled), axis=0)
+            rmse_scaled = np.sqrt(mse_scaled)
+
+            # Approximate physical-space outputs by inverse scaling
+            Y_val_phys = self._inverse_scale(Y_val_t, mean_Y, std_Y)
+            Y_pred_phys = self._inverse_scale(Y_pred_t, mean_Y, std_Y)
+            diff_phys = (Y_pred_phys - Y_val_phys).detach().cpu().numpy()
+            mse_phys = np.mean(diff_phys**2, axis=0)
+            mae_phys = np.mean(np.abs(diff_phys), axis=0)
+            rmse_phys = np.sqrt(mse_phys)
+
+            # Aggregate statistics for this cluster
+            stats_cluster = {
+                "cluster": i_cluster,
+                "mse_scaled": mse_scaled,
+                "mae_scaled": mae_scaled,
+                "rmse_scaled": rmse_scaled,
+                "mse_phys": mse_phys,
+                "mae_phys": mae_phys,
+                "rmse_phys": rmse_phys,
+            }
+            all_stats.append(stats_cluster)
+
+            # Scatter plot of physical-space errors (subsample if needed)
+            n_pts = diff_phys.shape[0]
+            if n_pts > max_points_scatter:
+                idx = np.random.choice(n_pts, size=max_points_scatter, replace=False)
+                diff_plot = diff_phys[idx, :]
+            else:
+                diff_plot = diff_phys
+
+            fig, ax = plt.subplots(1, 1)
+            # Flatten over species/output dimensions
+            ax.scatter(np.arange(diff_plot.size), diff_plot.ravel(), s=1, alpha=0.5)
+            ax.set_xlabel("Sample index (flattened)")
+            ax.set_ylabel("Prediction error (physical units)")
+            ax.set_title(f"Cluster {i_cluster} validation errors")
+            fig.tight_layout()
+
+            fig.savefig(os.path.join(scatter_folder, f"cluster_{i_cluster}_errors.png"), dpi=400)
+            plt.close(fig)
+
+        # Simple console summary
+        for stats in all_stats:
+            i_cluster = stats["cluster"]
+            mse_phys_mean = float(np.mean(stats["mse_phys"]))
+            rmse_phys_mean = float(np.mean(stats["rmse_phys"]))
+            print(f"[Validation] Cluster {i_cluster}: mean MSE={mse_phys_mean:.3e}, mean RMSE={rmse_phys_mean:.3e}")
+
+        return all_stats
+
+
 
 #-----------------------------------------------------------------------
 #   THERMO-CHEMICAL FUNCTIONS 
@@ -1075,6 +1421,4 @@ class NNTesting():
 
 
         return Y_new_corr
-
-
 
