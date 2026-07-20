@@ -219,16 +219,16 @@ class ParticlesCloud(object):
             # Number of mixed particle
             self.Npairs_curl = np.round(N_pairs).astype(int)
 
+            # If number is very small, N_pairs_curl might be 0, in this case we set it
+            # to 1 and perform diffusion every round(1/N_pairs) time steps
+            self.diffusion_freq = np.zeros_like(self.Npairs_curl)
+            for i in range(self.n_ite):
+                if self.Npairs_curl[i]==0:
+                    self.Npairs_curl[i]=1
+                    self.diffusion_freq[i] = int(round(1/N_pairs[i]))
+                else:
+                    self.diffusion_freq[i] = 1
 
-        # If number is very small, N_pairs_curl might be 0, in this case we set it
-        # to 1 and perform diffusion every round(1/N_pairs) time steps
-        self.diffusion_freq = np.zeros_like(self.Npairs_curl)
-        for i in range(self.n_ite):
-            if self.Npairs_curl[i]==0:
-                self.Npairs_curl[i]=1
-                self.diffusion_freq[i] = int(round(1/N_pairs[i]))
-            else:
-                self.diffusion_freq[i] = 1
         
 
         if self.mixing_model!="CURL_MODIFIED_DD" and self.mixing_model!="EMST":  
