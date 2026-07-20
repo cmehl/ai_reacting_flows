@@ -197,12 +197,6 @@ class NNTesting():
             # Computing current progress variable
             progvar = self.compute_progvar(state, pressure)
 
-            # Attribute cluster
-            if self.nb_clusters>0:
-                self.attribute_cluster(state, progvar)
-            else:
-                self.cluster = 0
-
             T_new, Y_new = self.advance_state_NN(T_old, Y_old, pressure, dt)
 
             # If hybrid, we check conservation and use CVODE if not satisfied
@@ -257,6 +251,77 @@ class NNTesting():
             "ann_calls": ann_calls,
             "cvode_calls": cvode_calls,
         }
+
+    def run_0D_ignition_series(self, cases):
+        """Run a series of 0D ignition cases and aggregate errors.
+
+        Parameters
+        ----------
+        cases : iterable of dict
+            Each dict must contain keys compatible with run_0D_ignition_case,
+            e.g.: {"phi": ..., "T0": ..., "pressure": ..., "dt": ..., "nb_ite": ...}.
+
+        Returns
+        -------
+        results : list[dict]
+            Per-case results (direct outputs from run_0D_ignition_case) with the
+            corresponding input parameters attached under key "params".
+        summary : dict
+            Aggregate metrics across all cases: averages and standard deviations
+            for equilibrium-temperature error, ignition delays, and solver calls.
+        """
+
+        results = []
+
+        err_Teq_list = []
+        tau_cvode_list = []
+        tau_ann_list = []
+        ann_calls_list = []
+        cvode_calls_list = []
+
+        for case in cases:
+            res = self.run_0D_ignition_case(**case)
+            # Attach input parameters to the result for traceability
+            res_with_params = {"params": dict(case), **res}
+            results.append(res_with_params)
+
+            err_Teq_list.append(res["error_Teq_percent"])
+            tau_cvode_list.append(res["tau_ign_cvode"])
+            tau_ann_list.append(res["tau_ign_ann"])
+            ann_calls_list.append(res["ann_calls"])
+            cvode_calls_list.append(res["cvode_calls"])
+
+        err_Teq_arr = np.array(err_Teq_list)
+        tau_cvode_arr = np.array(tau_cvode_list)
+        tau_ann_arr = np.array(tau_ann_list)
+        ann_calls_arr = np.array(ann_calls_list)
+        cvode_calls_arr = np.array(cvode_calls_list)
+
+        # Ignition delay relative error (%), with simple guard for zero CVODE delay
+        with np.errstate(divide="ignore", invalid="ignore"):
+            tau_rel_err = 100.0 * np.where(
+                tau_cvode_arr > 0.0,
+                (tau_ann_arr - tau_cvode_arr) / tau_cvode_arr,
+                0.0,
+            )
+
+        summary = {
+            "n_cases": len(results),
+            # Equilibrium temperature error stats (percent)
+            "Teq_error_mean_percent": float(err_Teq_arr.mean()) if err_Teq_arr.size > 0 else 0.0,
+            "Teq_error_std_percent": float(err_Teq_arr.std()) if err_Teq_arr.size > 0 else 0.0,
+            # Ignition delay stats (absolute values)
+            "tau_cvode_mean": float(tau_cvode_arr.mean()) if tau_cvode_arr.size > 0 else 0.0,
+            "tau_ann_mean": float(tau_ann_arr.mean()) if tau_ann_arr.size > 0 else 0.0,
+            # Ignition delay relative error stats (percent)
+            "tau_rel_error_mean_percent": float(tau_rel_err.mean()) if tau_rel_err.size > 0 else 0.0,
+            "tau_rel_error_std_percent": float(tau_rel_err.std()) if tau_rel_err.size > 0 else 0.0,
+            # Solver calls
+            "ann_calls_mean": float(ann_calls_arr.mean()) if ann_calls_arr.size > 0 else 0.0,
+            "cvode_calls_mean": float(cvode_calls_arr.mean()) if cvode_calls_arr.size > 0 else 0.0,
+        }
+
+        return results, summary
 
     # OD IGNITION (wrapper with plotting)
     def test_0D_ignition(self, phi, T0, pressure, dt, nb_ite=100):
@@ -489,6 +554,91 @@ class NNTesting():
             "ann_calls": ann_calls,
             "cvode_calls": cvode_calls,
         }
+
+    def run_1D_premixed_series(self, cases, species_for_error=None, x_window=None):
+        """Run a series of 1D premixed cases and aggregate reaction-rate errors.
+
+        Parameters
+        ----------
+        cases : iterable of dict
+            Each dict must contain keys compatible with run_1D_premixed_case,
+            e.g.: {"phi": ..., "T0": ..., "pressure": ..., "dt": ..., "T_threshold": ...}.
+        species_for_error : list[str] | None
+            If provided, compute L2 errors on Omega for these species only.
+            If None, use self.spec_to_plot.
+        x_window : tuple[float, float] | None
+            Optional spatial window [x_min, x_max] over which to compute the
+            L2 error. If None, use the full flame domain.
+
+        Returns
+        -------
+        results : list[dict]
+            Per-case results (direct outputs from run_1D_premixed_case) with the
+            corresponding input parameters attached under key "params".
+        summary : dict
+            Aggregate metrics across all cases (means/stds of L2 errors for each
+            species and average solver call counts).
+        """
+
+        if species_for_error is None:
+            species_for_error = list(self.spec_to_plot)
+
+        results = []
+
+        # Per-species error accumulator: {spec -> [err_case_0, err_case_1, ...]}
+        species_err = {spec: [] for spec in species_for_error}
+        ann_calls_list = []
+        cvode_calls_list = []
+
+        for case in cases:
+            res = self.run_1D_premixed_case(**case)
+            f = res["flame"]
+            Omega_exact = res["Omega_exact"]
+            Omega_ann = res["Omega_ann"]
+            ann_calls_list.append(res["ann_calls"])
+            cvode_calls_list.append(res["cvode_calls"])
+
+            # Spatial window selection
+            x = f.grid
+            if x_window is not None:
+                x_min, x_max = x_window
+                mask = (x >= x_min) & (x <= x_max)
+            else:
+                mask = slice(None)
+
+            dx = np.gradient(x[mask]) if not isinstance(mask, slice) else np.gradient(x)
+
+            for spec in species_for_error:
+                k = self.gas.species_index(spec)
+                omega_ex = Omega_exact[k, mask]
+                omega_nn = Omega_ann[k, mask]
+                # L2 error in physical units over x-window
+                diff = omega_nn - omega_ex
+                l2_err = float(np.sqrt(np.sum(diff**2 * dx)))
+                species_err[spec].append(l2_err)
+
+            res_with_params = {"params": dict(case), **res}
+            results.append(res_with_params)
+
+        ann_calls_arr = np.array(ann_calls_list)
+        cvode_calls_arr = np.array(cvode_calls_list)
+
+        species_err_mean = {}
+        species_err_std = {}
+        for spec, errs in species_err.items():
+            arr = np.array(errs)
+            species_err_mean[spec] = float(arr.mean()) if arr.size > 0 else 0.0
+            species_err_std[spec] = float(arr.std()) if arr.size > 0 else 0.0
+
+        summary = {
+            "n_cases": len(results),
+            "species_l2_error_mean": species_err_mean,
+            "species_l2_error_std": species_err_std,
+            "ann_calls_mean": float(ann_calls_arr.mean()) if ann_calls_arr.size > 0 else 0.0,
+            "cvode_calls_mean": float(cvode_calls_arr.mean()) if cvode_calls_arr.size > 0 else 0.0,
+        }
+
+        return results, summary
 
     # 1D PREMIXED (wrapper with plotting)
     def test_1D_premixed(self, phi, T0, pressure, dt, T_threshold=0.0):
@@ -782,6 +932,7 @@ class NNTesting():
 #-----------------------------------------------------------------------
 #   ANALYZING ERRORS
 #-----------------------------------------------------------------------
+
     def compute_ann_errors(self, T, Y, pressure, dt, already_transformed=False):
         T_old = T.copy()
 
@@ -863,6 +1014,8 @@ class NNTesting():
 
         return err_Yk, err_T
 
+
+
 #-----------------------------------------------------------------------
 #   THERMO-CHEMICAL FUNCTIONS 
 #-----------------------------------------------------------------------
@@ -922,11 +1075,6 @@ class NNTesting():
 
 
         return Y_new_corr
-
-
-
-
-
 
 
 
