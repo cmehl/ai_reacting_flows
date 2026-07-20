@@ -708,6 +708,12 @@ class LearningDatabase(object):
                 X_p.loc[:, clip_cols[1:]] = np.log(X_p[clip_cols[1:]])
             elif self.log_transform_X==2:
                 X_p.loc[:, clip_cols[1:]] = (X_p[clip_cols[1:]]**self.lambda_bct - 1.0)/self.lambda_bct
+            #
+            if self.log_transform_Y==1:
+                Y_p.loc[:, Y_cols] = np.log(Y_p[Y_cols])
+            elif self.log_transform_Y==2:
+                Y_p.loc[:, Y_cols] = (Y_p[Y_cols]**self.lambda_bct - 1.0)/self.lambda_bct
+
 
             # dt gets its own log transform, unclipped by the species threshold.
             # A tiny epsilon guard is still needed to avoid log(0)/log(negative) if dt can be 0,
