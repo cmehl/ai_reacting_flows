@@ -124,7 +124,7 @@ class NN_manager():
 
             for i_cluster in range(self.nb_clusters):
                 os.mkdir(f"{self.directory}/training/cluster_{i_cluster}")
-                os.mkdir(f"{self.directory}/training/cluster_{i_cluster}/training_curves/")
+                os.mkdir(f"{self.directory}/training/cluster_{i_cluster}/")
                 os.mkdir(f"{self.directory}/evaluation/cluster_{i_cluster}")
 
             if (self.nb_clusters > 1):
@@ -425,7 +425,7 @@ class NN_manager():
         ax.set_xlabel("Epoch")
         ax.set_ylabel("Loss")
 
-        plt.savefig( f"{self.directory}/training/cluster_{i_cluster}/training_curves/loss.png")
+        plt.savefig( f"{self.directory}/training/cluster_{i_cluster}/loss.png")
 
         # MASS CONSERVATION
         fig, ax = plt.subplots()
@@ -437,7 +437,7 @@ class NN_manager():
         ax.set_xlabel("Epoch")
         ax.set_ylabel(r"$\sum_k \ Y_k$")
 
-        plt.savefig( f"{self.directory}/training/cluster_{i_cluster}/training_curves/mass_conservation.png")
+        plt.savefig( f"{self.directory}/training/cluster_{i_cluster}/mass_conservation.png")
 
         # ELEMENTS CONSERVATION
 
@@ -474,7 +474,7 @@ class NN_manager():
         fig.tight_layout()
 
 
-        plt.savefig( f"{self.directory}/training/cluster_{i_cluster}/training_curves/elements_conservation.png")
+        plt.savefig( f"{self.directory}/training/cluster_{i_cluster}/elements_conservation.png")
 
     def copy_clusterer(self):
         if self.clustering_type=="progvar":

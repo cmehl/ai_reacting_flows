@@ -13,7 +13,6 @@ import matplotlib.pyplot as plt
 import cantera as ct
 
 import torch
-# from torchinfo import summary
 from ai_reacting_flows.ann_model_generation.NN_models import MLPModel, DeepONet, DeepONet_shift
 
 import ai_reacting_flows.tools.utilities as utils
@@ -39,6 +38,8 @@ class NNTesting():
         data_processing = dtb_processing_params["data_processing"]
         self.log_transform_X = data_processing["log_transform_X"]
         self.log_transform_Y = data_processing["log_transform_Y"]
+        # Box-Cox parameter (kept consistent with NN_manager)
+        self.lambda_bct = data_processing.get("lambda_bct", 0.1)
         self.threshold = data_processing["threshold"]
         self.remove_N2 = not data_processing["with_N_chemistry"]
         self.output_omegas = data_processing["output_omegas"]
@@ -589,26 +590,25 @@ class NNTesting():
 
 
     def _inverse_scale(self, scaled_y, mean, std):
-        """Inverse scaling helper for mass fractions.
+        """Inverse scaling helper for mass fractions (numpy version).
 
         scaled_y: array in scaled space
-        mean, std: scaling statistics (tensors on same device)
+        mean, std: scaling statistics (numpy arrays)
         """
         y = mean + (std + 1e-7) * scaled_y
 
         return y
-    
 
     def _scale(self, x, mean, std):
-        """Scaling helper for mass fractions.
+        """Scaling helper for mass fractions (numpy version).
 
         x: array in physical (original) space
-        mean, std: scaling statistics (tensors on same device)
+        mean, std: scaling statistics (numpy arrays)
         """
-        
-        scaled_tensor = (x - mean) / (std + 1e-7)
 
-        return scaled_tensor
+        scaled_array = (x - mean) / (std + 1e-7)
+
+        return scaled_array
 
 #-----------------------------------------------------------------------
 #   TIME ADVANCEMENT FUNTIONS 
@@ -669,18 +669,19 @@ class NNTesting():
         
         # input of NN
         log_state = log_state.reshape(1, -1)
-        mean_X = self.Xscaler_list[self.cluster][:,0]
-        std_X = self.Xscaler_list[self.cluster][:,1]
+        mean_X = self.Xscaler_list[self.cluster][:, 0]
+        std_X = self.Xscaler_list[self.cluster][:, 1]
         NN_input = self._scale(log_state, mean_X, std_X)
-        NN_input = self.Xscaler_list[self.cluster].transform(log_state)
-                
+
         # New state predicted by ANN
         NN_input = torch.tensor(NN_input, dtype=torch.float64).to(self.device)
         state_new = self.models_list[self.cluster](NN_input)
         state_new = state_new.detach().cpu().numpy()
 
-        # Getting Y and scaling
-        Y_new = self.Yscaler_list[self.cluster].inverse_transform(state_new)
+        # Getting Y and inverse scaling (numpy version)
+        mean_Y = self.Yscaler_list[self.cluster][:, 0]
+        std_Y = self.Yscaler_list[self.cluster][:, 1]
+        Y_new = self._inverse_scale(state_new, mean_Y, std_Y)
 
         # Log transform of species
         if self.log_transform_Y>0:
@@ -796,22 +797,14 @@ class NNTesting():
         diff_log_Y_cvode = log_Y_cvode - log_Y_old
         diff_log_Y_ann = log_Y_ann - log_Y_old
 
-        # We apply the normalizer
-        diff_log_Y_cvode = diff_log_Y_cvode.reshape(1,-1)
-        diff_log_Y_ann = diff_log_Y_ann.reshape(1,-1)
-        #
-        diff_log_Y_cvode_norm = self.Yscaler_list[self.cluster].transform(diff_log_Y_cvode)
-        diff_log_Y_ann_norm = self.Yscaler_list[self.cluster].transform(diff_log_Y_ann)
-        #
-        diff_log_Y_cvode_norm = diff_log_Y_cvode_norm.reshape(-1)
-        diff_log_Y_ann_norm = diff_log_Y_ann_norm.reshape(-1)
+        # Normalized differences in log space (using scaler statistics)
+        mean_Y = self.Yscaler_list[self.cluster][:, 0]
+        std_Y = self.Yscaler_list[self.cluster][:, 1]
+        diff_log_Y_cvode_norm = self._scale(diff_log_Y_cvode, mean_Y, std_Y)
+        diff_log_Y_ann_norm = self._scale(diff_log_Y_ann, mean_Y, std_Y)
 
-        # Error (MSE)
-        # mse = MeanSquaredError()
-        # err_Yk = mse(diff_log_Y_cvode_norm, diff_log_Y_ann)  
-
-        # Test: we compute error on actual mass fractions
-        err_Yk = (Y_cvode-Y_ann)**2
+        # Error in normalized log-space (MSE per species)
+        err_Yk = (diff_log_Y_cvode_norm - diff_log_Y_ann_norm) ** 2
 
         err_T = 100.0*np.abs((T_ann-T_cvode)/T_cvode)
 
@@ -876,7 +869,6 @@ class NNTesting():
 
 
         return Y_new_corr
-
 
 
 
