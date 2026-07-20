@@ -117,9 +117,12 @@ class NNTesting():
 #-----------------------------------------------------------------------
 #   MAIN TESTING FUNCTIONS
 #-----------------------------------------------------------------------
-    # OD IGNITION
-    def test_0D_ignition(self, phi, T0, pressure, dt, nb_ite=100):
-        # Initialization of ignition delays
+    def run_0D_ignition_case(self, phi, T0, pressure, dt, nb_ite=100):
+        """Run one 0D ignition case and return structured results.
+
+        This is the core simulation routine, without plotting or printing, so it can be
+        reused programmatically for parameter sweeps and error aggregation.
+        """
         tau_ign_CVODE = 0.0
         tau_ign_ANN = 0.0
 
@@ -131,7 +134,6 @@ class NNTesting():
 
         # Defining reactor
         r = ct.IdealGasConstPressureReactor(self.gas)
-            
         sim = ct.ReactorNet([r])
         simtime = 0.0
         states = ct.SolutionArray(self.gas, extra=['t'])
@@ -143,30 +145,26 @@ class NNTesting():
 
         # Matrix with number of each atom in species (order of rows: C, H, O, N)
         atomic_array = utils.parse_species_names(self.spec_list_ANN)
-        
-        #-------------------- CVODE COMPUTATION---------------------------
-        # Remark: we don't use the method we wrote below
 
-        for i in range(nb_ite):
+        #-------------------- CVODE COMPUTATION---------------------------
+        for _ in range(nb_ite):
             simtime += dt
             sim.advance(simtime)
             states.append(r.thermo.state, t=simtime*1.0e3)
 
             if states.T[-1] > T0+200.0 and tau_ign_CVODE==0.0:
                 tau_ign_CVODE = simtime
-                
+
         # Equilibrium temperature
         Teq_ref = states.T[len(states.T)-1]
-        
+
         # Convert in a big array (m,NS+1) for later normalization
         state_ref = states.T.reshape(nb_ite+1, 1)
-        
         for spec in self.spec_list_ref:
             Y = states.Y[:,self.gas.species_index(spec)].reshape(nb_ite+1, 1)
             state_ref = np.concatenate((state_ref, Y), axis=-1)
 
         #-------------------- ANN SOLVER ---------------------------
-        # Counting calls
         ann_calls = 0
         cvode_calls = 0
 
@@ -189,12 +187,9 @@ class NNTesting():
         atomic_cons = np.multiply(self.W_atoms, atomic_cons)
 
         # NEURAL NETWORK COMPUTATION
-        i=0
         time = 0.0
         state = np.append(T_ann, Y_k_ann)
         for i in range(nb_ite):
-            print(f"ITERATION {i} \n")
-
             # Old state
             T_old = state[0]
             Y_old = state[1:]
@@ -208,8 +203,6 @@ class NNTesting():
             else:
                 self.cluster = 0
 
-            print(f"Current point in cluster: {self.cluster} \n")
-
             T_new, Y_new = self.advance_state_NN(T_old, Y_old, pressure, dt)
 
             # If hybrid, we check conservation and use CVODE if not satisfied
@@ -218,58 +211,83 @@ class NNTesting():
                     # CVODE advance
                     T_new, Y_new = self.advance_state_CVODE(T_old, Y_old, pressure, dt)
                     cvode_calls += 1
-                    print(">> Hybrid model: CVODE is used")
                 else:
                     ann_calls +=1
-                    print(">> Hybrid model: ANN is used")
             else:
                 ann_calls += 1
 
             # Vector with all variable (T and Yks)
             state = np.append(T_new, Y_new)
-                
+
             # Saving values
             state_save = np.vstack([state_save,state])
             progvar_vect.append(progvar)
-                    
+
             # Mass conservation
             sumYs = np.append(sumYs, np.sum(Y_new,axis=0))
-            
+
             # atomic composition of species
             atomic_cons_current = np.dot(atomic_array,Y_new.reshape(self.nb_species_ANN_tot)/molecular_weights)
             atomic_cons_current = np.multiply(self.W_atoms, atomic_cons_current)
             atomic_cons = np.vstack([atomic_cons,atomic_cons_current])
-            
-            # Incrementation
-            i+=1
+
             time += dt
 
             if T_new > T0+200.0 and tau_ign_ANN==0.0:
                 tau_ign_ANN = time
-        
+
         # ANN equilibrium (last temperature)
         Teq_ann = T_new
 
+        # Error on equilibrium temperature (percent)
+        error_Teq = 100.0*abs(Teq_ref - Teq_ann)/Teq_ref
+
+        return {
+            "states_cvode": states,
+            "state_ref": state_ref,
+            "states_ann": state_save,
+            "tau_ign_cvode": tau_ign_CVODE,
+            "tau_ign_ann": tau_ign_ANN,
+            "Teq_cvode": Teq_ref,
+            "Teq_ann": Teq_ann,
+            "error_Teq_percent": error_Teq,
+            "atomic_cons": atomic_cons,
+            "sumYs": sumYs,
+            "progvar": np.array(progvar_vect),
+            "ann_calls": ann_calls,
+            "cvode_calls": cvode_calls,
+        }
+
+    # OD IGNITION (wrapper with plotting)
+    def test_0D_ignition(self, phi, T0, pressure, dt, nb_ite=100):
+        result = self.run_0D_ignition_case(phi, T0, pressure, dt, nb_ite)
+
+        states = result["states_cvode"]
+        state_save = result["states_ann"]
+        atomic_cons = result["atomic_cons"]
+        sumYs = result["sumYs"]
+        tau_ign_CVODE = result["tau_ign_cvode"]
+        tau_ign_ANN = result["tau_ign_ann"]
+        error_Teq = result["error_Teq_percent"]
+        ann_calls = result["ann_calls"]
+        cvode_calls = result["cvode_calls"]
+
         if self.verbose:
-            # Error on equilibrium temperature
-            error_Teq = 100.0*abs(Teq_ref - Teq_ann)/Teq_ref
             print(f"\nError on equilibrium flame temperature is: {error_Teq} % \n")
 
-        # Print number of calls
         print("\n NUMBER OF CALLS TO SOLVERS:")
         print(f"   >>> Number of ANN calls: {ann_calls}")
         print(f"   >>> Number of CVODE calls: {cvode_calls}")
 
         #-------------------- PLOTTING --------------------------- 
-        # Common args
         ftsize = 14
-        
+
         # Create directory with plots
         folder = f'./plots_0D_T0#{T0}_phi#{phi}'
         if os.path.isdir(folder):
             shutil.rmtree(folder)
         os.makedirs(folder)
-        
+
         fig, ax = plt.subplots(1, 1)
         ax.plot(states.t, states.T, ls="--", color = "k", lw=2, label="CVODE")
         ax.plot(states.t, state_save[:,0], ls="-", color = "b", lw=2, marker='x', label="NN")
@@ -277,9 +295,9 @@ class NNTesting():
         ax.set_ylabel('$T$ $[K]$', fontsize=ftsize)
         ax.legend()
         fig.tight_layout()
-        
+
         fig.savefig(folder +  "/Temperature.png", dpi=500)
-        
+
         for spec in self.spec_to_plot:
             fig, ax = plt.subplots(1, 1)
             ax.plot(states.t, states.Y[:,self.gas.species_index(spec)], ls="--", color = "k", lw=2, label="CVODE")
@@ -290,9 +308,9 @@ class NNTesting():
                 ax.set_ylim([states.Y[0,self.gas.species_index(spec)]*0.95, states.Y[0,self.gas.species_index(spec)]*1.05])
             ax.legend()
             fig.tight_layout()
-            
+
             fig.savefig(folder + f"/Y{spec}.png", dpi=500)
-        
+
         # Mass conservation
         fig2, ax2 = plt.subplots(1, 1)
         ax2.plot(states.t, sumYs, ls="-", color = "b", lw=2)
@@ -303,45 +321,47 @@ class NNTesting():
         ax2.set_ylabel(r'$\sum_{k} Y_k$ $[-]$', fontsize=ftsize)
         ax2.set_ylim([0.95,1.05])
         fig2.tight_layout()
-        
+
         fig2.savefig(folder + "/SumYs.png", dpi=500)
-        
+
         # Atomic conservation
         fig3, axs3 = plt.subplots(2, 2)
-        
+
         ratio_scale_down = 0.9
         ratio_scale_up = 1.1
-        
+
         axs3[0,0].plot(states.t, atomic_cons[:,0], lw=2, color="purple")
         axs3[0,0].set_ylabel('$Y_C$ $[-]$', fontsize=ftsize)
         axs3[0,0].set_ylim([atomic_cons[0,0]*ratio_scale_down,atomic_cons[0,0]*ratio_scale_up])
         axs3[0,0].xaxis.set_major_formatter(plt.NullFormatter())
-        
+
         axs3[0,1].plot(states.t, atomic_cons[:,1], lw=2, color="purple")
         axs3[0,1].set_ylabel('$Y_H$ $[-]$', fontsize=ftsize)
         axs3[0,1].set_ylim([atomic_cons[0,1]*ratio_scale_down,atomic_cons[0,1]*ratio_scale_up])
         axs3[0,1].xaxis.set_major_formatter(plt.NullFormatter())
-        
+
         axs3[1,0].plot(states.t, atomic_cons[:,2], lw=2, color="purple")
         axs3[1,0].set_xlabel('$t$ $[ms]$', fontsize=ftsize)
         axs3[1,0].set_ylabel('$Y_O$ $[-]$', fontsize=ftsize)
         axs3[1,0].set_ylim([atomic_cons[0,2]*ratio_scale_down,atomic_cons[0,2]*ratio_scale_up])
-    
+
         axs3[1,1].plot(states.t, atomic_cons[:,3], lw=2, color="purple")
         axs3[1,1].set_xlabel('$t$ $[ms]$', fontsize=ftsize)
         axs3[1,1].set_ylabel('$Y_N$ $[-]$', fontsize=ftsize)
         axs3[1,1].set_ylim([atomic_cons[0,3]*ratio_scale_down,atomic_cons[0,3]*ratio_scale_up])
-        
+
         fig3.tight_layout()
         fig3.savefig(folder + "/AtomCons.png", dpi=500)
-
 
         # Ignition delays comparison
         print(f" >> CVODE ignition delay: {tau_ign_CVODE}")
         print(f" >> ANN ignition delay: {tau_ign_ANN}")
 
-    # 1D PREMIXED
-    def test_1D_premixed(self, phi, T0, pressure, dt, T_threshold=0.0):
+    def run_1D_premixed_case(self, phi, T0, pressure, dt, T_threshold=0.0):
+        """Run one 1D premixed flame case and return structured results.
+
+        Core computation without plotting/printing, suitable for parameter sweeps.
+        """
 
         #-------------------- 1D FLAME COMPUTATION ---------------------------
         # Cantera computation settings
@@ -349,26 +369,24 @@ class NNTesting():
         tol_ss = [1.0e-4, 1.0e-9]  # [rtol atol] for steady-state problem
         tol_ts = [1.0e-5, 1.0e-5]  # [rtol atol] for time stepping
         loglevel = 0  # amount of diagnostic output (0 to 8)
-            
+
         # Determining initial composition using phi
         fuel_ox_ratio = self.gas.n_atoms(self.fuel,'C') + 0.25*self.gas.n_atoms(self.fuel,'H') - 0.5*self.gas.n_atoms(self.fuel,'O')
         compo = f'{self.fuel}:{phi:3.2f}, O2:{fuel_ox_ratio:3.2f}, N2:{fuel_ox_ratio * 0.79 / 0.21:3.2f}'
-            
+
         self.gas.TPX = T0, pressure, compo
 
-        print(f"Computing Cantera 1D flame with T0 = {T0} K and phi = {phi}")
-                
         f = ct.FreeFlame(self.gas, initial_grid)
-                
+
         f.flame.set_steady_tolerances(default=tol_ss)
         f.flame.set_transient_tolerances(default=tol_ts)
-            
+
         # Mixing model and Jacobian
         f.energy_enabled = True
         f.transport_model = 'UnityLewis'
         f.set_max_jac_age(10, 10)
         f.set_time_step(1e-5, [2, 5, 10, 20])
-            
+
         f.set_refine_criteria(ratio=3, slope=0.1, curve=0.5)
         f.solve(loglevel=loglevel, refine_grid=True)
 
@@ -378,20 +396,17 @@ class NNTesting():
         f.set_refine_criteria(ratio=3, slope=0.05, curve=0.1, prune=0.03)
         f.solve(loglevel=loglevel, refine_grid=True)
 
-        # Mass fractions at time t
+        # Mass fractions and temperature at steady state
         Yt = f.Y
-
-        # Temperature at time t
         Tt = f.T
-            
+
         # Computing progress variable
         c = np.empty(len(f.grid))
         nb_pnts_total = len(f.grid)
         for i in range(nb_pnts_total):
             state = np.append(Tt[i], Yt[:,i])
-            c[i] = self.compute_progvar(state, pressure, "detailed")
+            c[i] = self.compute_progvar(state, pressure)
 
-        # x axis
         X_grid = f.grid
 
         # Initializing Y at t+dt
@@ -403,24 +418,23 @@ class NNTesting():
         for i_reac in range(nb_0_reactors):
             self.gas.TPY = Tt[i_reac], pressure, Yt[:,i_reac]
             r = ct.IdealGasConstPressureReactor(self.gas)
-                
+
             # Initializing reactor
             sim = ct.ReactorNet([r])
             time = 0.0
             states = ct.SolutionArray(self.gas, extra=['t'])
-            
+
             # We advance solution by dt
             time = dt
             sim.advance(time)
             states.append(r.thermo.state, t=time * 1e3)
-            
+
             Yt_dt_exact[:,i_reac] = states.Y
-            
+
         # Reaction rates
         Omega_exact = (Yt_dt_exact-Yt)/dt
 
         #-------------------- ANN REACTION RATES ---------------------------
-        # Counting calls
         ann_calls = 0
         cvode_calls = 0
 
@@ -430,7 +444,7 @@ class NNTesting():
         for i_reac in range(nb_0_reactors):
             # Computing current progress variable
             state = np.append(Tt[i_reac], Yt_ann[:,i_reac])
-            progvar = self.compute_progvar(state, pressure, self.mechanism_type)
+            progvar = self.compute_progvar(state, pressure)
 
             # Attribute cluster
             if self.nb_clusters>0:
@@ -438,8 +452,6 @@ class NNTesting():
             else:
                 self.cluster = 0
 
-            print(f"Current point in cluster: {self.cluster} \n")
-            
             # advance to t + dt
             if Tt[i_reac] >= T_threshold:
                 T_new, Y_new = self.advance_state_NN(Tt[i_reac], Yt_ann[:,i_reac], pressure, dt)
@@ -451,28 +463,51 @@ class NNTesting():
                         # CVODE advance
                         T_new, Y_new = self.advance_state_CVODE(Tt[i_reac], Yt_ann[:,i_reac], pressure, dt)
                         cvode_calls += 1
-                        print(">> Hybrid model: CVODE is used")
                     else:
                         ann_calls +=1
-                        print(">> Hybrid model: ANN is used")
                 else:
                     ann_calls += 1
             else:
                 T_new = Tt[i_reac]
                 Y_new = Yt_ann[:,i_reac]
-            
+
             Yt_dt_ann[:,i_reac] = np.reshape(Y_new,-1)
 
         # Reaction rates
         Omega_ann = (Yt_dt_ann-Yt_ann)/dt
 
-        # Print number of calls
+        return {
+            "flame": f,
+            "X_grid": X_grid,
+            "Tt": Tt,
+            "Yt": Yt,
+            "c": c,
+            "Yt_dt_exact": Yt_dt_exact,
+            "Yt_dt_ann": Yt_dt_ann,
+            "Omega_exact": Omega_exact,
+            "Omega_ann": Omega_ann,
+            "ann_calls": ann_calls,
+            "cvode_calls": cvode_calls,
+        }
+
+    # 1D PREMIXED (wrapper with plotting)
+    def test_1D_premixed(self, phi, T0, pressure, dt, T_threshold=0.0):
+
+        print(f"Computing Cantera 1D flame with T0 = {T0} K and phi = {phi}")
+
+        result = self.run_1D_premixed_case(phi, T0, pressure, dt, T_threshold)
+
+        f = result["flame"]
+        Omega_exact = result["Omega_exact"]
+        Omega_ann = result["Omega_ann"]
+        ann_calls = result["ann_calls"]
+        cvode_calls = result["cvode_calls"]
+
         print("\n NUMBER OF CALLS TO SOLVERS:")
         print(f"   >>> Number of ANN calls: {ann_calls}")
         print(f"   >>> Number of CVODE calls: {cvode_calls}")
 
         #-------------------- PLOTTING --------------------------- 
-        # Create directory with plots
         folder = f'./plots_1D_prem_T0#{T0}_phi#{phi}'
         if os.path.isdir(folder):
             shutil.rmtree(folder)
@@ -481,16 +516,13 @@ class NNTesting():
         for spec in self.spec_to_plot:
             fig, ax = plt.subplots(1, 1)
             ax.plot(f.grid, Omega_exact[self.gas.species_index(spec),:], ls="-", color = "b", lw=2, label="Exact")
-            if self.mechanism_type=="reduced":
-                ax.plot(f.grid, Omega_ann[self.gas_reduced.species_index(spec),:], ls="--", color = "purple", lw=2, label="Neural network")
-            else:
-                ax.plot(f.grid, Omega_ann[self.gas.species_index(spec),:], ls="--", color = "purple", lw=2, label="Neural network")
+            ax.plot(f.grid, Omega_ann[self.gas.species_index(spec),:], ls="--", color = "purple", lw=2, label="Neural network")
             ax.set_xlabel('$x$ [m]')
             ax.set_ylabel(f'{spec} Reaction rate')
             ax.set_xlim([0.008, 0.014])
             ax.legend()
             fig.tight_layout()
-                
+
             fig.savefig(folder + f"/Y{spec}.png", dpi=700)
 
             plt.show()
@@ -890,7 +922,6 @@ class NNTesting():
 
 
         return Y_new_corr
-
 
 
 
