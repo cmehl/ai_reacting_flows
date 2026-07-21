@@ -1,6 +1,6 @@
-import glob
 import os
 import sys
+from pathlib import Path
 import joblib
 import pickle
 import shutil
@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 import cantera as ct
 
 import torch
+from torchinfo import summary
 from ai_reacting_flows.ann_model_generation.NN_models import MLPModel, DeepONet, DeepONet_shift
 
 import ai_reacting_flows.tools.utilities as utils
@@ -21,6 +22,7 @@ import ai_reacting_flows.tools.utilities as utils
 class NNTesting():
 
     def __init__(self, testing_parameters):
+
         self.device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
 
         self.verbose = True
@@ -35,6 +37,11 @@ class NNTesting():
         with open(f"{self.dataset_path}/dtb_processing.yaml", "r") as file:
             dtb_processing_params = yaml.safe_load(file)
 
+        database_params = dtb_processing_params["database_params"]
+        self.dt_var = database_params["dt_var"]
+        self.fuel = database_params["fuel"][0] # fuel is a list, testing only takes 1 component fuel so far
+        self.mech = database_params["mech_file"]
+
         data_processing = dtb_processing_params["data_processing"]
         self.log_transform_X = data_processing["log_transform_X"]
         self.log_transform_Y = data_processing["log_transform_Y"]
@@ -46,11 +53,10 @@ class NNTesting():
 
         data_clustering = dtb_processing_params["data_clustering"]
         self.clustering_method  = data_clustering["clustering_method"]
-
-        database_params = dtb_processing_params["database_params"]
-        self.dt_var = database_params["dt_var"]
-        self.fuel = database_params["fuel"][0] # fuel is a list, testing only takes 1 component fuel so far
-        self.mech = database_params["mech_file"]
+        # Keep track of the clustering feature layout used at database-processing
+        # time ("phys", "dt", "all"). This is needed to build a consistent
+        # k-means input vector here.
+        self.clusterize_on = data_clustering.get("clusterize_on", "phys")
 
         # Getting parameters from ANN model
         with open(os.path.join(self.run_folder, f"STOCH_DTB_{database_params['dtb_folder_suffix']}","dtb_params.yaml"), "r") as file:
@@ -66,8 +72,6 @@ class NNTesting():
         # Renormalization of Yk to satisfy elements conservation
         self.yk_renormalization = testing_parameters["yk_renormalization"]
 
-        self.hard_constraints_model = 0 # DA: no longer of use ?
-
         # CANTERA solution object needed to access species indices
         self.gas = ct.Solution(self.mech)
         self.spec_list_ref = self.gas.species_names
@@ -75,13 +79,22 @@ class NNTesting():
 
         # Getting species and number of species
         self.spec_list_ANN = self.spec_list_ref
-        self.nb_species_ANN_tot = self.nb_species_ref
+        self.nb_species_ANN = self.nb_species_ref
         if self.remove_N2:
-            self.nb_species_ANN = self.nb_species_ref - 1
+            self.nb_species_ANN -= - 1
+
+        # ANN input vector size
+        if self.dt_var:
+            self.ann_input_size = self.nb_species_ANN + 2
+        else:
+            self.ann_input_size = self.nb_species_ANN + 1
 
         # Find number of clusters -> equal for instance to number of json files in model folder
-        self.nb_clusters = len(glob.glob1(self.models_folder,"*.pth"))
+        self.nb_clusters = len(list(Path(self.models_folder).glob("*.pth")))
         print(f">> {self.nb_clusters} models were found")
+
+        # Check consistency with dtb_processing.yaml file, could help identify an issue
+        assert self.nb_clusters==data_clustering["nb_clusters"]
 
         # If more than one cluster, we need to check the clustering method
         if self.nb_clusters>1:
@@ -120,9 +133,10 @@ class NNTesting():
         self._Y_val = []
 
 #-----------------------------------------------------------------------
-#   MAIN TESTING FUNCTIONS
+#   0D TEST CASES
 #-----------------------------------------------------------------------
-    def _run_0D_case(self, T0, pressure, dt, nb_ite, gas_init_compo, label_prefix="ignition"):
+
+    def _run_0D_case(self, T0, pressure, dt, nb_ite, gas_init_compo, reactor_type="ignition"):
         """Internal helper to run one 0D constant-pressure reactor case.
 
         Parameters
@@ -138,7 +152,7 @@ class NNTesting():
         gas_init_compo : str
             Cantera composition string used for the initial state (e.g. fuel+air
             for ignition, or pure fuel for pyrolysis).
-        label_prefix : str
+        reactor_type : str
             Label used in the returned dictionary keys for ignition-delay
             quantities (e.g. "ignition" or "pyrolysis").
 
@@ -149,6 +163,7 @@ class NNTesting():
             delays, equilibrium temperatures, error metrics, and conservation
             diagnostics.
         """
+
         tau_ign_CVODE = 0.0
         tau_ign_ANN = 0.0
 
@@ -176,7 +191,7 @@ class NNTesting():
             sim.advance(simtime)
             states.append(r.thermo.state, t=simtime*1.0e3)
 
-            if states.T[-1] > T0+200.0 and tau_ign_CVODE==0.0:
+            if reactor_type=="ignition" and states.T[-1] > T0+200.0 and tau_ign_CVODE==0.0:
                 tau_ign_CVODE = simtime
 
         # Equilibrium temperature
@@ -221,6 +236,25 @@ class NNTesting():
             # Computing current progress variable
             progvar = self.compute_progvar(state, pressure)
 
+            # Build clustering feature vector consistent with dtb_processing
+            # configuration (clusterize_on: "phys", "all", or "dt").
+            if self.dt_var and self.clusterize_on == "dt":
+                # Clustering purely on dt: k-means was trained on a single
+                # time-step feature.
+                state_for_cluster = np.array([dt], dtype=float)
+            elif self.dt_var and self.clusterize_on == "all":
+                # Clustering on physical state + dt: append dt as last entry.
+                state_for_cluster = np.append(state, dt)
+            else:
+                # Physical-only clustering (no dt in k-means features).
+                state_for_cluster = state
+
+            # Attribute cluster for current state before ANN advancement.
+            if self.nb_clusters > 0:
+                self.attribute_cluster(state_for_cluster, progvar)
+            else:
+                self.cluster = 0
+
             T_new, Y_new = self.advance_state_NN(T_old, Y_old, pressure, dt)
 
             # If hybrid, we check conservation and use CVODE if not satisfied
@@ -245,31 +279,26 @@ class NNTesting():
             sumYs = np.append(sumYs, np.sum(Y_new,axis=0))
 
             # atomic composition of species
-            atomic_cons_current = np.dot(atomic_array,Y_new.reshape(self.nb_species_ANN_tot)/molecular_weights)
+            atomic_cons_current = np.dot(atomic_array,Y_new.reshape(self.nb_species_ANN)/molecular_weights)
             atomic_cons_current = np.multiply(self.W_atoms, atomic_cons_current)
             atomic_cons = np.vstack([atomic_cons,atomic_cons_current])
 
             time += dt
 
-            if T_new > T0+200.0 and tau_ign_ANN==0.0:
+            if reactor_type=="ignition" and T_new > T0+200.0 and tau_ign_ANN==0.0:
                 tau_ign_ANN = time
 
         # ANN equilibrium (last temperature)
         Teq_ann = T_new
 
-        # Error on equilibrium temperature (percent)
-        error_Teq = 100.0*abs(Teq_ref - Teq_ann)/Teq_ref
-
         # Use configurable prefix to label ignition-like delays
         return {
-            "states_cvode": states,
-            "state_ref": state_ref,
+            "states_ref": state_ref,
             "states_ann": state_save,
-            f"tau_{label_prefix}_cvode": tau_ign_CVODE,
-            f"tau_{label_prefix}_ann": tau_ign_ANN,
-            "Teq_cvode": Teq_ref,
+            "tau_ign_cvode": tau_ign_CVODE,
+            "tau_ign_ann": tau_ign_ANN,
+            "Teq_ref": Teq_ref,
             "Teq_ann": Teq_ann,
-            "error_Teq_percent": error_Teq,
             "atomic_cons": atomic_cons,
             "sumYs": sumYs,
             "progvar": np.array(progvar_vect),
@@ -283,6 +312,24 @@ class NNTesting():
         This is the core simulation routine for premixed ignition, without
         plotting or printing, so it can be reused programmatically for
         parameter sweeps and error aggregation.
+
+        Parameters
+        ----------
+        phi : float
+            Equivalence ratio.
+        T0 : float
+            Initial temperature [K].
+        pressure : float
+            Initial pressure [Pa].
+        dt : float
+            Time step used by both CVODE and ANN loops.
+        nb_ite : int, optional
+            Number of time steps.
+
+        Returns
+        -------
+        dict
+            Structured results in a dictionary.
         """
 
         # Mixture composition: premixed fuel + air parameterized by phi
@@ -293,7 +340,8 @@ class NNTesting():
         )
         compo = f"{self.fuel}:{phi:3.2f}, O2:{fuel_ox_ratio:3.2f}, N2:{fuel_ox_ratio * 0.79 / 0.21:3.2f}"
 
-        return self._run_0D_case(T0, pressure, dt, nb_ite, compo, label_prefix="ignition")
+        return self._run_0D_case(T0, pressure, dt, nb_ite, compo, reactor_type="ignition")
+
 
     def run_0D_pyrolysis_case(self, T0, pressure, dt, nb_ite=100, diluent=None, X_diluent=0.0):
         """Run one 0D pyrolysis case (pure fuel or fuel+diluent).
@@ -321,8 +369,7 @@ class NNTesting():
         Returns
         -------
         dict
-            Structured results in the same format as ignition cases, with
-            ignition-like delays labeled under the "pyrolysis" prefix.
+            Structured results in the same format as ignition cases.
         """
 
         if diluent is None:
@@ -333,26 +380,40 @@ class NNTesting():
             X_fuel = max(0.0, 1.0 - X_diluent)
             compo = f"{self.fuel}:{X_fuel:3.2f}, {diluent}:{X_diluent:3.2f}"
 
-        return self._run_0D_case(T0, pressure, dt, nb_ite, compo, label_prefix="pyrolysis")
+        return self._run_0D_case(T0, pressure, dt, nb_ite, compo, reactor_type="pyrolysis")
 
-    def run_0D_ignition_series(self, cases):
-        """Run a series of 0D ignition cases and aggregate errors.
+    def run_0D_series(self, cases, mode="ignition"):
+        """Run a series of 0D cases (ignition or pyrolysis) and aggregate errors.
 
         Parameters
         ----------
         cases : iterable of dict
-            Each dict must contain keys compatible with run_0D_ignition_case,
-            e.g.: {"phi": ..., "T0": ..., "pressure": ..., "dt": ..., "nb_ite": ...}.
+            For ``mode="ignition"``: each dict must contain keys compatible
+            with :meth:`run_0D_ignition_case`, e.g. ``{"phi": ..., "T0": ...,
+            "pressure": ..., "dt": ..., "nb_ite": ...}``.
+
+            For ``mode="pyrolysis"``: each dict must contain keys compatible
+            with :meth:`run_0D_pyrolysis_case`, e.g. ``{"T0": ..., "pressure":
+            ..., "dt": ..., "nb_ite": ..., "diluent": ..., "X_diluent": ...}``.
+
+        mode : {"ignition", "pyrolysis"}
+            Selects which 0D case runner to use and how to interpret the
+            aggregated delay metrics.
 
         Returns
         -------
         results : list[dict]
-            Per-case results (direct outputs from run_0D_ignition_case) with the
-            corresponding input parameters attached under key "params".
+            Per-case results (direct outputs from the selected single-case
+            runner) with the corresponding input parameters attached under key
+            "params".
         summary : dict
             Aggregate metrics across all cases: averages and standard deviations
-            for equilibrium-temperature error, ignition delays, and solver calls.
+            for equilibrium-temperature error, characteristic delays, and
+            solver calls.
         """
+
+        if mode not in ("ignition", "pyrolysis"):
+            raise ValueError(f"Unsupported 0D mode: {mode}")
 
         results = []
 
@@ -363,12 +424,20 @@ class NNTesting():
         cvode_calls_list = []
 
         for case in cases:
-            res = self.run_0D_ignition_case(**case)
+            if mode == "ignition":
+                res = self.run_0D_ignition_case(**case)
+            else:
+                res = self.run_0D_pyrolysis_case(**case)
+
             # Attach input parameters to the result for traceability
             res_with_params = {"params": dict(case), **res}
             results.append(res_with_params)
 
-            err_Teq_list.append(res["error_Teq_percent"])
+            # equilibrium temperature error (percent)
+            Teq_ref = res["Teq_ref"]
+            Teq_ann = res["Teq_ann"]
+            err_Teq_list.append(100.0 * abs(Teq_ref - Teq_ann) / Teq_ref)
+
             tau_cvode_list.append(res["tau_ign_cvode"])
             tau_ann_list.append(res["tau_ign_ann"])
             ann_calls_list.append(res["ann_calls"])
@@ -380,45 +449,38 @@ class NNTesting():
         ann_calls_arr = np.array(ann_calls_list)
         cvode_calls_arr = np.array(cvode_calls_list)
 
-        # Ignition delay relative error (%), with simple guard for zero CVODE delay
-        with np.errstate(divide="ignore", invalid="ignore"):
-            tau_rel_err = 100.0 * np.where(
-                tau_cvode_arr > 0.0,
-                (tau_ann_arr - tau_cvode_arr) / tau_cvode_arr,
-                0.0,
-            )
 
+        # Summary
+        # TODO: complete with aggregated error metrics
         summary = {
             "n_cases": len(results),
             # Equilibrium temperature error stats (percent)
             "Teq_error_mean_percent": float(err_Teq_arr.mean()) if err_Teq_arr.size > 0 else 0.0,
             "Teq_error_std_percent": float(err_Teq_arr.std()) if err_Teq_arr.size > 0 else 0.0,
-            # Ignition delay stats (absolute values)
-            "tau_cvode_mean": float(tau_cvode_arr.mean()) if tau_cvode_arr.size > 0 else 0.0,
-            "tau_ann_mean": float(tau_ann_arr.mean()) if tau_ann_arr.size > 0 else 0.0,
-            # Ignition delay relative error stats (percent)
-            "tau_rel_error_mean_percent": float(tau_rel_err.mean()) if tau_rel_err.size > 0 else 0.0,
-            "tau_rel_error_std_percent": float(tau_rel_err.std()) if tau_rel_err.size > 0 else 0.0,
-            # Solver calls
-            "ann_calls_mean": float(ann_calls_arr.mean()) if ann_calls_arr.size > 0 else 0.0,
-            "cvode_calls_mean": float(cvode_calls_arr.mean()) if cvode_calls_arr.size > 0 else 0.0,
+            "mode": mode,
         }
 
         return results, summary
+    
 
     # OD IGNITION (wrapper with plotting)
     def test_0D_ignition(self, phi, T0, pressure, dt, nb_ite=100):
+
         result = self.run_0D_ignition_case(phi, T0, pressure, dt, nb_ite)
 
-        states = result["states_cvode"]
+        states = result["states_ref"]
         state_save = result["states_ann"]
+        tau_ign_CVODE = result["tau_ign_cvode"]
+        tau_ign_ANN = result["tau_ign_ann"]
+        Teq_ref = result["Teq_ref"]
+        Teq_ann = result["Teq_ann"]
         atomic_cons = result["atomic_cons"]
         sumYs = result["sumYs"]
-        tau_ign_CVODE = result["tau_ignition_cvode"]
-        tau_ign_ANN = result["tau_ignition_ann"]
-        error_Teq = result["error_Teq_percent"]
         ann_calls = result["ann_calls"]
         cvode_calls = result["cvode_calls"]
+
+        # Error on equilibrium temperature
+        error_Teq = 100.0*abs(Teq_ref - Teq_ann)/Teq_ref
 
         if self.verbose:
             print(f"\nError on equilibrium flame temperature is: {error_Teq} % \n")
@@ -505,6 +567,7 @@ class NNTesting():
         print(f" >> CVODE ignition delay: {tau_ign_CVODE}")
         print(f" >> ANN ignition delay: {tau_ign_ANN}")
 
+
     def test_0D_pyrolysis(self, T0, pressure, dt, nb_ite=100, diluent=None, X_diluent=0.0):
         """Wrapper around run_0D_pyrolysis_case with plotting.
 
@@ -514,15 +577,17 @@ class NNTesting():
 
         result = self.run_0D_pyrolysis_case(T0, pressure, dt, nb_ite, diluent=diluent, X_diluent=X_diluent)
 
-        states = result["states_cvode"]
+        states = result["states_ref"]
         state_save = result["states_ann"]
+        Teq_ref = result["Teq_ref"]
+        Teq_ann = result["Teq_ann"]
         atomic_cons = result["atomic_cons"]
         sumYs = result["sumYs"]
-        tau_pyro_CVODE = result["tau_pyrolysis_cvode"]
-        tau_pyro_ANN = result["tau_pyrolysis_ann"]
-        error_Teq = result["error_Teq_percent"]
         ann_calls = result["ann_calls"]
         cvode_calls = result["cvode_calls"]
+
+        # Error on equilibrium temperature
+        error_Teq = 100.0*abs(Teq_ref - Teq_ann)/Teq_ref
 
         if self.verbose:
             print(f"\nError on equilibrium temperature (pyrolysis case) is: {error_Teq} % \n")
@@ -620,9 +685,9 @@ class NNTesting():
         fig3.tight_layout()
         fig3.savefig(folder + "/AtomCons.png", dpi=500)
 
-        # Ignition-like delays comparison for pyrolysis case
-        print(f" >> CVODE pyrolysis delay (T rise): {tau_pyro_CVODE}")
-        print(f" >> ANN pyrolysis delay (T rise): {tau_pyro_ANN}")
+#-----------------------------------------------------------------------
+#   1D PREMIXED TEST CASE
+#-----------------------------------------------------------------------
 
     def run_1D_premixed_case(self, phi, T0, pressure, dt, T_threshold=0.0):
         """Run one 1D premixed flame case and return structured results.
@@ -709,13 +774,26 @@ class NNTesting():
         Yt_ann = Yt
 
         for i_reac in range(nb_0_reactors):
-            # Computing current progress variable
-            state = np.append(Tt[i_reac], Yt_ann[:,i_reac])
-            progvar = self.compute_progvar(state, pressure)
+
+            # Computing current progress variable on physical state
+            state_phys = np.append(Tt[i_reac], Yt_ann[:, i_reac])
+            progvar = self.compute_progvar(state_phys, pressure)
+
+            # Build clustering feature vector consistent with dtb_processing
+            # configuration.
+            if self.dt_var and self.clusterize_on == "dt":
+                # Clustering purely on dt
+                state_for_cluster = np.array([dt], dtype=float)
+            elif self.dt_var and self.clusterize_on == "all":
+                # Physical state + dt
+                state_for_cluster = np.append(state_phys, dt)
+            else:
+                # Physical-only clustering
+                state_for_cluster = state_phys
 
             # Attribute cluster
-            if self.nb_clusters>0:
-                self.attribute_cluster(state, progvar)
+            if self.nb_clusters > 0:
+                self.attribute_cluster(state_for_cluster, progvar)
             else:
                 self.cluster = 0
 
@@ -745,9 +823,6 @@ class NNTesting():
 
         return {
             "flame": f,
-            "X_grid": X_grid,
-            "Tt": Tt,
-            "Yt": Yt,
             "c": c,
             "Yt_dt_exact": Yt_dt_exact,
             "Yt_dt_ann": Yt_dt_ann,
@@ -756,6 +831,7 @@ class NNTesting():
             "ann_calls": ann_calls,
             "cvode_calls": cvode_calls,
         }
+    
 
     def run_1D_premixed_series(self, cases, species_for_error=None, x_window=None):
         """Run a series of 1D premixed cases and aggregate reaction-rate errors.
@@ -793,6 +869,7 @@ class NNTesting():
         cvode_calls_list = []
 
         for case in cases:
+
             res = self.run_1D_premixed_case(**case)
             f = res["flame"]
             Omega_exact = res["Omega_exact"]
@@ -882,19 +959,20 @@ class NNTesting():
 #-----------------------------------------------------------------------
 #   IA MODEL HANDLING FUNCTIONS
 #-----------------------------------------------------------------------
+
     # Functions to load models
     def load_models(self):
         self.models_list = []
         
-        for i in range(self.nb_clusters):
-            model = torch.load(os.path.join(self.models_folder, f"cluster{i}_model.pth"), weights_only=False)
+        for i_cluster in range(self.nb_clusters):
+            model = torch.load(os.path.join(self.models_folder, f"cluster{i_cluster}_model.pth"), weights_only=False)
             # Add to list
             self.models_list.append(model)
 
-        # if self.verbose:
-        #     for i in range(self.nb_clusters):
-        #         print(f"\n ----------CLUSTER MODEL {i}---------- \n")
-        #         summary(self.models_list[i], col_names=["input_size", "output_size", "num_params"])
+            if self.verbose:
+                print(f"Loading ANN model for cluster {i_cluster}")
+                summary(model, input_size=(1, self.ann_input_size))
+
 
     def load_scalers(self):
 
@@ -938,27 +1016,72 @@ class NNTesting():
             with open(self.models_folder + "/c_bounds.pkl", "rb") as input_file:
                 self.c_bounds = pickle.load(input_file)
 
+
     def attribute_cluster(self, state_vector=None, progvar=None):
         
         log_state = state_vector.copy()
 
         if self.clustering_method=="kmeans":
-            
-            # We remove N2 if necessary
+
+            # We remove N2 from the physical-state part if necessary
             if self.remove_N2:
                 n2_index = self.spec_list_ANN.index("N2")
                 log_state = np.delete(log_state, n2_index+1)
 
-            # Transformation
-            if self.log_transform_X>0:
-                log_state[log_state < self.threshold] = self.threshold
-                if self.log_transform_X==1:
-                    log_state[1:] = np.log(log_state[1:])
-                elif self.log_transform_X==2:
-                    log_state[1:] = (log_state[:, 1:]**self.lambda_bct - 1.0)/self.lambda_bct
+            # Build the feature vector exactly as in LearningDatabase.clusterize_dataset:
+            # - clusterize_on == "phys":  [T, species...] (no dt)
+            # - clusterize_on == "all" :  [T, species..., dt]
+            # - clusterize_on == "dt"  :  [dt] only
+            #
+            # Here, state_vector always encodes [T, species...]; dt is provided
+            # separately by the caller when needed.
 
-            # Scaling vector
-            vect_scaled = self.kmeans_scaler.transform(log_state.reshape(1, -1))
+            if self.clusterize_on == "dt":
+                # Clustering purely on dt: the k-means model was trained on
+                # a single feature (possibly log-transformed). The caller must
+                # pass state_vector as [dt] here.
+                feat = np.array(log_state, copy=True)
+                if self.log_transform_X > 0:
+                    # dt has its own log transform in database_processing,
+                    # unclipped by species threshold. Use a tiny epsilon guard.
+                    dt_eps = 1e-300
+                    feat[0] = np.log(max(feat[0], dt_eps))
+
+            elif self.clusterize_on == "all":
+                # dt_all clustering: k-means was trained on [T, species..., dt].
+                # state_vector is [T, species...] and the caller must append dt
+                # as the last entry before calling attribute_cluster.
+                feat = np.array(log_state, copy=True)
+
+                # Apply species/temperature log transform (excluding trailing dt)
+                if self.log_transform_X > 0:
+                    # Clip physical species/Temperature only
+                    phys = feat[:-1]
+                    phys[phys < self.threshold] = self.threshold
+                    if self.log_transform_X == 1:
+                        phys[1:] = np.log(phys[1:])
+                    elif self.log_transform_X == 2:
+                        phys[1:] = (phys[1:]**self.lambda_bct - 1.0)/self.lambda_bct
+                    feat[:-1] = phys
+
+                    # dt gets its own log transform, with a dedicated epsilon
+                    dt_eps = 1e-300
+                    feat[-1] = np.log(max(feat[-1], dt_eps))
+
+            else:  # "phys" or any other value treated as physical-only
+                # Clustering on physical state only: [T, species...] without dt.
+                feat = np.array(log_state, copy=True)
+
+                if self.log_transform_X > 0:
+                    feat[feat < self.threshold] = self.threshold
+                    if self.log_transform_X == 1:
+                        feat[1:] = np.log(feat[1:])
+                    elif self.log_transform_X == 2:
+                        feat[1:] = (feat[1:]**self.lambda_bct - 1.0)/self.lambda_bct
+
+            # Scaling vector using the same StandardScaler that was fitted
+            # during database_processing.clusterize_dataset.
+            vect_scaled = self.kmeans_scaler.transform(feat.reshape(1, -1))
             # Applying k-means
             self.cluster = self.kmeans.predict(vect_scaled)[0]
 
@@ -1021,6 +1144,7 @@ class NNTesting():
 
     # NN model
     def advance_state_NN(self, T_old, Y_old, pressure, dt):
+
         # Boolean for IA computation success (used for hybrid model)
         self.ia_success = True
 
@@ -1035,7 +1159,6 @@ class NNTesting():
             n2_index = self.spec_list_ANN.index("N2")
             n2_value = state_vector[n2_index+1]
             state_vector = np.delete(state_vector, n2_index+1)
-
         
         # NN update for Yk's
         if self.log_transform_X==1:
@@ -1421,4 +1544,3 @@ class NNTesting():
 
 
         return Y_new_corr
-
