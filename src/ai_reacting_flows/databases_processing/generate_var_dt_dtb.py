@@ -104,14 +104,14 @@ def GenerateVariable_dt(dtb_type: str, params: dict, comm: "MPI.Comm") -> str:
     # T_thresh = params["T_threshold"]
 
     # Time-step list definition.
-    dt_simu = params["time_step"]
+    # dt_simu = params["time_step"]
     time_step_type = params["time_step_type"]
 
     if time_step_type == "set":
         # Ensure we are working on a copy (and a Python list).
         dt_list = list(params["time_step_range"])
-        if dt_simu not in dt_list:
-            dt_list.append(dt_simu)
+        # if dt_simu not in dt_list: #Not OK if time_step is a dict (multi dt), so we let the user make sure to manually enter the dt_simu he wants
+        #     dt_list.append(dt_simu)
     else:  # "random"
         dt_range = params["time_step_range"]
         nb_dt = params["nb_dt"]
