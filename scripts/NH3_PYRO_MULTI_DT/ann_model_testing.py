@@ -12,7 +12,7 @@ testing_parameters["hybrid_ann_cvode_tol"] = 5.0e-05      # Tolerance for the CV
 
 test = NNTesting(testing_parameters)
 
-T0 = 1200.0
+T0 = 2000.0
 pressure = 101325.0
 dt = 5.0e-4
 nb_ite = 2000

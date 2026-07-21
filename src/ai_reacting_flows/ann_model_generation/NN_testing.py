@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 import cantera as ct
 
 import torch
+from datetime import datetime
 from torchinfo import summary
 from ai_reacting_flows.ann_model_generation.NN_models import MLPModel, DeepONet, DeepONet_shift
 
@@ -28,6 +29,18 @@ class NNTesting():
         self.verbose = True
 
         self.run_folder = os.getcwd()
+        # Simple text log file in the run folder to trace parameters actually
+        # used by this testing helper.
+        self.log_path = os.path.join(self.run_folder, "nn_testing.log")
+
+        def _log(msg: str):
+            """Append a timestamped message to the nn_testing.log file."""
+            ts = datetime.now().isoformat(timespec="seconds")
+            with open(self.log_path, "a") as _f:
+                _f.write(f"[{ts}] {msg}\n")
+
+        # Bind as instance method for reuse in other methods
+        self._log = _log
         # Model folder name
         self.models_folder = f"{self.run_folder}/MODELS/{testing_parameters['models_folder']}"
         with open(os.path.join(self.models_folder, "networks_params.yaml"), "r") as file:
@@ -39,7 +52,7 @@ class NNTesting():
 
         database_params = dtb_processing_params["database_params"]
         self.dt_var = database_params["dt_var"]
-        self.fuel = database_params["fuel"][0] # fuel is a list, testing only takes 1 component fuel so far
+        self.fuel = database_params["fuel"] # fuel is a list, testing only takes 1 component fuel so far
         self.mech = database_params["mech_file"]
 
         data_processing = dtb_processing_params["data_processing"]
@@ -81,7 +94,9 @@ class NNTesting():
         self.spec_list_ANN = self.spec_list_ref
         self.nb_species_ANN = self.nb_species_ref
         if self.remove_N2:
-            self.nb_species_ANN -= - 1
+            # We drop N2 from the ANN input/output space when with_N_chemistry
+            # is disabled in dtb_processing.
+            self.nb_species_ANN -= 1
 
         # ANN input vector size
         if self.dt_var:
@@ -131,6 +146,23 @@ class NNTesting():
         self._val_data_loaded = False
         self._X_val = []
         self._Y_val = []
+
+        # Log a concise summary of key parameters used for testing so that
+        # discrepancies with dtb_processing / NN_manager are easy to diagnose.
+        self._log(
+            "INIT: "
+            f"models_folder={self.models_folder}, "
+            f"dataset_path={self.dataset_path}, "
+            f"dt_var={self.dt_var}, "
+            f"fuel={self.fuel}, "
+            f"output_omegas={self.output_omegas}, "
+            f"remove_N2={self.remove_N2}, "
+            f"clusterize_on={self.clusterize_on}, "
+            f"clustering_method={self.clustering_method}, "
+            f"nb_clusters={self.nb_clusters}, "
+            f"nb_species_ref={self.nb_species_ref}, "
+            f"nb_species_ANN={self.nb_species_ANN}"
+        )
 
 #-----------------------------------------------------------------------
 #   0D TEST CASES
@@ -234,7 +266,7 @@ class NNTesting():
             Y_old = state[1:]
 
             # Computing current progress variable
-            progvar = self.compute_progvar(state, pressure)
+            progvar = 0.0  # self.compute_progvar(state, pressure)   # TODO: debug
 
             # Build clustering feature vector consistent with dtb_processing
             # configuration (clusterize_on: "phys", "all", or "dt").
@@ -254,6 +286,16 @@ class NNTesting():
                 self.attribute_cluster(state_for_cluster, progvar)
             else:
                 self.cluster = 0
+
+            # Log a compact line for each ANN advancement (index, T_old,
+            # dt, cluster, and whether dt is part of the clustering vector).
+            self._log(
+                "0D_STEP "
+                f"i={i}, "
+                f"T_old={float(T_old):.6e}, "
+                f"dt={float(dt):.6e}, "
+                f"cluster={self.cluster}, "
+            )
 
             T_new, Y_new = self.advance_state_NN(T_old, Y_old, pressure, dt)
 
@@ -293,6 +335,7 @@ class NNTesting():
 
         # Use configurable prefix to label ignition-like delays
         return {
+            "time_vect": states.t,
             "states_ref": state_ref,
             "states_ann": state_save,
             "tau_ign_cvode": tau_ign_CVODE,
@@ -468,8 +511,9 @@ class NNTesting():
 
         result = self.run_0D_ignition_case(phi, T0, pressure, dt, nb_ite)
 
-        states = result["states_ref"]
-        state_save = result["states_ann"]
+        time_vect = result["time_vect"]
+        states_cvode = result["states_ref"]
+        states_ann = result["states_ann"]
         tau_ign_CVODE = result["tau_ign_cvode"]
         tau_ign_ANN = result["tau_ign_ann"]
         Teq_ref = result["Teq_ref"]
@@ -499,8 +543,8 @@ class NNTesting():
         os.makedirs(folder)
 
         fig, ax = plt.subplots(1, 1)
-        ax.plot(states.t, states.T, ls="--", color = "k", lw=2, label="CVODE")
-        ax.plot(states.t, state_save[:,0], ls="-", color = "b", lw=2, marker='x', label="NN")
+        ax.plot(time_vect, states_cvode[:,0], ls="--", color = "k", lw=2, label="CVODE")
+        ax.plot(time_vect, states_ann[:,0], ls="-", color = "b", lw=2, marker='x', label="NN")
         ax.set_xlabel('$t$ $[ms]$', fontsize=ftsize)
         ax.set_ylabel('$T$ $[K]$', fontsize=ftsize)
         ax.legend()
@@ -510,12 +554,12 @@ class NNTesting():
 
         for spec in self.spec_to_plot:
             fig, ax = plt.subplots(1, 1)
-            ax.plot(states.t, states.Y[:,self.gas.species_index(spec)], ls="--", color = "k", lw=2, label="CVODE")
-            ax.plot(states.t, state_save[:,self.spec_list_ANN.index(spec)+1], ls="-", color = "b", lw=2, marker='x', label="NN")
+            ax.plot(time_vect, states_cvode[:,self.spec_list_ANN.index(spec)+1], ls="--", color = "k", lw=2, label="CVODE")
+            ax.plot(time_vect, states_ann[:,self.spec_list_ANN.index(spec)+1], ls="-", color = "b", lw=2, marker='x', label="NN")
             ax.set_xlabel('$t$ $[ms]$', fontsize=ftsize)
             ax.set_ylabel(f'{spec} mass fraction $[-]$', fontsize=ftsize)
-            if spec=="N2": #because N2 is often constant
-                ax.set_ylim([states.Y[0,self.gas.species_index(spec)]*0.95, states.Y[0,self.gas.species_index(spec)]*1.05])
+            if spec=="N2" and self.remove_N2: #because N2 is often constant
+                ax.set_ylim([states_cvode[0,self.gas.species_index(spec)+1]*0.95, states_cvode[0,self.gas.species_index(spec)+1]*1.05])
             ax.legend()
             fig.tight_layout()
 
@@ -523,10 +567,10 @@ class NNTesting():
 
         # Mass conservation
         fig2, ax2 = plt.subplots(1, 1)
-        ax2.plot(states.t, sumYs, ls="-", color = "b", lw=2)
-        ax2.plot(states.t, np.ones(len(states.t)), ls="--", color = "k", lw=2)
-        ax2.plot(states.t, np.ones(len(states.t))+0.01, ls="--", color = "k", lw=2, alpha=0.5)
-        ax2.plot(states.t, np.ones(len(states.t))-0.01, ls="--", color = "k", lw=2, alpha=0.5)
+        ax2.plot(time_vect, sumYs, ls="-", color = "b", lw=2)
+        ax2.plot(time_vect, np.ones(len(time_vect)), ls="--", color = "k", lw=2)
+        ax2.plot(time_vect, np.ones(len(time_vect))+0.01, ls="--", color = "k", lw=2, alpha=0.5)
+        ax2.plot(time_vect, np.ones(len(time_vect))-0.01, ls="--", color = "k", lw=2, alpha=0.5)
         ax2.set_xlabel('$t$ $[ms]$', fontsize=ftsize)
         ax2.set_ylabel(r'$\sum_{k} Y_k$ $[-]$', fontsize=ftsize)
         ax2.set_ylim([0.95,1.05])
@@ -540,22 +584,22 @@ class NNTesting():
         ratio_scale_down = 0.9
         ratio_scale_up = 1.1
 
-        axs3[0,0].plot(states.t, atomic_cons[:,0], lw=2, color="purple")
+        axs3[0,0].plot(time_vect, atomic_cons[:,0], lw=2, color="purple")
         axs3[0,0].set_ylabel('$Y_C$ $[-]$', fontsize=ftsize)
         axs3[0,0].set_ylim([atomic_cons[0,0]*ratio_scale_down,atomic_cons[0,0]*ratio_scale_up])
         axs3[0,0].xaxis.set_major_formatter(plt.NullFormatter())
 
-        axs3[0,1].plot(states.t, atomic_cons[:,1], lw=2, color="purple")
+        axs3[0,1].plot(time_vect, atomic_cons[:,1], lw=2, color="purple")
         axs3[0,1].set_ylabel('$Y_H$ $[-]$', fontsize=ftsize)
         axs3[0,1].set_ylim([atomic_cons[0,1]*ratio_scale_down,atomic_cons[0,1]*ratio_scale_up])
         axs3[0,1].xaxis.set_major_formatter(plt.NullFormatter())
 
-        axs3[1,0].plot(states.t, atomic_cons[:,2], lw=2, color="purple")
+        axs3[1,0].plot(time_vect, atomic_cons[:,2], lw=2, color="purple")
         axs3[1,0].set_xlabel('$t$ $[ms]$', fontsize=ftsize)
         axs3[1,0].set_ylabel('$Y_O$ $[-]$', fontsize=ftsize)
         axs3[1,0].set_ylim([atomic_cons[0,2]*ratio_scale_down,atomic_cons[0,2]*ratio_scale_up])
 
-        axs3[1,1].plot(states.t, atomic_cons[:,3], lw=2, color="purple")
+        axs3[1,1].plot(time_vect, atomic_cons[:,3], lw=2, color="purple")
         axs3[1,1].set_xlabel('$t$ $[ms]$', fontsize=ftsize)
         axs3[1,1].set_ylabel('$Y_N$ $[-]$', fontsize=ftsize)
         axs3[1,1].set_ylim([atomic_cons[0,3]*ratio_scale_down,atomic_cons[0,3]*ratio_scale_up])
@@ -577,8 +621,9 @@ class NNTesting():
 
         result = self.run_0D_pyrolysis_case(T0, pressure, dt, nb_ite, diluent=diluent, X_diluent=X_diluent)
 
-        states = result["states_ref"]
-        state_save = result["states_ann"]
+        time_vect = result["time_vect"]
+        states_cvode = result["states_ref"]
+        states_ann = result["states_ann"]
         Teq_ref = result["Teq_ref"]
         Teq_ann = result["Teq_ann"]
         atomic_cons = result["atomic_cons"]
@@ -600,14 +645,14 @@ class NNTesting():
         ftsize = 14
 
         # Create directory with plots (no phi in naming)
-        folder = f'./plots_0D_pyro_T0#{T0}'
+        folder = f'./plots_0D_pyro_P#{pressure}_T0#{T0}_dt#{dt}'
         if os.path.isdir(folder):
             shutil.rmtree(folder)
         os.makedirs(folder)
 
         fig, ax = plt.subplots(1, 1)
-        ax.plot(states.t, states.T, ls="--", color="k", lw=2, label="CVODE")
-        ax.plot(states.t, state_save[:, 0], ls="-", color="b", lw=2, marker='x', label="NN")
+        ax.plot(time_vect, states_cvode[:, 0], ls="--", color="k", lw=2, label="CVODE")
+        ax.plot(time_vect, states_ann[:, 0], ls="-", color="b", lw=2, marker='x', label="NN")
         ax.set_xlabel('$t$ $[ms]$', fontsize=ftsize)
         ax.set_ylabel('$T$ $[K]$', fontsize=ftsize)
         ax.legend()
@@ -617,14 +662,14 @@ class NNTesting():
 
         for spec in self.spec_to_plot:
             fig, ax = plt.subplots(1, 1)
-            ax.plot(states.t, states.Y[:, self.gas.species_index(spec)], ls="--", color="k", lw=2, label="CVODE")
-            ax.plot(states.t, state_save[:, self.spec_list_ANN.index(spec) + 1], ls="-", color="b", lw=2, marker='x', label="NN")
+            ax.plot(time_vect, states_cvode[:, self.spec_list_ANN.index(spec) + 1], ls="--", color="k", lw=2, label="CVODE")
+            ax.plot(time_vect, states_ann[:, self.spec_list_ANN.index(spec) + 1], ls="-", color="b", lw=2, marker='x', label="NN")
             ax.set_xlabel('$t$ $[ms]$', fontsize=ftsize)
             ax.set_ylabel(f'{spec} mass fraction $[-]$', fontsize=ftsize)
-            if spec == "N2":
+            if spec == "N2" and self.remove_N2:
                 ax.set_ylim([
-                    states.Y[0, self.gas.species_index(spec)] * 0.95,
-                    states.Y[0, self.gas.species_index(spec)] * 1.05,
+                    states_cvode.Y[0, self.gas.species_index(spec)+1] * 0.95,
+                    states_cvode.Y[0, self.gas.species_index(spec)+1] * 1.05,
                 ])
             ax.legend()
             fig.tight_layout()
@@ -633,10 +678,10 @@ class NNTesting():
 
         # Mass conservation
         fig2, ax2 = plt.subplots(1, 1)
-        ax2.plot(states.t, sumYs, ls="-", color="b", lw=2)
-        ax2.plot(states.t, np.ones(len(states.t)), ls="--", color="k", lw=2)
-        ax2.plot(states.t, np.ones(len(states.t)) + 0.01, ls="--", color="k", lw=2, alpha=0.5)
-        ax2.plot(states.t, np.ones(len(states.t)) - 0.01, ls="--", color="k", lw=2, alpha=0.5)
+        ax2.plot(time_vect, sumYs, ls="-", color="b", lw=2)
+        ax2.plot(time_vect, np.ones(len(time_vect)), ls="--", color="k", lw=2)
+        ax2.plot(time_vect, np.ones(len(time_vect)) + 0.01, ls="--", color="k", lw=2, alpha=0.5)
+        ax2.plot(time_vect, np.ones(len(time_vect)) - 0.01, ls="--", color="k", lw=2, alpha=0.5)
         ax2.set_xlabel('$t$ $[ms]$', fontsize=ftsize)
         ax2.set_ylabel(r'$\sum_{k} Y_k$ $[-]$', fontsize=ftsize)
         ax2.set_ylim([0.95, 1.05])
@@ -650,7 +695,7 @@ class NNTesting():
         ratio_scale_down = 0.9
         ratio_scale_up = 1.1
 
-        axs3[0, 0].plot(states.t, atomic_cons[:, 0], lw=2, color="purple")
+        axs3[0, 0].plot(time_vect, atomic_cons[:, 0], lw=2, color="purple")
         axs3[0, 0].set_ylabel('$Y_C$ $[-]$', fontsize=ftsize)
         axs3[0, 0].set_ylim([
             atomic_cons[0, 0] * ratio_scale_down,
@@ -658,7 +703,7 @@ class NNTesting():
         ])
         axs3[0, 0].xaxis.set_major_formatter(plt.NullFormatter())
 
-        axs3[0, 1].plot(states.t, atomic_cons[:, 1], lw=2, color="purple")
+        axs3[0, 1].plot(time_vect, atomic_cons[:, 1], lw=2, color="purple")
         axs3[0, 1].set_ylabel('$Y_H$ $[-]$', fontsize=ftsize)
         axs3[0, 1].set_ylim([
             atomic_cons[0, 1] * ratio_scale_down,
@@ -666,7 +711,7 @@ class NNTesting():
         ])
         axs3[0, 1].xaxis.set_major_formatter(plt.NullFormatter())
 
-        axs3[1, 0].plot(states.t, atomic_cons[:, 2], lw=2, color="purple")
+        axs3[1, 0].plot(time_vect, atomic_cons[:, 2], lw=2, color="purple")
         axs3[1, 0].set_xlabel('$t$ $[ms]$', fontsize=ftsize)
         axs3[1, 0].set_ylabel('$Y_O$ $[-]$', fontsize=ftsize)
         axs3[1, 0].set_ylim([
@@ -674,7 +719,7 @@ class NNTesting():
             atomic_cons[0, 2] * ratio_scale_up,
         ])
 
-        axs3[1, 1].plot(states.t, atomic_cons[:, 3], lw=2, color="purple")
+        axs3[1, 1].plot(time_vect, atomic_cons[:, 3], lw=2, color="purple")
         axs3[1, 1].set_xlabel('$t$ $[ms]$', fontsize=ftsize)
         axs3[1, 1].set_ylabel('$Y_N$ $[-]$', fontsize=ftsize)
         axs3[1, 1].set_ylim([
@@ -796,6 +841,17 @@ class NNTesting():
                 self.attribute_cluster(state_for_cluster, progvar)
             else:
                 self.cluster = 0
+
+            # Log parameters used for clustering in 1D case at this spatial
+            # location (x index only; grid position can be inferred from f.grid
+            # if needed).
+            self._log(
+                "1D_CLUSTER "
+                f"i_reac={i_reac}, "
+                f"T={float(Tt[i_reac]):.6e}, "
+                f"dt={float(dt):.6e}, "
+                f"cluster={self.cluster}, "
+            )
 
             # advance to t + dt
             if Tt[i_reac] >= T_threshold:
@@ -969,9 +1025,9 @@ class NNTesting():
             # Add to list
             self.models_list.append(model)
 
-            if self.verbose:
-                print(f"Loading ANN model for cluster {i_cluster}")
-                summary(model, input_size=(1, self.ann_input_size))
+            # if self.verbose:
+            #     print(f"Loading ANN model for cluster {i_cluster}")
+            #     summary(model, input_size=(1, self.ann_input_size))
 
 
     def load_scalers(self):
@@ -1194,13 +1250,14 @@ class NNTesting():
                 log_state[1:] = (state_vector[1:]**self.lambda_bct - 1.0)/self.lambda_bct
             else:
                 log_state[1:] = state_vector[1:]
-        
+
+
         # input of NN
         log_state = log_state.reshape(1, -1)
         mean_X = self.Xscaler_list[self.cluster][:, 0]
         std_X = self.Xscaler_list[self.cluster][:, 1]
         NN_input = self._scale(log_state, mean_X, std_X)
-
+        
         # New state predicted by ANN
         NN_input = torch.tensor(NN_input, dtype=torch.float64).to(self.device)
         state_new = self.models_list[self.cluster](NN_input)
@@ -1250,7 +1307,7 @@ class NNTesting():
         T_new = state_vector[0] - (1/self.gas.cp)*np.sum(self.gas.partial_molar_enthalpies/self.gas.molecular_weights*(Y_new-Y_old))
         
         # Reshaping mass fraction vector
-        Y_new = Y_new.reshape(Y_new.shape[0],1)
+        Y_new = Y_new.T
 
         return T_new, Y_new
 
@@ -1259,6 +1316,7 @@ class NNTesting():
 #-----------------------------------------------------------------------
 
     def compute_ann_errors(self, T, Y, pressure, dt, already_transformed=False):
+
         T_old = T.copy()
 
         # Dealing with the case where Y is already transformed (logged or bct) at input of function
@@ -1271,17 +1329,34 @@ class NNTesting():
             Y_old = Y.copy()
 
         # Assign to cluster
-        # Computing current progress variable
-        state = np.append(T_old, Y_old)
-        progvar = self.compute_progvar(state, pressure, self.mechanism_type)
+        # Computing current progress variable on physical state
+        state_phys = np.append(T_old, Y_old)
+        progvar = self.compute_progvar(state_phys, pressure, self.mechanism_type)
         self.progvar = progvar
-        #
-        if self.nb_clusters>0:
-            self.attribute_cluster(state, progvar)
+
+        # Build clustering feature vector consistent with dtb_processing
+        # configuration (clusterize_on: "phys", "all", or "dt").
+        if self.dt_var and self.clusterize_on == "dt":
+            state_for_cluster = np.array([dt], dtype=float)
+        elif self.dt_var and self.clusterize_on == "all":
+            state_for_cluster = np.append(state_phys, dt)
+        else:
+            state_for_cluster = state_phys
+
+        if self.nb_clusters > 0:
+            self.attribute_cluster(state_for_cluster, progvar)
         else:
             self.cluster = 0
-        #
-        print(f"Current point in cluster: {self.cluster} \n")
+
+        # Log the parameters used in this error-computation call for
+        # debugging consistency with dtb_processing / NN_manager.
+        self._log(
+            "ERR_CLUSTER "
+            f"T={float(T_old):.6e}, "
+            f"dt={float(dt):.6e}, "
+            f"cluster={self.cluster}, "
+            f"clusterize_on={self.clusterize_on}, "
+        )
             
 
         # CVODE run

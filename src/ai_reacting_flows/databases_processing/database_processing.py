@@ -781,11 +781,11 @@ class LearningDatabase(object):
             # Saving scalers
             Xscaler_array = np.column_stack([Xscaler.mean_, Xscaler.var_])
             dset_Xscaler = grp.create_dataset('Xscaler', data = Xscaler_array)
-            dset_Xscaler.attrs['cols'] = np.array(["mean", "std"], dtype=object)
+            dset_Xscaler.attrs['cols'] = np.array(["mean", "var"], dtype=object)
             #
             Yscaler_array = np.column_stack([Yscaler.mean_, Yscaler.var_])
             dset_Yscaler = grp.create_dataset('Yscaler', data = Yscaler_array)
-            dset_Yscaler.attrs['cols'] = np.array(["mean", "std"], dtype=object)
+            dset_Yscaler.attrs['cols'] = np.array(["mean", "var"], dtype=object)
             
             # Saving data
             dset_X_train = grp.create_dataset('X_train', data = X_train)
