@@ -124,7 +124,6 @@ class NN_manager():
 
             for i_cluster in range(self.nb_clusters):
                 os.mkdir(f"{self.directory}/training/cluster_{i_cluster}")
-                os.mkdir(f"{self.directory}/training/cluster_{i_cluster}/")
                 os.mkdir(f"{self.directory}/evaluation/cluster_{i_cluster}")
 
             if (self.nb_clusters > 1):
