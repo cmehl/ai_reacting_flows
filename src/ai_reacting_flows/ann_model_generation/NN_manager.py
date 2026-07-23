@@ -3,6 +3,7 @@ import os
 import shutil
 import joblib
 import copy
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -31,6 +32,18 @@ class NN_manager():
         
         # Allow explicit run folder, defaulting to current working directory
         self.run_folder = os.path.abspath(run_folder) if run_folder is not None else os.getcwd()
+        
+        # Training log: one text file per NN_manager run, placed next to
+        # networks_params.yaml in the run folder.
+        ts_run = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.log_path = os.path.join(self.run_folder, f"nn_training_{ts_run}.log")
+
+        def _log(msg: str):
+            ts = datetime.now().isoformat(timespec="seconds")
+            with open(self.log_path, "a") as _f:
+                _f.write(f"[{ts}] {msg}\n")
+
+        self._log = _log
         #
         # Networks structures parameters
         #
@@ -88,6 +101,21 @@ class NN_manager():
         self.val_every = learning_data["val_every"]
 
 
+        # Log high-level dataset and processing configuration.
+        self._log(
+            "INIT "
+            f"dtb_type={dtb_type}, "
+            f"dt_var={self.dt_var}, "
+            f"remove_N2={self.remove_N2}, "
+            f"log_transform_X={self.log_transform_X}, "
+            f"log_transform_Y={self.log_transform_Y}, "
+            f"lambda_bct={self.lambda_bct}, "
+            f"output_omegas={self.output_omegas}, "
+            f"clustering_type={self.clustering_type}, "
+            f"nb_clusters={self.nb_clusters}, "
+        )
+
+
         # Model's path
         self.directory = f"{self.run_folder:s}/MODELS/{self.model_name:s}"
         if self.new_model_folder:
@@ -114,6 +142,7 @@ class NN_manager():
 
         print("CLUSTERING:")
         print(f">> Number of clusters is: {self.nb_clusters}")
+        self._log(f"CLUSTERING nb_clusters={self.nb_clusters}")
 
         # We copy the mechanism files in order to use them for testing
         if self.new_model_folder:
@@ -272,6 +301,18 @@ class NN_manager():
 
         val_loss_list = np.empty(n_val_points)
 
+        # Log basic training configuration for this cluster
+        self._log(
+            "TRAIN_START "
+            f"cluster={i_cluster}, "
+            f"n_epochs={n_epochs}, "
+            f"batch_size={self.batch_size}, "
+            f"optimizer={self.optimizer_name}, "
+            f"loss={self.loss_name}, "
+            f"initial_lr={self.initial_learning_rate}, "
+            f"scheduler_option={self.scheduler_option}"
+        )
+
         for epoch in range(n_epochs):
 
             # Shuffling training data before each epoch
@@ -362,6 +403,15 @@ class NN_manager():
 
             after_lr = optimizer.param_groups[0]["lr"]
 
+            msg = (
+                f"EPOCH cluster={i_cluster} epoch={epoch} "
+                f"lr={before_lr:.6e}->{after_lr:.6e} "
+                f"train_loss={loss_list[epoch]:.6e}"
+            )
+            if epoch % val_every == 0 and val_loss is not None:
+                msg += f" val_loss={val_loss.item():.6e}"
+            self._log(msg)
+
             print(f"Finished epoch {epoch}")
             print(f"    >> lr: {before_lr} -> {after_lr}")
             print(f"    >> Loss (mean over batches): {loss_list[epoch]}")
@@ -371,6 +421,12 @@ class NN_manager():
         # Restore best model (based on validation loss) before returning
         if best_state_dict is not None:
             model.load_state_dict(best_state_dict)
+
+        self._log(
+            "TRAIN_END "
+            f"cluster={i_cluster}, "
+            f"best_val_loss={best_val_loss:.6e}"
+        )
 
         return epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements
     

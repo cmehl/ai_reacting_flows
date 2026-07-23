@@ -30,8 +30,10 @@ class NNTesting():
 
         self.run_folder = os.getcwd()
         # Simple text log file in the run folder to trace parameters actually
-        # used by this testing helper.
-        self.log_path = os.path.join(self.run_folder, "nn_testing.log")
+        # used by this testing helper. Use a per-run timestamped filename so
+        # logs do not accumulate across different executions.
+        ts_run = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.log_path = os.path.join(self.run_folder, f"nn_testing_{ts_run}.log")
 
         def _log(msg: str):
             """Append a timestamped message to the nn_testing.log file."""
