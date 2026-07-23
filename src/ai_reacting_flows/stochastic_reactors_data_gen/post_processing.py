@@ -522,7 +522,7 @@ class StochDatabase(object):
         df = pd.DataFrame(data=data, columns=col_names)
 
         # Smart binwidth via Freedman-Diaconis rule
-        binwidth = self._smart_binwidth(df[var])
+        binwidth = utils.smart_binwidth(df[var])
             
         # Temperature histogram
         fig, ax = plt.subplots()
@@ -541,7 +541,7 @@ class StochDatabase(object):
         fig, ax = plt.subplots()
 
         # Smart binwidth via Freedman-Diaconis rule
-        binwidth = self._smart_binwidth(self.df[var])
+        binwidth = utils.smart_binwidth(self.df[var])
         
         sns.histplot(data=self.df, x=var, ax=ax, stat="probability",
                      binwidth=binwidth, kde=True)
@@ -550,38 +550,6 @@ class StochDatabase(object):
             
         fig.savefig(self.save_folder + f"/PDF_{var}_plot.png")
     
-
-    @staticmethod
-    def _smart_binwidth(x, fallback_bins=10):
-        """
-        Compute a data-driven bin width using the Freedman-Diaconis rule:
-            binwidth = 2 * IQR(x) / n^(1/3)
-        Falls back to a fixed number of bins if IQR is zero or sample is too small.
-        """
-
-        x = np.asarray(x)
-        x = x[~np.isnan(x)]
-        n = x.size
-
-        if n < 2:
-            return 1.0
-
-        q75, q25 = np.percentile(x, [75, 25])
-        iqr = q75 - q25
-        data_range = x.max() - x.min()
-
-        if iqr <= 0 or data_range <= 0:
-            # Degenerate/near-constant data: just split range into fixed bins
-            return (data_range / fallback_bins) if data_range > 0 else 1.0
-
-        binwidth = 2 * iqr / (n ** (1 / 3))
-
-        # Guard against pathologically small binwidth relative to range
-        # (e.g. huge n with tight IQR) by capping the number of bins
-        min_binwidth = data_range / (fallback_bins * 10)
-        binwidth = max(binwidth, min_binwidth)
-
-        return binwidth
 
     #--------------------------------------------------------
     # Points density
