@@ -20,7 +20,7 @@ from ai_reacting_flows.ann_model_generation.NN_models import MLPModel, DeepONet,
 
 torch.set_default_dtype(torch.float64)
 
-activation_functions = {"ReLU": nn.ReLU, "GeLU" : nn.GELU, "tanh" : nn.Tanh, "Id" : nn.Identity}
+activation_functions = {"relu": nn.ReLU, "gelu" : nn.GELU, "tanh" : nn.Tanh, "id" : nn.Identity}
 model_type = {"MLP": MLPModel, "DeepONet": DeepONet, "DeepONetShift": DeepONet_shift}
 
 class NN_manager():
@@ -153,7 +153,8 @@ class NN_manager():
                 nb_units_in_layers_list = copy.deepcopy(network_parameters["nb_units_in_layers_list"])
                 nb_units_in_layers_list.insert(0, n_in)
                 nb_units_in_layers_list.append(n_out)
-                layers_activation_list = [activation_functions[act] for act in network_parameters["layers_activation_list"]]
+                # Normalize activation names to lowercase to allow e.g. "GeLu"/"GELU"
+                layers_activation_list = [activation_functions[str(act).lower()] for act in network_parameters["layers_activation_list"]]
                 layers_type = network_parameters["layers_type"]
             
                 model = model_type[network_type](self.device, nb_units_in_layers_list, layers_type, layers_activation_list)
@@ -162,7 +163,8 @@ class NN_manager():
                 nb_units_in_layers_list = copy.deepcopy(network_parameters["nb_units_in_layers_list"])
                 layers_activation_list = {}
                 for k in network_parameters["layers_activation_list"].keys():
-                    layers_activation_list[k] = [activation_functions[act] for act in network_parameters["layers_activation_list"][k]]
+                    # Normalize activation names to lowercase to allow e.g. "GeLu"/"GELU"
+                    layers_activation_list[k] = [activation_functions[str(act).lower()] for act in network_parameters["layers_activation_list"][k]]
                 layers_type = network_parameters["layers_type"]
                 n_neurons = network_parameters["n_neurons"]
                 nb_units_in_layers_list["branch"].insert(0,n_in)
@@ -175,7 +177,8 @@ class NN_manager():
                 nb_units_in_layers_list = copy.deepcopy(network_parameters["nb_units_in_layers_list"])
                 layers_activation_list = {}
                 for k in network_parameters["layers_activation_list"].keys():
-                    layers_activation_list[k] = [activation_functions[act] for act in network_parameters["layers_activation_list"][k]]
+                    # Normalize activation names to lowercase to allow e.g. "GeLu"/"GELU"
+                    layers_activation_list[k] = [activation_functions[str(act).lower()] for act in network_parameters["layers_activation_list"][k]]
                 layers_type = network_parameters["layers_type"]
                 n_neurons = network_parameters["n_neurons"]
                 nb_units_in_layers_list["branch"].insert(0,n_in)
