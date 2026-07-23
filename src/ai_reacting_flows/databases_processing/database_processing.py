@@ -15,6 +15,7 @@ import joblib
 import pandas as pd
 import numpy as np
 from scipy.interpolate import interpn
+from scipy.stats import boxcox_normmax
 # from scipy.interpolate import interp1d
 # from scipy.stats.kde import gaussian_kde
 import h5py
@@ -609,6 +610,204 @@ class LearningDatabase(object):
         print(f"    >> {100*self.X.shape[0]/n} % of the database is retained")
 
 
+    def undersample_1D(self, var, seed=1991, min_count=1, plot_distrib=False):
+
+        print("--- 1D BINS UNDERSAMPLING ---")
+
+        # Dataset size
+        n = self.X.shape[0]
+
+        print(f"Initial number of samples: {n}")
+
+        if var=="PC1" or var=="PC2":
+            if not self.is_pca_computed:
+                self.compute_pca()
+
+        self.X_old = self.X.copy()
+        self.Y_old = self.Y.copy()
+
+        rng = np.random.default_rng(seed)
+
+        v = self.X[var].values
+
+        # Compute optimal bin width
+        binwidth = utils.smart_binwidth(v)
+        print("Computed binwidth is", binwidth)
+
+        # Create bin edges
+        edges = np.arange(v.min(), v.max() + binwidth, binwidth)
+
+        # Histogram
+        counts, _ = np.histogram(v, bins=edges)
+
+        # Assign each point to a bin
+        bin_id = np.digitize(v, edges[:-1], right=False)
+
+        # Bins with enough samples get subsampled down to n_keep;
+        # sparse bins are kept whole, untouched.
+        occupied = counts > 0
+        eligible_mask = occupied & (counts >= min_count)
+        n_keep = counts[eligible_mask].min() if eligible_mask.any() else None
+
+        n_sparse_bins = (occupied & ~eligible_mask).sum()
+        n_sparse_points = counts[occupied & ~eligible_mask].sum()
+
+        if n_sparse_bins > 0:
+            print(f"Keeping {n_sparse_bins} sparse bins whole "
+                f"({n_sparse_points} points, no subsampling applied).")
+
+        if n_keep is not None:
+            print(f"Subsampling to {n_keep} samples per eligible bin.")
+        else:
+            print("No bin reaches min_count; nothing will be subsampled.")
+
+        selected = []
+
+        for b in range(1, len(edges)):
+            idx = np.where(bin_id == b)[0]
+
+            if len(idx) == 0:
+                continue
+
+            if eligible_mask[b - 1]:
+                chosen = rng.choice(idx, size=n_keep, replace=False)
+                selected.extend(chosen)
+            else:
+                # Sparse bin: keep every point as-is
+                selected.extend(idx)
+
+        selected = np.array(selected)
+        rng.shuffle(selected)
+
+        self.X = self.X.iloc[selected].reset_index(drop=True)
+
+        if self.dt_var:
+            self.Y = self.Y[selected, :]
+            self.dt_array = self.dt_array[selected]
+        else:
+            self.Y = self.Y.iloc[selected].reset_index(drop=True)
+
+        self.is_resampled = True
+
+        if plot_distrib:
+            plt.figure(figsize=(6,4))
+            plt.hist(v, bins=edges, alpha=0.5, density=True, label="Before")
+            plt.hist(self.X[var], bins=edges, alpha=0.5, density=True, label="After")
+            plt.legend()
+            plt.xlabel(var)
+            plt.ylabel("Density")
+            plt.tight_layout()
+            plt.show()
+
+
+        print(f"\n Number of points in undersampled dataset: {self.X.shape[0]} \n")
+        print(f"    >> {100*self.X.shape[0]/n} % of the database is retained")
+
+
+    def undersample_2D(self, var1, var2, seed=1991, min_count=1, plot_distrib=False):
+
+        print("--- 2D BINS UNDERSAMPLING ---")
+        
+        # Dataset size
+        n = self.X.shape[0]
+
+        print(f"Initial number of samples: {n}")
+
+        for var in (var1, var2):
+            if var in ("PC1", "PC2") and not self.is_pca_computed:
+                self.compute_pca()
+
+        self.X_old = self.X.copy()
+        self.Y_old = self.Y.copy()
+
+        rng = np.random.default_rng(seed)
+
+        v1 = self.X[var1].values
+        v2 = self.X[var2].values
+
+        # Compute optimal bin width for each axis
+        binwidth1 = utils.smart_binwidth(v1)
+        binwidth2 = utils.smart_binwidth(v2)
+        print(f"Computed binwidths are {binwidth1} ({var1}) and {binwidth2} ({var2})")
+
+        # Create bin edges for each axis
+        edges1 = np.arange(v1.min(), v1.max() + binwidth1, binwidth1)
+        edges2 = np.arange(v2.min(), v2.max() + binwidth2, binwidth2)
+
+        # Assign each point to a bin along each axis
+        bin_id1 = np.digitize(v1, edges1[:-1], right=False)
+        bin_id2 = np.digitize(v2, edges2[:-1], right=False)
+
+        # Combine into a single 2D bin identifier
+        bin_id_2d = np.stack([bin_id1, bin_id2], axis=1)
+
+        # Count occupancy per combined bin
+        unique_bins, inverse, bin_counts = np.unique(
+            bin_id_2d, axis=0, return_inverse=True, return_counts=True
+        )
+
+        # Bins with enough samples get subsampled down to n_keep;
+        # sparse bins are kept whole, untouched.
+        eligible_mask = bin_counts >= min_count
+        n_keep = bin_counts[eligible_mask].min() if eligible_mask.any() else None
+
+        n_sparse_bins = (~eligible_mask).sum()
+        n_sparse_points = bin_counts[~eligible_mask].sum()
+
+        if n_sparse_bins > 0:
+            print(f"Keeping {n_sparse_bins} sparse bins whole "
+                f"({n_sparse_points} points, no subsampling applied).")
+
+        if n_keep is not None:
+            print(f"Subsampling to {n_keep} samples per eligible 2D bin.")
+        else:
+            print("No bin reaches min_count; nothing will be subsampled.")
+
+        selected = []
+
+        for b in range(len(unique_bins)):
+            idx = np.where(inverse == b)[0]
+
+            if eligible_mask[b]:
+                chosen = rng.choice(idx, size=n_keep, replace=False)
+                selected.extend(chosen)
+            else:
+                # Sparse bin: keep every point as-is
+                selected.extend(idx)
+
+        selected = np.array(selected)
+        rng.shuffle(selected)
+
+        self.X = self.X.iloc[selected].reset_index(drop=True)
+
+        if self.dt_var:
+            self.Y = self.Y[selected, :]
+            self.dt_array = self.dt_array[selected]
+        else:
+            self.Y = self.Y.iloc[selected].reset_index(drop=True)
+
+        self.is_resampled = True
+
+        if plot_distrib:
+            fig, axes = plt.subplots(1, 2, figsize=(10, 4), sharex=True, sharey=True)
+
+            axes[0].hist2d(v1, v2, bins=[edges1, edges2], cmap="viridis")
+            axes[0].set_title("Before")
+            axes[0].set_xlabel(var1)
+            axes[0].set_ylabel(var2)
+
+            axes[1].hist2d(self.X[var1], self.X[var2], bins=[edges1, edges2], cmap="viridis")
+            axes[1].set_title("After")
+            axes[1].set_xlabel(var1)
+            axes[1].set_ylabel(var2)
+
+            plt.tight_layout()
+            plt.show()
+
+        print(f"\n Number of points in undersampled dataset: {self.X.shape[0]} \n")
+        print(f"    >> {100*self.X.shape[0]/n} % of the database is retained")
+
+
     # Database final processing
     def process_database(self, plot_distributions = False, distribution_species=[], seed = 42):
 
@@ -691,9 +890,9 @@ class LearningDatabase(object):
                 clip_cols = X_cols
 
             # Clip if logarithm transformation (species/Temperature only)
-            if self.log_transform_X>0:
+            if self.log_transform_X==1:
                 X_p[clip_cols] = X_p[clip_cols].clip(lower=self.threshold)
-            if self.log_transform_Y>0:
+            if self.log_transform_Y==1:
                 Y_p[Y_p < self.threshold] = self.threshold
 
             # If log transform at input and not at output and output_omega, we need to save un-transformed data
@@ -1078,3 +1277,21 @@ class LearningDatabase(object):
         self.X["PC2"] = PCs[:,1]
 
         self.is_pca_computed = True
+
+
+    def _estimate_lambda_boxcox(self, values):
+        """Estimate Box–Cox lambda by MLE on a 1D array.
+
+        values: array-like, strictly positive after thresholding.
+        """
+        values = np.asarray(values)
+        # Remove non-positive or NaNs for safety
+        values = values[np.isfinite(values)]
+        values = values[values > 0.0]
+
+        if values.size == 0:
+            raise ValueError("No positive values available to estimate Box–Cox lambda.")
+
+        lmbda = boxcox_normmax(values, method='mle')
+
+        return lmbda
