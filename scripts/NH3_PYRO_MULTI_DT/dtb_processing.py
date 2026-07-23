@@ -7,9 +7,13 @@ def fHRR(x):
 database = LearningDatabase()
 database.density_scatter("PC1","PC2")
 database.apply_temperature_threshold()
+
 # database.undersample_HRR("Temperature", "H2O", hrr_func = fHRR, keep_low_c = True, n_samples = 500000, n_bins = 100, plot_distrib = True)
-# database.density_scatter("PC1","PC2")
-# database.compare_resampled_pdfs("Temperature")
+# database.undersample_1D("Temperature", seed=1991, plot_distrib=True)
+database.undersample_2D("PC1","PC2", seed=1991, min_count=300, plot_distrib=False)
+
+database.density_scatter("PC1","PC2")
+database.compare_resampled_pdfs("Temperature")
 database.clusterize_dataset() # Log_transform (if required) > Scale (StandardScaler, same for all dtb) > Clusterize
 database.visualize_clusters("PC1","PC2")
 database.visualize_clusters("NH3","Temperature")

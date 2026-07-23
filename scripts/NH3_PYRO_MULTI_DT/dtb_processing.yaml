@@ -1,15 +1,15 @@
 database_params:
   database_type: stoch
   dtb_folder_suffix: NH3_PYRO_EMST
-  dtb_file: solutions_5dt.h5
-  database_name: dtb_nh3_pyro_emst
+  dtb_file: solutions_3dt.h5
+  database_name: dtb_nh3_pyro_emst_resampled
   dt_var: true
   fuel: NH3
   mech_file: ../../data/chemical_mechanisms/mech_nh3_noArHe.yaml
 data_processing:
   log_transform_X: 1
   log_transform_Y: 1
-  threshold: 1.0e-40
+  threshold: 1.0e-15
   T_threshold: 600.0
   output_omegas: false
   with_N_chemistry: true
