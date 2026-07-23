@@ -76,10 +76,17 @@ class NN_manager():
         self.networks_types = networks_parameters["networks_types"] # list[str] (string in model_type.keys()), 1 per cluster
         self.networks_defs = networks_parameters["networks_def"] # list[str], keys to network parameters in "clusters", 1 per cluster
         self.clusters = networks_parameters["clusters"]
-        self.learning = networks_parameters["learning"] # DA to CM: same learning for all clusters ?
-        self.learning["optimizer"] = networks_parameters.get("optimizer", "adam")
-        self.learning["loss"] = networks_parameters.get("loss", "MSE")
-        self.learning["scheduler_option"] = networks_parameters.get("scheduler_option", "ExpLR")
+
+        learning_data = networks_parameters["learning"] # DA: same learning for all clusters ?  (CM: we could change in the future)
+        self.optimizer_name = learning_data.get("optimizer", "adam")
+        self.loss_name = learning_data.get("loss", "MSE")
+        self.initial_learning_rate = learning_data.get("initial_learning_rate", 0.001)
+        self.scheduler_option = learning_data.get("scheduler_option", "ExpLR")
+        self.LR_decay_rate = learning_data.get("decay_rate", 1.0)
+        self.batch_size = learning_data.get("batch_size", 2048)
+        self.epochs_list = learning_data["epochs_list"]
+        self.val_every = learning_data["val_every"]
+
 
         # Model's path
         self.directory = f"{self.run_folder:s}/MODELS/{self.model_name:s}"
@@ -243,12 +250,12 @@ class NN_manager():
         Yscaler_mean = Yscaler_mean.to(self.device)
         Yscaler_std = Yscaler_std.to(self.device)
 
-        n_epochs = self.learning["epochs_list"][i_cluster]
+        n_epochs = self.epochs_list[i_cluster]
 
         loss_list = np.empty(n_epochs)
 
         # Validation / conservation computed every "val_every" epochs (default 10)
-        val_every = int(self.learning.get("val_every", 10))
+        val_every = int(self.val_every)
         n_val_points = max(1, n_epochs // val_every)
 
         # Array to store sum of mass fractions: mean, min and max
@@ -274,11 +281,11 @@ class NN_manager():
             # Training parameters
             epoch_loss = 0.0
             n_batches = 0
-            for i in range(0, len(X_train), self.learning["batch_size"]):
+            for i in range(0, len(X_train), self.batch_size):
 
-                Xbatch = X_train[i:i+self.learning["batch_size"]]
+                Xbatch = X_train[i:i+self.batch_size]
                 y_pred = model(Xbatch)
-                ybatch = Y_train[i:i+self.learning["batch_size"]]
+                ybatch = Y_train[i:i+self.batch_size]
                 loss = loss_fn(y_pred, ybatch)
                 optimizer.zero_grad()
                 loss.backward()
@@ -292,7 +299,7 @@ class NN_manager():
             loss_list[epoch] = epoch_loss / max(1, n_batches)
 
             before_lr = optimizer.param_groups[0]["lr"]
-            if self.learning["scheduler_option"]!="None":
+            if self.scheduler_option!="None":
                 scheduler.step()
             after_lr = optimizer.param_groups[0]["lr"]
 
@@ -372,15 +379,15 @@ class NN_manager():
             model = self.create_model(i_cluster, X_val.shape[1], Y_val.shape[1])
 
             # Optimizer and loss function
-            opt_name = str(self.learning.get("optimizer", "adam")).lower()
+            opt_name = str(self.optimizer_name).lower()
             if opt_name == "adam":
-                optimizer = optim.Adam(model.parameters(), lr=self.learning["initial_learning_rate"])
+                optimizer = optim.Adam(model.parameters(), lr=self.initial_learning_rate)
             elif opt_name == "sgd":
-                optimizer = optim.SGD(model.parameters(), lr=self.learning["initial_learning_rate"])
+                optimizer = optim.SGD(model.parameters(), lr=self.initial_learning_rate)
             else:
                 raise ValueError(f"Unsupported optimizer '{opt_name}'")
 
-            loss_name = str(self.learning.get("loss", "mse")).lower()
+            loss_name = str(self.loss_name).lower()
             if loss_name == "mse":
                 loss_fn = nn.MSELoss()
             elif loss_name == "l1":
@@ -389,10 +396,9 @@ class NN_manager():
                 raise ValueError(f"Unsupported loss '{loss_name}'")
 
             # Set scheduler
-            scheduler_option = self.learning["scheduler_option"]
-            if scheduler_option=="ExpLR":
-                scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=self.learning["decay_rate"])
-            elif scheduler_option == "None" or scheduler_option is None:
+            if self.scheduler_option=="ExpLR":
+                scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=self.LR_decay_rate)
+            elif self.scheduler_option == "None" or self.scheduler_option is None:
                 # Identity scheduler (no LR change)
                 scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda _: 1.0)
             else:
