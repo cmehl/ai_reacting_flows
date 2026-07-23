@@ -17,6 +17,8 @@ import torch.optim as optim
 
 import ai_reacting_flows.tools.utilities as utils
 from ai_reacting_flows.ann_model_generation.NN_models import MLPModel, DeepONet, DeepONet_shift
+from ai_reacting_flows.ann_model_generation.conservation import ConservationLayer, compute_b_target, corrected_prediction_to_scaled_target
+
 
 torch.set_default_dtype(torch.float64)
 
@@ -85,8 +87,7 @@ class NN_manager():
         self.LR_decay_rate = learning_data.get("decay_rate", 1.0)
         self.batch_size = learning_data.get("batch_size", 2048)
         self.epochs_list = learning_data["epochs_list"]
-        self.val_every = learning_data["val_every"]
-
+        self.val_every = learning_data.get("val_every", 20)
 
         # Model's path
         self.directory = f"{self.run_folder:s}/MODELS/{self.model_name:s}"
@@ -136,6 +137,17 @@ class NN_manager():
             if (self.nb_clusters > 1):
                 # Adding copies of clustering parameters for later use in inference
                 self.copy_clusterer()
+
+
+        # In NN_manager.__init__ (once, alongside self.A_element):
+        self.conservation_layer = ConservationLayer(
+            torch.tensor(self.A_element, dtype=torch.float64), n_newton_iters=5
+        ).to(self.device)
+
+        # Whether the raw candidate is already guaranteed positive:
+        # True only when predicting Y directly (not omegas) AND log/Box-Cox transformed.
+        self.already_positive = (not self.output_omegas) and (self.log_transform_Y in (1, 2))
+
 
     
     def _check_nb_clusters(self):
@@ -284,9 +296,32 @@ class NN_manager():
             for i in range(0, len(X_train), self.batch_size):
 
                 Xbatch = X_train[i:i+self.batch_size]
-                y_pred = model(Xbatch)
                 ybatch = Y_train[i:i+self.batch_size]
-                loss = loss_fn(y_pred, ybatch)
+
+
+                y_pred_scaled = model(Xbatch)
+
+                # --- physical-space input state (needed for b_target and, in omega mode, to recover the delta) ---
+                if self.dt_var:
+                    yin_batch = self._inverse_scale(Xbatch[:, 1:-1], Xscaler_mean[1:-1], Xscaler_std[1:-1], self.log_transform_X)
+                else:
+                    yin_batch = self._inverse_scale(Xbatch[:, 1:], Xscaler_mean[1:], Xscaler_std[1:], self.log_transform_X)
+
+                y_raw = self._inverse_scale(y_pred_scaled, Yscaler_mean, Yscaler_std, self.log_transform_Y)
+
+                if self.output_omegas:
+                    y_raw = yin_batch + y_raw
+
+                b_target = compute_b_target(A_element, yin_batch)
+                y_corrected, lam = self.conservation_layer(y_raw, b_target, already_positive=self.already_positive)
+
+                y_corrected_scaled = corrected_prediction_to_scaled_target(
+                    y_corrected, yin_batch, Yscaler_mean, Yscaler_std,
+                    self.log_transform_Y, self.output_omegas, self.lambda_bct
+                )
+
+                loss = loss_fn(y_corrected_scaled, ybatch) + 1e-4 * (lam ** 2).mean()
+
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
