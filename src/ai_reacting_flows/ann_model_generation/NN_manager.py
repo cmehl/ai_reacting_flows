@@ -298,12 +298,12 @@ class NN_manager():
 
             loss_list[epoch] = epoch_loss / max(1, n_batches)
 
+            # Track learning rate evolution
             before_lr = optimizer.param_groups[0]["lr"]
-            if self.scheduler_option!="None":
-                scheduler.step()
-            after_lr = optimizer.param_groups[0]["lr"]
 
-            # Computing validation loss and mass conservation metric (only every "val_every" epochs as it is expensive)
+            # Computing validation loss and mass conservation metric (only every "val_every" epochs as it is expensive).
+            # For ReduceLROnPlateau we want to drive the scheduler from the validation loss.
+            val_loss = None
             if epoch % val_every == 0:
                 model.eval()  # evaluation mode
                 with torch.no_grad():
@@ -352,11 +352,21 @@ class NN_manager():
 
                 val_loss_list[idx] = val_loss.item()
 
+            # Scheduler step: use validation loss for ReduceLROnPlateau when available;
+            # for other schedulers, step once per epoch.
+            if scheduler is not None:
+                if self.scheduler_option == "ReduceLROnPlateau" and val_loss is not None:
+                    scheduler.step(val_loss.item())
+                elif self.scheduler_option != "ReduceLROnPlateau":
+                    scheduler.step()
+
+            after_lr = optimizer.param_groups[0]["lr"]
+
             print(f"Finished epoch {epoch}")
             print(f"    >> lr: {before_lr} -> {after_lr}")
             print(f"    >> Loss (mean over batches): {loss_list[epoch]}")
-            if epoch % val_every==0:
-                print(f"    >> Validation loss: {val_loss}")
+            if epoch % val_every == 0 and val_loss is not None:
+                print(f"    >> Validation loss: {val_loss.item()}")
 
         # Restore best model (based on validation loss) before returning
         if best_state_dict is not None:
@@ -396,13 +406,21 @@ class NN_manager():
                 raise ValueError(f"Unsupported loss '{loss_name}'")
 
             # Set scheduler
-            if self.scheduler_option=="ExpLR":
+            if self.scheduler_option == "ExpLR":
                 scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=self.LR_decay_rate)
+            elif self.scheduler_option == "ReduceLROnPlateau":
+                # Plateau scheduler is driven by validation loss in train_model.
+                scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+                    optimizer,
+                    factor=0.5,
+                    patience=10,
+                    mode="min",
+                )
             elif self.scheduler_option == "None" or self.scheduler_option is None:
-                # Identity scheduler (no LR change)
-                scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda _: 1.0)
+                # No scheduler: pass None, train_model will skip scheduler.step
+                scheduler = None
             else:
-                raise ValueError("Only scheduler implemented yet is ExpLR or None")
+                raise ValueError("Only scheduler implemented yet is ExpLR, ReduceLROnPlateau or None")
             
             # Perform training
             epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements = self.train_model(i_cluster, model, loss_fn, optimizer, scheduler, X_train, X_val, Y_train, Y_val, Xscaler_mean, np.sqrt(Xscaler_var), Yscaler_mean, np.sqrt(Yscaler_var))
