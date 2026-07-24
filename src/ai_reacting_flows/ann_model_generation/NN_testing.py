@@ -1315,8 +1315,15 @@ class NNTesting():
         # only to species not in log_excluded_species, keeping excluded species on
         # their original linear scale.
         if self.log_transform_Y>0:
+
             if self.output_omegas:
-                state_updated = log_state[0,1:] + Y_new
+
+                if self.dt_var:
+                    Y_ini = log_state[0,1:-1]
+                else:
+                    Y_ini = log_state[0,1:]
+                #
+                state_updated = Y_ini + Y_new
                 #
                 for i, spec in enumerate(self.spec_list_ANN):
                     if spec not in self.log_excluded_species:
