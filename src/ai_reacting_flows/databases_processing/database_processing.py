@@ -1183,7 +1183,7 @@ class LearningDatabase(object):
         print(report)
 
         # Write to file
-        filename  = self.dtb_folder + "/" + self.database_name + f"/dtb_statistics_report_{i_cluster}.png"
+        filename  = self.dtb_folder + "/" + self.database_name + f"/dtb_statistics_report_{i_cluster}.txt"
         with open(filename, "w", encoding="utf-8") as f:
             f.write(report)
 
