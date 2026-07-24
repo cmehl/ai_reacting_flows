@@ -15,7 +15,7 @@ import joblib
 import pandas as pd
 import numpy as np
 from scipy.interpolate import interpn
-from scipy.stats import boxcox_normmax
+from scipy.stats import boxcox_normmax, skew, kurtosis
 # from scipy.interpolate import interp1d
 # from scipy.stats.kde import gaussian_kde
 import h5py
@@ -1052,6 +1052,8 @@ class LearningDatabase(object):
             dset_Y_val = grp.create_dataset('Y_val', data = Y_val)
             dset_Y_val.attrs['cols'] = np.array(Y_val.columns, dtype=object)
 
+            print(f">> Analyze statistics of database for cluster {i_cluster}")
+            self.compute_statistical_analysis(X_train, Xscaler, i_cluster)
 
             # Saving datasets
             # print(">> Saving datasets")
@@ -1099,6 +1101,93 @@ class LearningDatabase(object):
         Y_p_flat = pd.DataFrame(data=Y_p_flat_arr, columns=self.col_names_Y)   # We assume no additional columns have been added to Y after reading h5
 
         return X_p_flat, Y_p_flat, dt_p_flat
+
+
+    def compute_statistical_analysis(self, X_train, Xscaler, i_cluster):
+
+        cols = X_train.columns
+
+        means = Xscaler.mean_
+        stds = np.sqrt(Xscaler.var_)
+
+        header = (                                                                                                                                                                                                                                  
+            f"{'Species':15s}"                                                                                                                                                                                                                      
+            f"{'mean':>8s}" 
+            f"{'std':>8s}" 
+            f"{'min':>8s}"                                                                                                                                                                                                                         
+            f"{'max':>8s}"                                                                                                                                                                                                                         
+            f"{'skew':>8s}" 
+            f"{'kurt':>8s}"                                                                                                                                                                                                         
+            f"{'p01':>8s}"                                                                                                                                                                                                                          
+            f"{'p50':>8s}"                                                                                                                                                                                                                          
+            f"{'p99':>8s}"   
+            f"{'f <-5':>9s}"                                                                                                                                                                                                                         
+            f"{'f <-10':>9s}"                                                                                                                                                                                                                        
+            f"{'f <-20':>9s}"                                                                                                                                                                                                                        
+            f"{'n <-5':>9s}"                                                                                                                                                                                                                         
+            f"{'n <-10':>9s}"                                                                                                                                                                                                                        
+            f"{'n <-20':>9s}"                                                                                                                                                                                                                                                                                                                                                                                                                                            
+        ) 
+
+        separator = "-" * len(header)
+
+        lines = [header, separator]
+
+        for name, mu, sigma, z in zip(cols, means, stds, X_train.T.to_numpy()):
+
+            zmin = z.min()
+            zmax = z.max()
+
+            m = z.mean()
+            s = z.std()
+            if s>0:
+                skewn = skew(z, bias=False)
+                kurt = kurtosis(z, fisher=True, bias=False)   # normal = 0
+            else:
+                skewn = np.nan
+                kurt = np.nan
+
+            p01, p50, p99 = np.percentile(z, [1, 50, 99])
+
+            frac5 = np.mean(z < -5)
+            frac10 = np.mean(z < -10)
+            frac20 = np.mean(z < -20)
+
+            n5 = np.sum(z < -5)
+            n10 = np.sum(z < -10)
+            n20 = np.sum(z < -20)
+
+            line = (                                                                                                                                                                                                                                  
+                f"{name:15s}"                                                                                                                                                                                                                       
+                f"{mu:8.3f}"                                                                                                                                                                                                                     
+                f"{sigma:8.3f}"
+                f"{zmin:8.2f}"                                                                                                                                                                                                                      
+                f"{zmax:8.2f}"                                                                                                                                                                                                                      
+                f"{skewn:8.2f}"                                                                                                                                                                                                                      
+                f"{kurt:8.2f}"
+                f"{p01:8.2f}"                                                                                                                                                                                                                       
+                f"{p50:8.2f}"                                                                                                                                                                                                                       
+                f"{p99:8.2f}"                                                                                                                                                                                                                       
+                f"{frac5:9.2e}"                                                                                                                                                                                                                     
+                f"{frac10:9.2e}"                                                                                                                                                                                                                    
+                f"{frac20:9.2e}"                                                                                                                                                                                                                                                                                                                                                                                                                                     
+                f"{n5:9.2e}"                                                                                                                                                                                                                     
+                f"{n10:9.2e}"                                                                                                                                                                                                                    
+                f"{n20:9.2e}"
+            ) 
+
+            lines.append(line)
+
+        # Print to console
+        report = "\n".join(lines)
+        print(report)
+
+        # Write to file
+        filename  = self.dtb_folder + "/" + self.database_name + f"/dtb_statistics_report_{i_cluster}.png"
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(report)
+
+
 
 
     def print_data_size(self):
