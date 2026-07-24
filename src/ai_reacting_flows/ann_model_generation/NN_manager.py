@@ -495,6 +495,8 @@ class NN_manager():
                 loss_fn = nn.MSELoss()
             elif loss_name == "l1":
                 loss_fn = nn.L1Loss()
+            elif loss_name == "huber":
+                loss_fn = nn.HuberLoss()
             else:
                 raise ValueError(f"Unsupported loss '{loss_name}'")
 
