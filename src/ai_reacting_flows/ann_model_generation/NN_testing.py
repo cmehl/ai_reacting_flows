@@ -1089,6 +1089,10 @@ class NNTesting():
                 n2_index = self.spec_list_ANN.index("N2")
                 log_state = np.delete(log_state, n2_index+1)
 
+            # --------------------------------------------------------------
+            # Build feature vector exactly as in LearningDatabase.clusterize_dataset
+            # --------------------------------------------------------------
+
             # Build the feature vector exactly as in LearningDatabase.clusterize_dataset:
             # - clusterize_on == "phys":  [T, species...] (no dt)
             # - clusterize_on == "all" :  [T, species..., dt]
@@ -1116,14 +1120,24 @@ class NNTesting():
 
                 # Apply species/temperature log transform (excluding trailing dt)
                 if self.log_transform_X > 0:
-                    # Clip physical species/Temperature only
-                    phys = feat[:-1]
-                    phys[phys < self.threshold] = self.threshold
-                    if self.log_transform_X == 1:
-                        phys[1:] = np.log(phys[1:])
-                    elif self.log_transform_X == 2:
-                        phys[1:] = (phys[1:]**self.lambda_bct - 1.0)/self.lambda_bct
-                    feat[:-1] = phys
+
+                    # Transform species (excluding trailing dt)
+                    for i, spec in enumerate(self.spec_list_ANN):
+                        col = 1 + i  # T is column 0
+
+                        if spec in self.log_excluded_species:
+                            continue
+
+                        val = feat[col]
+
+                        if self.log_transform_X == 1:
+                            val = max(val, self.threshold)
+                            feat[col] = np.log(val)
+
+                        elif self.log_transform_X == 2:
+                            val = max(val, 0.0)
+                            feat[col] = (val**self.lambda_bct - 1.0) / self.lambda_bct
+
 
                     # dt gets its own log transform, with a dedicated epsilon
                     dt_eps = 1e-300
@@ -1132,14 +1146,27 @@ class NNTesting():
             else:  # "phys" or any other value treated as physical-only
                 # Clustering on physical state only: [T, species...] without dt.
                 feat = np.array(log_state, copy=True)
+                
+                for i, spec in enumerate(self.spec_list_ANN):
+                    col = 1 + i
 
-                if self.log_transform_X > 0:
-                    feat[feat < self.threshold] = self.threshold
+                    if spec in self.log_excluded_species:
+                        continue
+
+                    val = feat[col]
+
                     if self.log_transform_X == 1:
-                        feat[1:] = np.log(feat[1:])
-                    elif self.log_transform_X == 2:
-                        feat[1:] = (feat[1:]**self.lambda_bct - 1.0)/self.lambda_bct
+                        val = max(val, self.threshold)
+                        feat[col] = np.log(val)
 
+                    elif self.log_transform_X == 2:
+                        val = max(val, 0.0)
+                        feat[col] = (val**self.lambda_bct - 1.0) / self.lambda_bct
+
+
+            # --------------------------------------------------------------
+            # Scale and predict cluster
+            # --------------------------------------------------------------
             # Scaling vector using the same StandardScaler that was fitted
             # during database_processing.clusterize_dataset.
             vect_scaled = self.kmeans_scaler.transform(feat.reshape(1, -1))
