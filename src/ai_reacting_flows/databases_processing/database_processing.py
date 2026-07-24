@@ -68,6 +68,11 @@ class LearningDatabase(object):
         self.output_omegas  = data_processing["output_omegas"]
         self.with_N_chemistry = data_processing["with_N_chemistry"]
 
+        # Optional list of species to keep on the original (linear) scale
+        # even when log/Box–Cox transforms are active. This generalizes the
+        # previous hard-coded N2 behavior.
+        self.log_excluded_species = data_processing.get("log_excluded_species", [])
+
         data_clustering = dtb_processing_parameters["data_clustering"]
         self.clusterize_on = data_clustering['clusterize_on']
         self.clustering_method = data_clustering["clustering_method"]
@@ -889,11 +894,19 @@ class LearningDatabase(object):
             else:
                 clip_cols = X_cols
 
-            # Clip if logarithm transformation (species/Temperature only)
+            # Applying transformation (log or Box–Cox) to species/Temperature.
+            # Species listed in self.log_excluded_species are explicitly
+            # excluded from the log/BCT, so they stay on the original
+            # (linear) scale even when log_transform_* > 0.
+            cols_to_log_X = [c for c in clip_cols[1:] if c not in self.log_excluded_species]
+            cols_to_log_Y = [c for c in Y_cols if c not in self.log_excluded_species]
+
+            # Clip if logarithm transformation (species/Temperature only).
+            # log_excluded_species are kept on their original scales (no log/BCT applied later),
             if self.log_transform_X==1:
-                X_p[clip_cols] = X_p[clip_cols].clip(lower=self.threshold)
+                X_p[cols_to_log_X] = X_p[cols_to_log_X].clip(lower=self.threshold)
             if self.log_transform_Y==1:
-                Y_p[Y_p < self.threshold] = self.threshold
+                Y_p[cols_to_log_Y] = Y_p[cols_to_log_Y].clip(lower=self.threshold)
 
             # If log transform at input and not at output and output_omega, we need to save un-transformed data
             if self.log_transform_X>0 and self.log_transform_Y==0 and self.output_omegas:
@@ -902,16 +915,15 @@ class LearningDatabase(object):
                 else:
                     X_p_save = X_p.loc[:, X_cols[1:]]
 
-            # Applying transformation (log of BCT) to species/Temperature
-            if self.log_transform_X==1:
-                X_p.loc[:, clip_cols[1:]] = np.log(X_p[clip_cols[1:]])
-            elif self.log_transform_X==2:
-                X_p.loc[:, clip_cols[1:]] = (X_p[clip_cols[1:]]**self.lambda_bct - 1.0)/self.lambda_bct
-            #
-            if self.log_transform_Y==1:
-                Y_p.loc[:, Y_cols] = np.log(Y_p[Y_cols])
-            elif self.log_transform_Y==2:
-                Y_p.loc[:, Y_cols] = (Y_p[Y_cols]**self.lambda_bct - 1.0)/self.lambda_bct
+            if self.log_transform_X==1 and cols_to_log_X:
+                X_p.loc[:, cols_to_log_X] = np.log(X_p[cols_to_log_X])
+            elif self.log_transform_X==2 and cols_to_log_X:
+                X_p.loc[:, cols_to_log_X] = (X_p[cols_to_log_X]**self.lambda_bct - 1.0)/self.lambda_bct
+
+            if self.log_transform_Y==1 and cols_to_log_Y:
+                Y_p.loc[:, cols_to_log_Y] = np.log(Y_p[cols_to_log_Y])
+            elif self.log_transform_Y==2 and cols_to_log_Y:
+                Y_p.loc[:, cols_to_log_Y] = (Y_p[cols_to_log_Y]**self.lambda_bct - 1.0)/self.lambda_bct
 
 
             # dt gets its own log transform, unclipped by the species threshold.
