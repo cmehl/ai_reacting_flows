@@ -13,6 +13,8 @@ data_processing:
   T_threshold: 600.0
   output_omegas: false
   with_N_chemistry: true
+  log_excluded_species:
+  - N2
 data_clustering:
   clusterize_on: phys
   clustering_method: kmeans

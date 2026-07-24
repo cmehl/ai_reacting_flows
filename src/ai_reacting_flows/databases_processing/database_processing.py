@@ -68,6 +68,11 @@ class LearningDatabase(object):
         self.output_omegas  = data_processing["output_omegas"]
         self.with_N_chemistry = data_processing["with_N_chemistry"]
 
+        # Optional list of species to keep on the original (linear) scale
+        # even when log/Box–Cox transforms are active. This generalizes the
+        # previous hard-coded N2 behavior.
+        self.log_excluded_species = data_processing.get("log_excluded_species", [])
+
         data_clustering = dtb_processing_parameters["data_clustering"]
         self.clusterize_on = data_clustering['clusterize_on']
         self.clustering_method = data_clustering["clustering_method"]
@@ -284,6 +289,9 @@ class LearningDatabase(object):
             if self.with_N_chemistry is False:
                 spec_list.remove("N2")
 
+            # ------------------------------------------------------------------
+            # Build data matrix for clustering
+            # ------------------------------------------------------------------
             if self.dt_var:
                 if self.clusterize_on=="all":
                     spec_list.append("dt")
@@ -300,15 +308,41 @@ class LearningDatabase(object):
             else:
                 data_kmeans = self.X.values.copy()
 
+            # ------------------------------------------------------------------
+            # Apply log / Box-Cox transform
+            # ------------------------------------------------------------------
+
             # Applying log transform
             if self.log_transform_X>0:
+
                 if self.dt_var and self.clusterize_on=="dt":
                     data_kmeans = self._compute_log(data_kmeans)
                 # elif self.dt_var and self.clusterize_on=="double":
                 #     data_kmeans_phys[:, 1:] = self._compute_log(data_kmeans_phys[:, 1:])
                 #     data_kmeans_time = self._compute_log(data_kmeans_time)
                 else:
-                    data_kmeans[:, 1:] = self._compute_log(data_kmeans[:, 1:])
+                    # Build list of columns to transform
+                    cols_to_log = []
+                    dt_col = None
+
+                    # Temperature is column 0 -> never transformed
+                    for i, name in enumerate(spec_list[1:], start=1):
+                        if name == "dt":
+                            dt_col = i
+                        elif name not in self.log_excluded_species:
+                            cols_to_log.append(i)
+
+                    if cols_to_log:
+                        data_kmeans[:, cols_to_log] = self._compute_log(data_kmeans[:, cols_to_log])
+
+                    # dt handled separately
+                    if dt_col is not None:
+                        if self.log_transform_X > 0:
+                            data_kmeans[:, dt_col] = np.log(np.clip(data_kmeans[:, dt_col], 1e-300, None))
+
+            # ------------------------------------------------------------------
+            # Normalize before k-means
+            # ------------------------------------------------------------------
 
             # Normalizing states before k-means
             # if self.dt_var and self.clusterize_on=="double":
@@ -323,6 +357,10 @@ class LearningDatabase(object):
             Xscaler = StandardScaler()
             Xscaler.fit(data_kmeans)
             data_kmeans = Xscaler.transform(data_kmeans)
+
+            # ------------------------------------------------------------------
+            # K-means
+            # ------------------------------------------------------------------
 
             # Applying k-means clustering
             print(">> Performing k-means clustering")
@@ -345,6 +383,10 @@ class LearningDatabase(object):
             # else:
             print('KMeans Score : ', kmeans.score(data_kmeans))
 
+            # ------------------------------------------------------------------
+            # Store labels
+            # ------------------------------------------------------------------
+
             # Attributing cluster to data points
             # if self.dt_var and self.clusterize_on=='double':
             #     self.X["cluster_phys"] = kmeans_phys.labels_
@@ -356,6 +398,10 @@ class LearningDatabase(object):
                 self.all_clusters = kmeans.labels_
             else:  # constant dt or dt var with clusterize_on=phys
                 self.X["cluster"] = kmeans.labels_
+
+            # ------------------------------------------------------------------
+            # Save model and normalization
+            # ------------------------------------------------------------------
 
             # Saving K-means model
             # if self.dt_var and self.clusterize_on == 'double':
@@ -889,11 +935,19 @@ class LearningDatabase(object):
             else:
                 clip_cols = X_cols
 
-            # Clip if logarithm transformation (species/Temperature only)
+            # Applying transformation (log or Box–Cox) to species/Temperature.
+            # Species listed in self.log_excluded_species are explicitly
+            # excluded from the log/BCT, so they stay on the original
+            # (linear) scale even when log_transform_* > 0.
+            cols_to_log_X = [c for c in clip_cols[1:] if c not in self.log_excluded_species]
+            cols_to_log_Y = [c for c in Y_cols if c not in self.log_excluded_species]
+
+            # Clip if logarithm transformation (species/Temperature only).
+            # log_excluded_species are kept on their original scales (no log/BCT applied later),
             if self.log_transform_X==1:
-                X_p[clip_cols] = X_p[clip_cols].clip(lower=self.threshold)
+                X_p[cols_to_log_X] = X_p[cols_to_log_X].clip(lower=self.threshold)
             if self.log_transform_Y==1:
-                Y_p[Y_p < self.threshold] = self.threshold
+                Y_p[cols_to_log_Y] = Y_p[cols_to_log_Y].clip(lower=self.threshold)
 
             # If log transform at input and not at output and output_omega, we need to save un-transformed data
             if self.log_transform_X>0 and self.log_transform_Y==0 and self.output_omegas:
@@ -902,16 +956,15 @@ class LearningDatabase(object):
                 else:
                     X_p_save = X_p.loc[:, X_cols[1:]]
 
-            # Applying transformation (log of BCT) to species/Temperature
-            if self.log_transform_X==1:
-                X_p.loc[:, clip_cols[1:]] = np.log(X_p[clip_cols[1:]])
-            elif self.log_transform_X==2:
-                X_p.loc[:, clip_cols[1:]] = (X_p[clip_cols[1:]]**self.lambda_bct - 1.0)/self.lambda_bct
-            #
-            if self.log_transform_Y==1:
-                Y_p.loc[:, Y_cols] = np.log(Y_p[Y_cols])
-            elif self.log_transform_Y==2:
-                Y_p.loc[:, Y_cols] = (Y_p[Y_cols]**self.lambda_bct - 1.0)/self.lambda_bct
+            if self.log_transform_X==1 and cols_to_log_X:
+                X_p.loc[:, cols_to_log_X] = np.log(X_p[cols_to_log_X])
+            elif self.log_transform_X==2 and cols_to_log_X:
+                X_p.loc[:, cols_to_log_X] = (X_p[cols_to_log_X]**self.lambda_bct - 1.0)/self.lambda_bct
+
+            if self.log_transform_Y==1 and cols_to_log_Y:
+                Y_p.loc[:, cols_to_log_Y] = np.log(Y_p[cols_to_log_Y])
+            elif self.log_transform_Y==2 and cols_to_log_Y:
+                Y_p.loc[:, cols_to_log_Y] = (Y_p[cols_to_log_Y]**self.lambda_bct - 1.0)/self.lambda_bct
 
 
             # dt gets its own log transform, unclipped by the species threshold.

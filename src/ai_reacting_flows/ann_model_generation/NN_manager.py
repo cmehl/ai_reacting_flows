@@ -64,6 +64,9 @@ class NN_manager():
         self.log_transform_Y = data_processing["log_transform_Y"]
         self.lambda_bct = data_processing.get("lambda_bct", 0.1)
         self.output_omegas = data_processing["output_omegas"]
+        # General list of species for which input/output log/BCT should be
+        # skipped. This mirrors LearningDatabase.log_excluded_species.
+        self.log_excluded_species = data_processing.get("log_excluded_species", [])
 
         data_clustering = dtb_processing_params["data_clustering"]
         self.clustering_type = data_clustering["clustering_method"]
@@ -106,11 +109,12 @@ class NN_manager():
             "INIT "
             f"dtb_type={dtb_type}, "
             f"dt_var={self.dt_var}, "
-            f"remove_N2={self.remove_N2}, "
-            f"log_transform_X={self.log_transform_X}, "
-            f"log_transform_Y={self.log_transform_Y}, "
-            f"lambda_bct={self.lambda_bct}, "
-            f"output_omegas={self.output_omegas}, "
+             f"remove_N2={self.remove_N2}, "
+             f"log_transform_X={self.log_transform_X}, "
+             f"log_transform_Y={self.log_transform_Y}, "
+             f"lambda_bct={self.lambda_bct}, "
+             f"output_omegas={self.output_omegas}, "
+             f"log_excluded_species={self.log_excluded_species}, "
             f"clustering_type={self.clustering_type}, "
             f"nb_clusters={self.nb_clusters}, "
         )
@@ -139,6 +143,14 @@ class NN_manager():
 
         # Check if nb_clusters is consistent with the number of groups in training_data.h5
         self._check_nb_clusters()
+
+        # Column names for X/Y training data (same across clusters), used to
+        # apply per-species inverse log/BCT when reconstructing physical
+        # states for conservation diagnostics.
+        with h5py.File(f"{self.dataset_path:s}/training_data.h5", 'r') as h5file_r:
+            grp0 = h5file_r["CLUSTER_0"]
+            self.X_cols_all = grp0['X_train'].attrs['cols']
+            self.Y_cols_all = grp0['Y_train'].attrs['cols']
 
         print("CLUSTERING:")
         print(f">> Number of clusters is: {self.nb_clusters}")
@@ -228,29 +240,49 @@ class NN_manager():
         return model
     
 
-    def _inverse_scale(self, scaled_tensor, mean, std, log_transform: int):
-        """Inverse scaling helper for mass fractions.
- 
+    def _inverse_scale(self, scaled_tensor, mean, std, log_transform: int, cols=None):
+        """Inverse scaling helper with per-column log/BCT control.
+
         scaled_tensor: tensor in scaled space
         mean, std: scaling statistics (tensors on same device)
-        log_transform: transform code used at database-processing time
+        log_transform: global transform code used at database-processing time
             (0: none, 1: plain log, 2: Box-Cox-type transform with self.lambda_bct).
             Passing a bool here is still supported for backward compatibility,
             with True treated as log_transform==1.
+        cols: optional iterable of column names (X_train/Y_train) used to
+            decide which variables actually had log/BCT applied. Species
+            listed in self.log_excluded_species are kept on their original
+            (linear) scale even when log_transform > 0.
         """
-        y = mean + (std + 1e-7) * scaled_tensor
- 
+        y_t = mean + (std + 1e-7) * scaled_tensor
+
         # Normalize bool -> int for backward compatibility with old call sites.
         if isinstance(log_transform, bool):
             log_transform = 1 if log_transform else 0
- 
-        if log_transform == 1:
-            y = torch.exp(y)
-        elif log_transform == 2:
-            # Inverse of: y_t = (y**lambda - 1) / lambda  =>  y = (y_t * lambda + 1)**(1/lambda)
-            y = (y * self.lambda_bct + 1.0) ** (1.0 / self.lambda_bct)
-        # log_transform == 0: no-op, y already in physical space
- 
+
+        # No log/BCT at preprocessing time or no column metadata: just
+        # return unscaled values.
+        if log_transform == 0 or cols is None:
+            return y_t
+
+        y = y_t.clone()
+
+        # Per-column inverse transform, aligned with database_processing.
+        for j, name in enumerate(cols):
+            base = str(name)
+            if base.endswith('_X') or base.endswith('_Y'):
+                base = base[:-2]
+
+            # Skip variables explicitly excluded from log/BCT
+            if base in self.log_excluded_species:
+                continue
+
+            if log_transform == 1:
+                y[:, j] = torch.exp(y_t[:, j])
+            elif log_transform == 2:
+                # Inverse of: y_t = (y**lambda - 1)/lambda
+                y[:, j] = (y_t[:, j] * self.lambda_bct + 1.0) ** (1.0 / self.lambda_bct)
+
         return y
     
 
@@ -353,16 +385,21 @@ class NN_manager():
                     y_val_pred = model(X_val)
                     val_loss = loss_fn(y_val_pred, Y_val)
 
-                    # Inverse-scale the model's input state (species/Temperature),
-                    # excluding the time-step column when dt_var is used.
-                    if self.dt_var: # Time needs to be removed from X here
-                        yval_in = self._inverse_scale(X_val[:,1:-1], Xscaler_mean[1:-1], Xscaler_std[1:-1], self.log_transform_X)
+                    # Inverse-scale the model's input state (species part of X),
+                    # excluding the time-step column when dt_var is used. We apply
+                    # per-species log/BCT inverse in accordance with
+                    # database_processing.log_excluded_species.
+                    if self.dt_var:  # Time needs to be removed from X here
+                        cols_x_slice = self.X_cols_all[1:-1]
+                        yval_in = self._inverse_scale(X_val[:,1:-1], Xscaler_mean[1:-1], Xscaler_std[1:-1], self.log_transform_X, cols=cols_x_slice)
                     else:
-                        yval_in = self._inverse_scale(X_val[:,1:], Xscaler_mean[1:], Xscaler_std[1:], self.log_transform_X)
+                        cols_x_slice = self.X_cols_all[1:]
+                        yval_in = self._inverse_scale(X_val[:,1:], Xscaler_mean[1:], Xscaler_std[1:], self.log_transform_X, cols=cols_x_slice)
 
                     # SUM OF MASS FRACTION
-                    # Inverse scale done by hand to stay with Torch arrays
-                    yk = self._inverse_scale(y_val_pred, Yscaler_mean, Yscaler_std, self.log_transform_Y)
+                    # Inverse scale done per species to stay consistent with
+                    # database_processing (some species may be kept linear).
+                    yk = self._inverse_scale(y_val_pred, Yscaler_mean, Yscaler_std, self.log_transform_Y, cols=self.Y_cols_all)
 
                     if self.output_omegas:
                         yk_abs = yval_in + yk

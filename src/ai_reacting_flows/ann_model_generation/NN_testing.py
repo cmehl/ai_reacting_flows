@@ -65,6 +65,9 @@ class NNTesting():
         self.threshold = data_processing["threshold"]
         self.remove_N2 = not data_processing["with_N_chemistry"]
         self.output_omegas = data_processing["output_omegas"]
+        # General list of species for which input/output log/BCT should be
+        # skipped, mirroring LearningDatabase.log_excluded_species.
+        self.log_excluded_species = data_processing.get("log_excluded_species", [])
 
         data_clustering = dtb_processing_params["data_clustering"]
         self.clustering_method  = data_clustering["clustering_method"]
@@ -1086,6 +1089,10 @@ class NNTesting():
                 n2_index = self.spec_list_ANN.index("N2")
                 log_state = np.delete(log_state, n2_index+1)
 
+            # --------------------------------------------------------------
+            # Build feature vector exactly as in LearningDatabase.clusterize_dataset
+            # --------------------------------------------------------------
+
             # Build the feature vector exactly as in LearningDatabase.clusterize_dataset:
             # - clusterize_on == "phys":  [T, species...] (no dt)
             # - clusterize_on == "all" :  [T, species..., dt]
@@ -1113,14 +1120,24 @@ class NNTesting():
 
                 # Apply species/temperature log transform (excluding trailing dt)
                 if self.log_transform_X > 0:
-                    # Clip physical species/Temperature only
-                    phys = feat[:-1]
-                    phys[phys < self.threshold] = self.threshold
-                    if self.log_transform_X == 1:
-                        phys[1:] = np.log(phys[1:])
-                    elif self.log_transform_X == 2:
-                        phys[1:] = (phys[1:]**self.lambda_bct - 1.0)/self.lambda_bct
-                    feat[:-1] = phys
+
+                    # Transform species (excluding trailing dt)
+                    for i, spec in enumerate(self.spec_list_ANN):
+                        col = 1 + i  # T is column 0
+
+                        if spec in self.log_excluded_species:
+                            continue
+
+                        val = feat[col]
+
+                        if self.log_transform_X == 1:
+                            val = max(val, self.threshold)
+                            feat[col] = np.log(val)
+
+                        elif self.log_transform_X == 2:
+                            val = max(val, 0.0)
+                            feat[col] = (val**self.lambda_bct - 1.0) / self.lambda_bct
+
 
                     # dt gets its own log transform, with a dedicated epsilon
                     dt_eps = 1e-300
@@ -1129,14 +1146,27 @@ class NNTesting():
             else:  # "phys" or any other value treated as physical-only
                 # Clustering on physical state only: [T, species...] without dt.
                 feat = np.array(log_state, copy=True)
+                
+                for i, spec in enumerate(self.spec_list_ANN):
+                    col = 1 + i
 
-                if self.log_transform_X > 0:
-                    feat[feat < self.threshold] = self.threshold
+                    if spec in self.log_excluded_species:
+                        continue
+
+                    val = feat[col]
+
                     if self.log_transform_X == 1:
-                        feat[1:] = np.log(feat[1:])
-                    elif self.log_transform_X == 2:
-                        feat[1:] = (feat[1:]**self.lambda_bct - 1.0)/self.lambda_bct
+                        val = max(val, self.threshold)
+                        feat[col] = np.log(val)
 
+                    elif self.log_transform_X == 2:
+                        val = max(val, 0.0)
+                        feat[col] = (val**self.lambda_bct - 1.0) / self.lambda_bct
+
+
+            # --------------------------------------------------------------
+            # Scale and predict cluster
+            # --------------------------------------------------------------
             # Scaling vector using the same StandardScaler that was fitted
             # during database_processing.clusterize_dataset.
             vect_scaled = self.kmeans_scaler.transform(feat.reshape(1, -1))
@@ -1218,40 +1248,51 @@ class NNTesting():
             n2_value = state_vector[n2_index+1]
             state_vector = np.delete(state_vector, n2_index+1)
         
-        # NN update for Yk's
-        if self.log_transform_X==1:
-            state_vector[state_vector<self.threshold] = self.threshold
-        elif self.log_transform_X==2:
-            state_vector[state_vector<0.0] = 0.0
+        # NN update for Yk's: basic clipping before log/BCT
+        # Only species not listed in self.log_excluded_species are subject to
+        # threshold-based clipping, mirroring LearningDatabase.log_excluded_species.
+        if self.log_transform_X > 0:
+            # Species indices shift by +1 in state_vector: spec i -> state_vector[1 + i].
+            for i, spec in enumerate(self.spec_list_ANN):
+                if spec in self.log_excluded_species:
+                    continue
+                if self.log_transform_X == 1:
+                    if state_vector[i+1] < self.threshold:
+                        state_vector[i+1] = self.threshold
+                elif self.log_transform_X == 2:
+                    if state_vector[i+1] < 0.0:
+                        state_vector[i+1] = 0.0
 
         # Build log_state input vector.
         # For dt_var=False: [T, species...]
-        # For dt_var=True:  [T, species..., dt] with dt transformed consistently with database_processing.
+        # For dt_var=True:  [T, species..., dt] with dt transformed consistently
+        # with database_processing. Species listed in log_excluded_species are
+        # kept on the original (linear) scale even when log/Box–Cox is active.
+        if self.dt_var:
+            log_state = np.zeros(self.nb_species_ANN + 2)
+        else:
+            log_state = np.zeros(self.nb_species_ANN + 1)
+
+        # Applying transform
+        log_state[0] = state_vector[0]
+        for i, spec in enumerate(self.spec_list_ANN):
+            val = state_vector[1 + i]
+            if spec in self.log_excluded_species or self.log_transform_X == 0:
+                log_state[1 + i] = val
+            else:
+                if self.log_transform_X == 1:
+                    log_state[1 + i] = np.log(val)
+                elif self.log_transform_X == 2:
+                    log_state[1 + i] = (val**self.lambda_bct - 1.0)/self.lambda_bct
+
         if self.dt_var:
             # state_vector currently contains [T, species...], dt comes from the argument.
             # We do NOT clip dt by species threshold; apply its own log transform with a small epsilon.
             dt_eps = 1e-300
             dt_logged = np.log(max(dt, dt_eps)) if self.log_transform_X > 0 else dt
 
-            log_state = np.zeros(self.nb_species_ANN + 2)
-            log_state[0] = state_vector[0]
-            if self.log_transform_X == 1:
-                log_state[1:self.nb_species_ANN+1] = np.log(state_vector[1:])
-            elif self.log_transform_X == 2:
-                log_state[1:self.nb_species_ANN+1] = (state_vector[1:]**self.lambda_bct - 1.0)/self.lambda_bct
-            else:
-                log_state[1:self.nb_species_ANN+1] = state_vector[1:]
             # Last entry is dt (optionally logged)
             log_state[-1] = dt_logged
-        else:
-            log_state = np.zeros(self.nb_species_ANN+1)
-            log_state[0] = state_vector[0]
-            if self.log_transform_X==1:
-                log_state[1:] = np.log(state_vector[1:])
-            elif self.log_transform_X==2:
-                log_state[1:] = (state_vector[1:]**self.lambda_bct - 1.0)/self.lambda_bct
-            else:
-                log_state[1:] = state_vector[1:]
 
 
         # input of NN
@@ -1270,20 +1311,27 @@ class NNTesting():
         std_Y = self.Yscaler_list[self.cluster][:, 1]
         Y_new = self._inverse_scale(state_new, mean_Y, std_Y)
 
-        # Log transform of species
+        # Log/Box-Cox transform of species (for error metrics). Apply thresholding
+        # only to species not in log_excluded_species, keeping excluded species on
+        # their original linear scale.
         if self.log_transform_Y>0:
             if self.output_omegas:
-                log_state_updated = log_state[0,1:] + Y_new
-                if self.log_transform_Y==1:
-                    Y_new = np.exp(log_state_updated)
-                elif self.log_transform_Y==2:
-                    Y_new = (self.lambda_bct*log_state_updated+1.0)**(1./self.lambda_bct)
+                state_updated = log_state[0,1:] + Y_new
+                #
+                for i, spec in enumerate(self.spec_list_ANN):
+                    if spec not in self.log_excluded_species:
+                        if self.log_transform_Y==1:
+                            Y_new[0,i] = np.exp(state_updated[0,i])
+                        elif self.log_transform_Y==2:
+                            Y_new[0,i] = (self.lambda_bct*state_updated[0,i]+1.0)**(1./self.lambda_bct)
             else:
-                if self.log_transform_Y==1:
-                    Y_new = np.exp(Y_new)
-                elif self.log_transform_Y==2:
-                    Y_new = (self.lambda_bct*Y_new+1.0)**(1./self.lambda_bct)
-                
+                for i, spec in enumerate(self.spec_list_ANN):
+                    if spec not in self.log_excluded_species:
+                        if self.log_transform_Y==1:
+                            Y_new[0,i] = np.exp(Y_new[0,i])
+                        elif self.log_transform_Y==2:
+                            Y_new[0,i] = (self.lambda_bct*Y_new[0,i]+1.0)**(1./self.lambda_bct)
+        
         # If reaction rate outputs from network
         if self.output_omegas and self.log_transform_Y==0:
             Y_new += state_vector[1:]   # Remark: state vector already contains information about N2 removal
@@ -1317,6 +1365,7 @@ class NNTesting():
 #   ANALYZING ERRORS
 #-----------------------------------------------------------------------
 
+    #WARNING: function not up to date (actually not used), it does not consider log excluded species for instance
     def compute_ann_errors(self, T, Y, pressure, dt, already_transformed=False):
 
         T_old = T.copy()
@@ -1377,9 +1426,19 @@ class NNTesting():
 
         # Taking log if necessary (if output is difference of logs)
         if self.log_transform_Y==1:
-            Y_old[Y_old<self.threshold] = self.threshold
-            Y_cvode[Y_cvode<self.threshold] = self.threshold
-            Y_ann[Y_ann<self.threshold] = self.threshold
+            # Apply threshold only to non-excluded species.
+            for i, spec in enumerate(self.spec_list_ANN):
+                if spec in self.log_excluded_species:
+                    continue
+                idx = i  # here Y_* already correspond to species only
+                if idx >= Y_old.shape[0]:
+                    break
+                if Y_old[idx] < self.threshold:
+                    Y_old[idx] = self.threshold
+                if Y_cvode[idx] < self.threshold:
+                    Y_cvode[idx] = self.threshold
+                if Y_ann[idx] < self.threshold:
+                    Y_ann[idx] = self.threshold
         elif self.log_transform_Y==2:
             Y_old[Y_old<0.0] = 0.0
             Y_cvode[Y_cvode<0.0] = 0.0
