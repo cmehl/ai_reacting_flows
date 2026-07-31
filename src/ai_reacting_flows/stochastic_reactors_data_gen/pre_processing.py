@@ -26,6 +26,9 @@ class Inlet(object):
             "burnt_premixed": self.set_state_burnt_premixed,
             "air": self.set_state_air,
             "fuel": self.set_state_fuel,
+            "premixed_from_flowrates": self.set_state_premixed_from_flowrates,
+            "burnt_from_flowrates": self.set_state_burnt_from_flowrates,
+            "pure_species": self.set_state_pure_species,
         }
 
         try:
@@ -197,3 +200,63 @@ class Inlet(object):
 
         # State layout: [nb_particles, T, P, Y_0, ..., Y_nsp-1]
         self.state = np.concatenate(([self.nb_particles, T, P], Y))
+        
+        
+    def _state_from_flowrates(self, mech, T, P, flowrates):
+        """
+        Compose a mixture from per-species volumetric flowrates [L/min].
+        Mole fractions = flowrate fractions (same T,P assumed at metering).
+        `flowrates`: dict {species_name: L/min}.
+        """
+        gas = ct.Solution(mech)
+
+        X = np.zeros(gas.n_species)
+        for sp, q in flowrates.items():
+            if sp == "air":
+                X[gas.species_index("O2")] += 0.21 * q
+                X[gas.species_index("N2")] += 0.79 * q
+            else:
+                if sp not in gas.species_names:
+                    raise ValueError(f"Species '{sp}' not found in mechanism '{mech}'")
+                X[gas.species_index(sp)] += q
+
+        X /= X.sum()
+        gas.TPX = T, P, X
+        return gas
+
+
+    def set_state_premixed_from_flowrates(self, mech, T, P, flowrates):
+        gas = self._state_from_flowrates(mech, T, P, flowrates)
+        Y = gas.Y
+        self.state = np.concatenate(([self.nb_particles, T, P], Y))
+        self.Yc_u = Y[self.pv_ind].sum()
+
+
+    def set_state_burnt_from_flowrates(self, mech, T, P, flowrates):
+        gas = self._state_from_flowrates(mech, T, P, flowrates)
+        self.Yc_u = gas.Y[self.pv_ind].sum()
+        gas.equilibrate("HP")
+        self.state = np.concatenate(([self.nb_particles, gas.T, gas.P], gas.Y))
+
+
+    def set_state_pure_species(self, mech, T, P, species):
+        """
+        `species`: dict {species_name: mass_fraction} (renormalized),
+        or a single species name (mass fraction 1.0).
+        """
+        gas = ct.Solution(mech)
+        Y = np.zeros(gas.n_species)
+
+        if isinstance(species, str):
+            if species not in gas.species_names:
+                raise ValueError(f"Species '{species}' not found in mechanism '{mech}'")
+            Y[gas.species_index(species)] = 1.0
+        else:
+            for sp, y in species.items():
+                if sp not in gas.species_names:
+                    raise ValueError(f"Species '{sp}' not found in mechanism '{mech}'")
+                Y[gas.species_index(sp)] = y
+            Y /= Y.sum()
+
+        self.state = np.concatenate(([self.nb_particles, T, P], Y))
+        self.Yc_u = Y[self.pv_ind].sum()

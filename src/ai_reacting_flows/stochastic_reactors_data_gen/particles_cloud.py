@@ -101,6 +101,9 @@ class ParticlesCloud(object):
             "fuel":           ["T", "P", "fuel"],
             "cold_premixed":  ["T", "P", "fuel", "phi"],
             "burnt_premixed": ["T", "P", "fuel", "phi"],
+            "premixed_from_flowrates": ["T", "P", "flowrates"],
+            "burnt_from_flowrates":    ["T", "P", "flowrates"],
+            "pure_species":            ["T", "P", "species"],
         }
 
         inlet_list = []
