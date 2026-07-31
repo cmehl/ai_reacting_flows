@@ -78,6 +78,9 @@ class NN_manager():
         elif dtb_type == "flamelets":
             params_file = "dtb_params_flmts.yaml"
             prefix = "FLAMELETS"
+        elif dtb_type =="cfd":
+            params_file = "dtb_params_cfd.yaml"
+            prefix = "CFD"
 
         with open(os.path.join(self.run_folder, f"{prefix}_DTB_{database_params['dtb_folder_suffix']}",params_file), "r") as file:
             dtb_parameters = yaml.safe_load(file)
