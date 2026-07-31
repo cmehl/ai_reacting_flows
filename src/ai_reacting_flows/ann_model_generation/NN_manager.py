@@ -82,7 +82,12 @@ class NN_manager():
         with open(os.path.join(self.run_folder, f"{prefix}_DTB_{database_params['dtb_folder_suffix']}",params_file), "r") as file:
             dtb_parameters = yaml.safe_load(file)
 
-        self.fuel = dtb_parameters["fuel"][0]   # Only single fuel for the moment
+        # "fuel" is a list in dtb_params.yaml (stoch/flamelets) but a plain
+        # string in dtb_params_cfd.yaml; normalize to a list either way so
+        # comparisons/indexing downstream (and utils.get_molar_mass_atomic_matrix,
+        # which expects a list) behave consistently. Only single fuel for the moment.
+        fuel_param = dtb_parameters["fuel"]
+        self.fuel = fuel_param if isinstance(fuel_param, list) else [fuel_param]
         self.mechanism = dtb_parameters["mech_file"]
 
         # Model folder name
@@ -600,7 +605,7 @@ class NN_manager():
         elements.append(("O", idx)); idx += 1
         if not self.remove_N2:
             elements.append(("N", idx)); idx += 1
-        if self.fuel!="H2":
+        if self.fuel!=["H2"]:
             elements.append(("C", idx)); idx += 1
 
         n = len(elements)
