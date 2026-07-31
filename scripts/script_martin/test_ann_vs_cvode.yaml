@@ -1,0 +1,7 @@
+models_folder: MODEL_NH3_H2_N2_resampled_T_correction
+test_data_file: DATA/REDUCED/testing/post000055_+2.60001e+00.h5
+time_step: 1.0e-05
+T_threshold: 800.0
+n_sample: 1000000
+seed: 0
+output_file: testing_results_NH3_H2_N2_resampled_T_correction.h5

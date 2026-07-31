@@ -1,0 +1,6 @@
+T_threshold: 800.0
+cfd_data_dir: DATA/REDUCED/output
+dtb_file: solutions.h5
+mech_file: ../../data/Giovanni/STEC_A_noAR.yaml
+results_folder_suffix: NH3_H2_N2
+time_step: 1.0e-05
