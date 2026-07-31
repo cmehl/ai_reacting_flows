@@ -109,7 +109,7 @@ class NN_manager():
         self.LR_decay_rate = learning_data.get("decay_rate", 1.0)
         self.batch_size = learning_data.get("batch_size", 2048)
         self.epochs_list = learning_data["epochs_list"]
-        self.val_every = learning_data["val_every"]
+        self.val_every = learning_data.get("val_every", 10)
 
 
         # Log high-level dataset and processing configuration.
