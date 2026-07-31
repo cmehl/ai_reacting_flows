@@ -82,14 +82,16 @@ class LearningDatabase(object):
         self.nb_clusters = 1  # default value before clustering
         self.nb_clusters_input = data_clustering["nb_clusters"] # storing for later, if clustering is actually called
 
-        if self.database_type not in ["stoch", "flamelets"]:
-            sys.exit("Error on database_type. It should be 'stoch' or 'flamelets'")
+        if self.database_type not in ["stoch", "flamelets","cfd"]:
+            sys.exit("Error on database_type. It should be 'stoch' or 'flamelets' or 'cfd' ")
 
         # Parameters depending on database type
         if self.database_type=="stoch":
             folder_prefix = "STOCH"
         elif self.database_type=="flamelets":
             folder_prefix = "FLAMELETS"
+        elif self.database_type =="cfd": 
+            folder_prefix ="CFD"
         
         # Folder where results are stored
         self.dtb_folder = f"{self.run_folder:s}/{folder_prefix}_DTB_" + database_params["dtb_folder_suffix"]
