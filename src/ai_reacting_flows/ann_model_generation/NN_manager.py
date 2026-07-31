@@ -391,20 +391,49 @@ class NN_manager():
                     # database_processing.log_excluded_species.
                     if self.dt_var:  # Time needs to be removed from X here
                         cols_x_slice = self.X_cols_all[1:-1]
-                        yval_in = self._inverse_scale(X_val[:,1:-1], Xscaler_mean[1:-1], Xscaler_std[1:-1], self.log_transform_X, cols=cols_x_slice)
+                        X_val_species = X_val[:,1:-1]
+                        Xscaler_mean_sp, Xscaler_std_sp = Xscaler_mean[1:-1], Xscaler_std[1:-1]
                     else:
                         cols_x_slice = self.X_cols_all[1:]
-                        yval_in = self._inverse_scale(X_val[:,1:], Xscaler_mean[1:], Xscaler_std[1:], self.log_transform_X, cols=cols_x_slice)
+                        X_val_species = X_val[:,1:]
+                        Xscaler_mean_sp, Xscaler_std_sp = Xscaler_mean[1:], Xscaler_std[1:]
+
+                    yval_in = self._inverse_scale(X_val_species, Xscaler_mean_sp, Xscaler_std_sp, self.log_transform_X, cols=cols_x_slice)
 
                     # SUM OF MASS FRACTION
-                    # Inverse scale done per species to stay consistent with
-                    # database_processing (some species may be kept linear).
-                    yk = self._inverse_scale(y_val_pred, Yscaler_mean, Yscaler_std, self.log_transform_Y, cols=self.Y_cols_all)
+                    if self.output_omegas and self.log_transform_Y > 0:
+                        # When output_omegas + log/BCT-transformed Y, database_processing
+                        # builds the target as a *transformed-space* difference
+                        # (log(Y)-log(X) or BCT(Y)-BCT(X)), not a physical delta. It must be
+                        # recombined in transformed space BEFORE exponentiating/BCT-inverting
+                        # (same approach as NN_testing.py/model_testing.py "FIX PB3"). Naively
+                        # calling _inverse_scale on the omega (which exponentiates first) and
+                        # then adding physical X, as this used to do, computes X + Y/X instead
+                        # of X * (Y/X), producing wildly non-physical states for trace species.
+                        x_transformed = Xscaler_mean_sp + (Xscaler_std_sp + 1e-7) * X_val_species
+                        omega_transformed = Yscaler_mean + (Yscaler_std + 1e-7) * y_val_pred
+                        combined = x_transformed + omega_transformed
 
-                    if self.output_omegas:
-                        yk_abs = yval_in + yk
+                        yk_abs = combined.clone()
+                        for j, name in enumerate(self.Y_cols_all):
+                            base = str(name)
+                            if base.endswith('_Y'):
+                                base = base[:-2]
+                            if base in self.log_excluded_species:
+                                continue
+                            if self.log_transform_Y == 1:
+                                yk_abs[:, j] = torch.exp(combined[:, j])
+                            elif self.log_transform_Y == 2:
+                                yk_abs[:, j] = (combined[:, j] * self.lambda_bct + 1.0) ** (1.0 / self.lambda_bct)
                     else:
-                        yk_abs = yk
+                        # Inverse scale done per species to stay consistent with
+                        # database_processing (some species may be kept linear).
+                        yk = self._inverse_scale(y_val_pred, Yscaler_mean, Yscaler_std, self.log_transform_Y, cols=self.Y_cols_all)
+
+                        if self.output_omegas:
+                            yk_abs = yval_in + yk
+                        else:
+                            yk_abs = yk
 
                     sum_yk = yk_abs.sum(axis=1)
                     sum_yk = sum_yk.detach().cpu().numpy()
