@@ -148,6 +148,7 @@ dmypy.json
 /articles/*/*.png
 /articles/*/*.xlsx
 /articles/*/plots_*
+/graphify-out
 # VSCode
 *.code-workspace
 .vscode
