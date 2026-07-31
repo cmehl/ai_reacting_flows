@@ -596,17 +596,20 @@ class NN_manager():
 
         # ELEMENTS CONSERVATION
 
-        # Build the list of elements actually present, in order,
-        # together with the index they occupy in stats_A_elements
+        # Build the list of elements actually present, in order, together with
+        # the index they occupy in stats_A_elements. This order must match
+        # utils.get_molar_mass_atomic_matrix: base row order is C, H, O, N,
+        # with the C row dropped first (fuel == ["H2"]), then the N row
+        # dropped last (no N2 chemistry) -- NOT an H, O, N, C order.
         elements = []
         idx = 0
 
+        if self.fuel != ["H2"]:
+            elements.append(("C", idx)); idx += 1
         elements.append(("H", idx)); idx += 1
         elements.append(("O", idx)); idx += 1
         if not self.remove_N2:
             elements.append(("N", idx)); idx += 1
-        if self.fuel!=["H2"]:
-            elements.append(("C", idx)); idx += 1
 
         n = len(elements)
         ncols = 2
