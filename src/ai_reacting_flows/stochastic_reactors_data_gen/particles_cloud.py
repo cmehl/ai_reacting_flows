@@ -21,6 +21,8 @@ from ai_reacting_flows.stochastic_reactors_data_gen.pre_processing import Inlet
 import ai_reacting_flows.tools.utilities as utils
 from ai_reacting_flows.tools.utilities import PRINT
 
+import ai_reacting_flows.stochastic_reactors_data_gen.EMST.emst_mixing as emst_mixing
+
 # from ai_reacting_flows.stochastic_reactors_data_gen.ann_model import ModelANN
 
 matplotlib.use('Agg')
@@ -194,7 +196,11 @@ class ParticlesCloud(object):
 
         else:
             self.tau_min = self.mixing_time
-        
+
+        # EMST model: initialize particle age variable
+        if self.mixing_model == "EMST":
+            self._init_EMST()
+
         # Number of particles pair to use for CURL model
         if self.mixing_model in ["CURL","CURL_MODIFIED","CURL_MODIFIED_DD"]:
 
@@ -529,7 +535,8 @@ class ParticlesCloud(object):
                 self._mix_curl_dd()
 
         elif self.mixing_model=="EMST":
-            self._mix_emst()
+
+            self._mix_EMST()
 
 
 
@@ -552,10 +559,10 @@ class ParticlesCloud(object):
 
         # Randomly select mixing pairs
         pairs = self.pairs_list[self.iteration]
-        
+
         # Carrying out diffusion
         for pair in pairs:
-            
+
             # Finding particles
             part_1 = self.particles_list[pair[0]]
             part_2 = self.particles_list[pair[1]]
@@ -573,9 +580,9 @@ class ParticlesCloud(object):
             #
             Yc_u_1_ini = part_1.Yc_u.copy()
             Yc_u_2_ini = part_2.Yc_u.copy()
-                    
+
             if self.mixing_model=="CURL":
-                
+
                 # Update particles states
                 part_1.Y = 0.5 * (Y2_ini + Y1_ini)
                 part_1.hs = 0.5 * (h2_ini + h1_ini)
@@ -584,12 +591,12 @@ class ParticlesCloud(object):
                 part_2.Y = 0.5 * (Y2_ini + Y1_ini)
                 part_2.hs = 0.5 * (h2_ini + h1_ini)
                 part_2.Yc_u = 0.5 * (Yc_u_1_ini + Yc_u_2_ini)
-                
+
             elif self.mixing_model=="CURL_MODIFIED":
-                    
+
                 # Random value between 0 and 1
                 a = self.CURL_rate_list[self.iteration]
-                        
+
                 # Update particles states
                 part_1.Y += 0.5 * a * (Y2_ini - Y1_ini)
                 part_1.hs += 0.5 * a * (h2_ini - h1_ini)
@@ -598,12 +605,12 @@ class ParticlesCloud(object):
                 part_2.Y += 0.5 * a * (Y1_ini - Y2_ini)
                 part_2.hs += 0.5 * a * (h1_ini - h2_ini)
                 part_2.Yc_u += 0.5 * a * (Yc_u_1_ini - Yc_u_2_ini)
-            
-            
+
+
             part_1.state[0] = part_1.hs
             part_1.state[2:] = part_1.Y
             part_1.update_ThermoStates(self)
-            
+
             part_2.state[0] = part_2.hs
             part_2.state[2:] = part_2.Y
             part_2.update_ThermoStates(self)
@@ -611,7 +618,7 @@ class ParticlesCloud(object):
             # Yc_eq will need to be recomputed as particles have mixed
             part_1.recompute_Yc_eq = True
             part_2.recompute_Yc_eq = True
-            
+
 
     # CURL model: with differential diffusion => we work with species masses
     def _mix_curl_dd(self):
@@ -816,99 +823,179 @@ class ParticlesCloud(object):
 
 
     # EMST mixing model
-    def _mix_emst(self):
-        """Perform one EMST micro-mixing.
+    # def _mix_emst(self):
+    #     """Perform one EMST micro-mixing.
 
-        The implementation follows the Euclidean Minimum Spanning Tree (EMST)
-        approach:
-          - build an MST in normalized composition space,
-          - compute an exponential pairwise relaxation coefficient,
-          - distribute mixing conservatively along tree edges.
-        """
+    #     The implementation follows the Euclidean Minimum Spanning Tree (EMST)
+    #     approach:
+    #       - build an MST in normalized composition space,
+    #       - compute an exponential pairwise relaxation coefficient,
+    #       - distribute mixing conservatively along tree edges.
+    #     """
 
-        # --------------------------------------------------------------
-        # Gather particle properties
-        # --------------------------------------------------------------
-        active_particles = [p for p in self.particles_list if p.is_active]
-        Y_all = np.array([p.Y for p in active_particles])
-        #
-        hs_all = np.array([p.hs for p in active_particles])
-        Yc_u_all = np.array([p.Yc_u for p in active_particles])
+    #     # --------------------------------------------------------------
+    #     # Gather particle properties
+    #     # --------------------------------------------------------------
+    #     active_particles = [p for p in self.particles_list if p.is_active]
+    #     Y_all = np.array([p.Y for p in active_particles])
+    #     #
+    #     hs_all = np.array([p.hs for p in active_particles])
+    #     Yc_u_all = np.array([p.Yc_u for p in active_particles])
 
-        # Question: should we inlude enthalpy in tree construction ?
+    #     # Question: should we inlude enthalpy in tree construction ?
 
-        # --------------------------------------------------------------
-        # Phase-space used to build the EMST (normalized)
-        # --------------------------------------------------------------
-        # Question: do we need to normalize ?
-        # phi_tree_raw = np.column_stack((Y_all))
+    #     # --------------------------------------------------------------
+    #     # Phase-space used to build the EMST (normalized)
+    #     # --------------------------------------------------------------
+    #     # Question: do we need to normalize ?
+    #     # phi_tree_raw = np.column_stack((Y_all))
 
-        # sigma = phi_tree_raw.std(axis=0)
-        # sigma[sigma < 1e-30] = 1.0
+    #     # sigma = phi_tree_raw.std(axis=0)
+    #     # sigma[sigma < 1e-30] = 1.0
 
-        # phi_tree = phi_tree_raw  / sigma
-        # phi_tree = phi_tree_raw.copy()
+    #     # phi_tree = phi_tree_raw  / sigma
+    #     # phi_tree = phi_tree_raw.copy()
 
-        phi_tree = Y_all.copy()
+    #     phi_tree = Y_all.copy()
 
-        # Variables actually mixed (can include extra scalars such as Yc_u)
-        phi_old = np.column_stack((Y_all, hs_all, Yc_u_all))
+    #     # Variables actually mixed (can include extra scalars such as Yc_u)
+    #     phi_old = np.column_stack((Y_all, hs_all, Yc_u_all))
 
-        # --------------------------------------------------------------
-        # Compute Euclidean MST
-        # --------------------------------------------------------------
-        distances = squareform(pdist(phi_tree))
-        mst = minimum_spanning_tree(distances)
-        mst = mst.toarray()
+    #     # --------------------------------------------------------------
+    #     # Compute Euclidean MST
+    #     # --------------------------------------------------------------
+    #     distances = squareform(pdist(phi_tree))
+    #     mst = minimum_spanning_tree(distances)
+    #     mst = mst.toarray()
 
-        # ------------------------------------------------------------------
-        # Extract tree edges
-        # ------------------------------------------------------------------
-        edges = np.transpose(np.nonzero(mst))
+    #     # ------------------------------------------------------------------
+    #     # Extract tree edges
+    #     # ------------------------------------------------------------------
+    #     edges = np.transpose(np.nonzero(mst))
 
-        # ------------------------------------------------------------------
-        # Conservative pairwise mixing along each edge
-        # ------------------------------------------------------------------
+    #     # ------------------------------------------------------------------
+    #     # Conservative pairwise mixing along each edge
+    #     # ------------------------------------------------------------------
 
-        mixing_coeff = self.dt[self.iteration] / self.mixing_time
+    #     mixing_coeff = self.dt[self.iteration] / self.mixing_time
         
-        # Stability safeguard (prevents overshooting on a single edge)
-        mixing_coeff = min(mixing_coeff, 0.5)
+    #     # Stability safeguard (prevents overshooting on a single edge)
+    #     mixing_coeff = min(mixing_coeff, 0.5)
 
-        phi_new = phi_old.copy()
+    #     phi_new = phi_old.copy()
 
-        # Randomize edge order
-        rng = np.random.default_rng(seed=42)
-        edge_order = rng.permutation(len(edges))
+    #     # Randomize edge order
+    #     rng = np.random.default_rng(seed=42)
+    #     edge_order = rng.permutation(len(edges))
 
-        for idx in edge_order:
+    #     for idx in edge_order:
             
-            i, j = edges[idx]
-            delta = phi_new[i] - phi_new[j]
+    #         i, j = edges[idx]
+    #         delta = phi_new[i] - phi_new[j]
 
-            phi_new[i] -= mixing_coeff * delta
-            phi_new[j] += mixing_coeff * delta
+    #         phi_new[i] -= mixing_coeff * delta
+    #         phi_new[j] += mixing_coeff * delta
 
-        # --------------------------------------------------------------
-        # Write back particle states
-        # --------------------------------------------------------------
-        for k, p in enumerate(active_particles):
+    #     # --------------------------------------------------------------
+    #     # Write back particle states
+    #     # --------------------------------------------------------------
+    #     for k, p in enumerate(active_particles):
 
-            p.Y = phi_new[k, :self.nb_species]
-            p.hs = phi_new[k, self.nb_species]
-            p.Yc_u = phi_new[k, self.nb_species + 1]
+    #         p.Y = phi_new[k, :self.nb_species]
+    #         p.hs = phi_new[k, self.nb_species]
+    #         p.Yc_u = phi_new[k, self.nb_species + 1]
 
-            # For safety
-            # p.Y = np.clip(p.Y, 0.0, None)
-            # p.Y /= p.Y.sum() + 1e-30
+    #         # For safety
+    #         # p.Y = np.clip(p.Y, 0.0, None)
+    #         # p.Y /= p.Y.sum() + 1e-30
 
-            p.state[0] = p.hs
-            p.state[2:] = p.Y
+    #         p.state[0] = p.hs
+    #         p.state[2:] = p.Y
 
-            p.update_ThermoStates(self)
+    #         p.update_ThermoStates(self)
 
-            # EMST requires recomputation of equilibrium progress variable
-            p.recompute_Yc_eq = True
+    #         # EMST requires recomputation of equilibrium progress variable
+    #         p.recompute_Yc_eq = True
+
+
+
+# =============================================================================
+#   EMST MIXING MODEL
+# =============================================================================
+
+    # EMST model: initialization of particle age variable
+    def _init_EMST(self):
+
+        nparts = len(self.particles_list)
+        ncompo = len(self.particles_list[0].state) - 1  # pressure not considered
+
+        state = np.zeros(nparts, order='F', dtype='float32')
+        wt = np.empty(nparts, order='F', dtype='float32')
+        fscale = np.empty(ncompo, order='F', dtype='float32')
+        f = np.empty((nparts, ncompo), order='F', dtype='float32')
+        for part in self.particles_list:
+            i = part.num_part
+            wt[i] = 1.0/nparts
+            f[i, :] = np.append([part.hs], part.Y)
+
+        # Scaling factor: hs excluded from tree construction, species scaled
+        fscale[0] = 1.0e16
+        fscale[1:] = 0.1
+
+        # Control vars for expert users (zeros -> defaults)
+        cvars = np.zeros(6, order='F', dtype='float32')
+
+        # Normalized time scale (self.dt is an array: index by iteration)
+        C_phi = 2.0
+        omdt = self.dt[self.iteration] / (C_phi*self.mixing_time)
+
+        # EMST call, mode 1: initialize particle ages only
+        status = emst_mixing.emst(mode=1, f=f, state=state, wt=wt, omdt=omdt,
+                                  fscale=fscale, cvars=cvars, np=nparts, nc=ncompo)
+        assert status == 0, "EMST initialization failure"
+
+        # Dispatch ages back to particles
+        for part in self.particles_list:
+            part.age = state[part.num_part]
+
+    # EMST model: one micro-mixing step
+    def _mix_EMST(self):
+
+        nparts = len(self.particles_list)
+        ncompo = len(self.particles_list[0].state) - 1  # pressure not considered
+
+        state = np.empty(nparts, order='F', dtype='float32')
+        wt = np.empty(nparts, order='F', dtype='float32')
+        fscale = np.empty(ncompo, order='F', dtype='float32')
+        f = np.empty((nparts, ncompo), order='F', dtype='float32')
+        for part in self.particles_list:
+            i = part.num_part
+            state[i] = part.age
+            wt[i] = 1.0/nparts
+            f[i, :] = np.append([part.hs], part.Y)
+
+        fscale[0] = 1.0e16
+        fscale[1:] = 0.1
+
+        cvars = np.zeros(6, order='F', dtype='float32')
+
+        C_phi = 2.0
+        omdt = self.dt[self.iteration] / (C_phi*self.mixing_time)
+
+        # EMST call, mode 2: mix and update ages
+        status = emst_mixing.emst(mode=2, f=f, state=state, wt=wt, omdt=omdt,
+                                  fscale=fscale, cvars=cvars, np=nparts, nc=ncompo)
+        assert status == 0, "EMST mixing failure"
+
+        # Update particle states
+        for part in self.particles_list:
+            i = part.num_part
+            part.age = state[i]
+            part.hs = f[i, 0]
+            part.Y = f[i, 1:]
+            part.state[0] = part.hs
+            part.state[2:] = part.Y
+            part.update_ThermoStates(self)
 
 
 # =============================================================================
