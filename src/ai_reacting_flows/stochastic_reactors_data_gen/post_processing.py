@@ -200,6 +200,220 @@ class StochDatabase(object):
         fig.savefig(self.save_folder + f"/dtb_x{var_x}_y{var_y}_c{var_c}_plot.png", dpi=300)
 
     #--------------------------------------------------------
+    # COMPARISON AGAINST A REFERENCE CFD SNAPSHOT
+    #--------------------------------------------------------
+
+    def load_cfd_snapshot(self, cfd_h5_path, n_sample=50000, T_threshold=None, seed=0):
+        """
+        Load a converged CFD field snapshot (CONVERGE-style h5, group
+        STREAM_00/CELL_CENTER_DATA with TEMPERATURE/PRESSURE/MASSFRAC_<species>
+        datasets, one row per cell) as a reference to compare against this
+        stochastic database. Stores the (optionally T-thresholded and
+        randomly subsampled) result in self.df_cfd.
+
+        Parameters
+        ----------
+        cfd_h5_path : str   Path to the CFD snapshot h5 file.
+        n_sample    : int   Max number of CFD cells to keep (files can hold
+                             millions of cells, too many to scatter-plot).
+        T_threshold : float or None   If set, only keep cells with T above it.
+        seed        : int   RNG seed for the subsampling.
+        """
+
+        # Species columns sit between 'Pressure' and 'Mix_frac' in the
+        # all_states column layout, so this stays consistent with self.df.
+        cols = list(self.df.columns)
+        species_names = cols[cols.index("Pressure") + 1 : cols.index("Mix_frac")]
+
+        with h5py.File(cfd_h5_path, "r") as f:
+            cell_data = f["STREAM_00/CELL_CENTER_DATA"]
+
+            T = cell_data["TEMPERATURE"][()].astype(np.float64)
+            P = cell_data["PRESSURE"][()].astype(np.float64)
+
+            Y = np.empty((T.shape[0], len(species_names)), dtype=np.float64)
+            for i_sp, name in enumerate(species_names):
+                key = f"MASSFRAC_{name}"
+                if key not in cell_data:
+                    raise KeyError(f"Species '{name}' (dataset '{key}') not found in {cfd_h5_path}")
+                Y[:, i_sp] = cell_data[key][()].astype(np.float64)
+
+        if T_threshold is not None:
+            mask = T > T_threshold
+            T, P, Y = T[mask], P[mask], Y[mask]
+
+        rng = np.random.default_rng(seed)
+        n = min(n_sample, T.shape[0])
+        idx = rng.choice(T.shape[0], size=n, replace=False)
+        T, P, Y = T[idx], P[idx], Y[idx]
+
+        # CFD post-processing mass fractions rarely sum exactly to 1.
+        Y = Y / Y.sum(axis=1, keepdims=True)
+
+        self.df_cfd = pd.DataFrame(
+            data=np.column_stack([T, P, Y]),
+            columns=["Temperature", "Pressure"] + species_names,
+        )
+
+    def plot_T_Yk_vs_cfd(self, species_to_plot=None):
+
+        if not hasattr(self, "df_cfd"):
+            raise RuntimeError("load_cfd_snapshot() must be called before plot_T_Yk_vs_cfd()")
+
+        if species_to_plot is None:
+            cols = list(self.df.columns)
+            species_to_plot = cols[cols.index("Pressure") + 1 : cols.index("Mix_frac")]
+
+        scatter_folder = self.save_folder + "/scatter"
+        os.makedirs(scatter_folder, exist_ok=True)
+
+        for spec in species_to_plot:
+
+            # Two flat, high-contrast colors with a proper legend, so the two
+            # datasets stay distinguishable even where the clouds overlap
+            # almost exactly (which is the "good" outcome to look for).
+            fig, ax = plt.subplots()
+
+            ax.scatter(
+                self.df_cfd["Temperature"], self.df_cfd[spec],
+                s=6, alpha=0.35, color="tab:blue", edgecolors="none", label="CFD",
+            )
+            ax.scatter(
+                self.df["Temperature"], self.df[spec],
+                s=6, alpha=0.35, color="tab:red", edgecolors="none", marker="x", label="Stochastic reactor",
+            )
+
+            ax.set_xlabel(r"$T$ $[K]$")
+            ax.set_ylabel(f"${spec}$ mass fraction $[-]$")
+            ax.legend(markerscale=3)
+
+            fig.tight_layout()
+
+            # Save
+            fig.savefig(scatter_folder + f"/dtb_T_{spec}_vs_cfd_plot.png", dpi=300)
+            plt.close(fig)
+
+        # Side-by-side panels: same axis limits, one dataset per panel, for
+        # cases where the overlaid version is still hard to read due to
+        # near-total overlap or very different point densities.
+        for spec in species_to_plot:
+
+            fig, axes = plt.subplots(1, 2, figsize=(10, 4.5), sharex=True, sharey=True)
+
+            axes[0].scatter(self.df_cfd["Temperature"], self.df_cfd[spec], s=4, alpha=0.3, color="tab:blue")
+            axes[0].set_title("CFD")
+
+            axes[1].scatter(self.df["Temperature"], self.df[spec], s=4, alpha=0.3, color="tab:red")
+            axes[1].set_title("Stochastic reactor")
+
+            for ax in axes:
+                ax.set_xlabel(r"$T$ $[K]$")
+            axes[0].set_ylabel(f"${spec}$ mass fraction $[-]$")
+
+            fig.tight_layout()
+
+            fig.savefig(scatter_folder + f"/dtb_T_{spec}_vs_cfd_sidebyside_plot.png", dpi=300)
+            plt.close(fig)
+
+        # Grid of all species in one figure, for a quick overview. Subsampled
+        # (independently of the full-resolution per-species plots above) so a
+        # 32-species grid renders quickly.
+        rng = np.random.default_rng(0)
+        stoch_idx = rng.choice(len(self.df), size=min(20000, len(self.df)), replace=False)
+        cfd_idx = rng.choice(len(self.df_cfd), size=min(20000, len(self.df_cfd)), replace=False)
+
+        cfd_T = self.df_cfd["Temperature"].to_numpy()[cfd_idx]
+        stoch_T = self.df["Temperature"].to_numpy()[stoch_idx]
+
+        n = len(species_to_plot)
+        ncols = 6
+        nrows = int(np.ceil(n / ncols))
+        fig, axes = plt.subplots(nrows, ncols, figsize=(2.6 * ncols, 2.2 * nrows))
+        axes = np.atleast_1d(axes).flatten()
+
+        for i, spec in enumerate(species_to_plot):
+            ax = axes[i]
+            ax.scatter(cfd_T, self.df_cfd[spec].to_numpy()[cfd_idx], s=3, alpha=0.25, color="tab:blue")
+            ax.scatter(stoch_T, self.df[spec].to_numpy()[stoch_idx], s=3, alpha=0.25, color="tab:red", marker="x")
+            ax.set_title(spec, fontsize=9)
+            ax.tick_params(labelsize=6)
+
+        for j in range(n, len(axes)):
+            axes[j].axis("off")
+
+        axes[0].legend(["CFD", "Stochastic reactor"], fontsize=7, markerscale=2)
+        fig.tight_layout()
+        fig.savefig(self.save_folder + "/dtb_T_Yk_all_species_vs_cfd_grid_plot.png", dpi=200)
+        plt.close(fig)
+
+    def plot_T_binned_mean_vs_cfd(self, species_to_plot=None, n_bins=50):
+        """
+        Mean species mass fraction per temperature bin, CFD vs stochastic
+        reactor, on shared bins so the two conditional means are directly
+        comparable point-by-point (rather than raw scatter clouds).
+        """
+
+        if not hasattr(self, "df_cfd"):
+            raise RuntimeError("load_cfd_snapshot() must be called before plot_T_binned_mean_vs_cfd()")
+
+        if species_to_plot is None:
+            cols = list(self.df.columns)
+            species_to_plot = cols[cols.index("Pressure") + 1 : cols.index("Mix_frac")]
+
+        T_min = min(self.df["Temperature"].min(), self.df_cfd["Temperature"].min())
+        T_max = max(self.df["Temperature"].max(), self.df_cfd["Temperature"].max())
+        bins = np.linspace(T_min, T_max, n_bins + 1)
+        bin_centers = 0.5 * (bins[:-1] + bins[1:])
+
+        stoch_groups = self.df.groupby(pd.cut(self.df["Temperature"], bins=bins), observed=False)
+        cfd_groups = self.df_cfd.groupby(pd.cut(self.df_cfd["Temperature"], bins=bins), observed=False)
+        stoch_means = stoch_groups[species_to_plot].mean()
+        cfd_means = cfd_groups[species_to_plot].mean()
+
+        mean_folder = self.save_folder + "/mean"
+        os.makedirs(mean_folder, exist_ok=True)
+
+        # One plot per species
+        for spec in species_to_plot:
+
+            fig, ax = plt.subplots()
+
+            ax.plot(bin_centers, cfd_means[spec].values, color="tab:blue", marker="o", ms=3, lw=1.5, label="CFD")
+            ax.plot(bin_centers, stoch_means[spec].values, color="tab:red", marker="x", ms=3, lw=1.5, label="Stochastic reactor")
+
+            ax.set_xlabel(r"$T$ $[K]$")
+            ax.set_ylabel(f"mean ${spec}$ mass fraction $[-]$")
+            ax.legend()
+
+            fig.tight_layout()
+
+            fig.savefig(mean_folder + f"/dtb_T_binned_{spec}_vs_cfd_plot.png", dpi=300)
+            plt.close(fig)
+
+        # Grid of all species in one figure, for a quick overview
+        n = len(species_to_plot)
+        ncols = 6
+        nrows = int(np.ceil(n / ncols))
+        fig, axes = plt.subplots(nrows, ncols, figsize=(2.6 * ncols, 2.0 * nrows))
+        axes = np.atleast_1d(axes).flatten()
+
+        for i, spec in enumerate(species_to_plot):
+            ax = axes[i]
+            ax.plot(bin_centers, cfd_means[spec].values, color="tab:blue", lw=1.3, label="CFD")
+            ax.plot(bin_centers, stoch_means[spec].values, color="tab:red", lw=1.3, label="Stochastic reactor")
+            ax.set_title(spec, fontsize=9)
+            ax.tick_params(labelsize=6)
+
+        for j in range(n, len(axes)):
+            axes[j].axis("off")
+
+        axes[0].legend(fontsize=7)
+        fig.tight_layout()
+
+        fig.savefig(self.save_folder + "/dtb_T_binned_all_species_vs_cfd_grid_plot.png", dpi=200)
+        plt.close(fig)
+
+    #--------------------------------------------------------
     # SCATTER PLOTS: ONE SOLUTION
     #--------------------------------------------------------
 
@@ -409,6 +623,95 @@ class StochDatabase(object):
         plt.close(fig)
 
         return anim
+
+    def plot_species_evolution_animation(self, species_to_plot=None, n_frames=60, interval=150, fps=8):
+        """
+        One (T, Y_k) animation per species: particles at the current frame are
+        colored (by a colormap over physical time, so the hue itself advances
+        with the animation), particles from all previous frames are kept on
+        screen as a grey trail so the manifold visibly builds up over time.
+        """
+
+        video_folder = self.save_folder + "/video"
+        os.makedirs(video_folder, exist_ok=True)
+
+        h5file_r = h5py.File(self.stoch_dtb_folder + "/solutions.h5", 'r')
+        iter_keys = sorted(
+            [k for k in h5file_r.keys() if k.startswith("ITERATION_")],
+            key=lambda k: int(k.split("_")[1])
+        )
+        all_iterations = [int(k.split("_")[1]) for k in iter_keys]
+
+        frame_idx = np.unique(np.linspace(0, len(all_iterations) - 1, n_frames).astype(int))
+        iterations = [all_iterations[i] for i in frame_idx]
+
+        if species_to_plot is None:
+            col_names = list(h5file_r[f"ITERATION_{iterations[0]:05d}/all_states"].attrs["cols"])
+            species_to_plot = col_names[col_names.index("Pressure") + 1 : col_names.index("Mix_frac")]
+
+        dfs = []
+        T_min, T_max = np.inf, -np.inf
+        for it in iterations:
+            data = h5file_r.get(f"ITERATION_{it:05d}/all_states")[()]
+            col_names = h5file_r[f"ITERATION_{it:05d}/all_states"].attrs["cols"]
+            df = pd.DataFrame(data=data, columns=col_names)
+            dfs.append(df)
+            T_min = min(T_min, df["Temperature"].min())
+            T_max = max(T_max, df["Temperature"].max())
+
+        h5file_r.close()
+
+        time_min = dfs[0]["Time"].iloc[0]
+        time_max = dfs[-1]["Time"].iloc[0]
+        norm = Normalize(vmin=time_min, vmax=max(time_max, time_min + 1e-30))
+        cmap = cm.get_cmap("viridis")
+
+        for spec in species_to_plot:
+
+            y_min = min(df[spec].min() for df in dfs)
+            y_max = max(df[spec].max() for df in dfs)
+            if y_max <= y_min:
+                y_max = y_min + 1e-30
+
+            fig, ax = plt.subplots()
+
+            trail_scat = ax.scatter([], [], s=4, alpha=0.25, color="lightgrey", label="Historique")
+            current_scat = ax.scatter([], [], s=10, alpha=0.9, label="Instant courant")
+
+            ax.set_xlim(0.95 * T_min, 1.05 * T_max)
+            pad = 0.1 * (y_max - y_min)
+            ax.set_ylim(y_min - pad, y_max + pad)
+            ax.set_xlabel(r"$T$ $[K]$")
+            ax.set_ylabel(f"${spec}$ mass fraction $[-]$")
+            ax.legend(loc="upper right")
+            title = ax.set_title("")
+
+            fig.tight_layout()
+
+            trail = {"T": np.array([]), "Y": np.array([])}
+
+            def update(i, spec=spec, trail=trail):
+                df = dfs[i]
+                it = iterations[i]
+
+                if i > 0:
+                    prev = dfs[i - 1]
+                    trail["T"] = np.concatenate([trail["T"], prev["Temperature"].to_numpy()])
+                    trail["Y"] = np.concatenate([trail["Y"], prev[spec].to_numpy()])
+                    trail_scat.set_offsets(np.column_stack([trail["T"], trail["Y"]]))
+
+                current_scat.set_offsets(np.column_stack([df["Temperature"], df[spec]]))
+                current_scat.set_color(cmap(norm(df["Time"].iloc[0])))
+                title.set_text(f"t = {df['Time'].iloc[0]:.4e} s (iteration {it:05d})")
+
+                return trail_scat, current_scat, title
+
+            anim = animation.FuncAnimation(
+                fig, update, frames=len(iterations), interval=interval, blit=False
+            )
+
+            anim.save(video_folder + f"/dtb_T_{spec}_evolution_animation.mp4", fps=fps, dpi=150)
+            plt.close(fig)
 
     #--------------------------------------------------------
     # TRAJECTORIES PLOTS
