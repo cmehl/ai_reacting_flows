@@ -267,6 +267,14 @@ class StochDatabase(object):
         scatter_folder = self.save_folder + "/scatter"
         os.makedirs(scatter_folder, exist_ok=True)
 
+        # Subsample the stochastic-reactor cloud to match the CFD sample size
+        # (df_cfd is already subsampled in load_cfd_snapshot) so both sides
+        # scatter comparable point counts.
+        rng = np.random.default_rng(0)
+        n_sample = min(len(self.df), len(self.df_cfd))
+        stoch_sample_idx = rng.choice(len(self.df), size=n_sample, replace=False)
+        df_stoch_sample = self.df.iloc[stoch_sample_idx]
+
         for spec in species_to_plot:
 
             # Two flat, high-contrast colors with a proper legend, so the two
@@ -279,7 +287,7 @@ class StochDatabase(object):
                 s=6, alpha=0.35, color="tab:blue", edgecolors="none", label="CFD",
             )
             ax.scatter(
-                self.df["Temperature"], self.df[spec],
+                df_stoch_sample["Temperature"], df_stoch_sample[spec],
                 s=6, alpha=0.35, color="tab:red", edgecolors="none", marker="x", label="Stochastic reactor",
             )
 
@@ -303,7 +311,7 @@ class StochDatabase(object):
             axes[0].scatter(self.df_cfd["Temperature"], self.df_cfd[spec], s=4, alpha=0.3, color="tab:blue")
             axes[0].set_title("CFD")
 
-            axes[1].scatter(self.df["Temperature"], self.df[spec], s=4, alpha=0.3, color="tab:red")
+            axes[1].scatter(df_stoch_sample["Temperature"], df_stoch_sample[spec], s=4, alpha=0.3, color="tab:red")
             axes[1].set_title("Stochastic reactor")
 
             for ax in axes:
