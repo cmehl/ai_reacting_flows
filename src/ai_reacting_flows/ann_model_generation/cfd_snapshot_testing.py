@@ -40,9 +40,13 @@ class CFDSnapshotTester:
         self.test_data_file = os.path.join(self.run_folder, test_params["test_data_file"])
         self.time_step = float(test_params["time_step"])
         self.T_threshold = float(test_params["T_threshold"])
-        self.n_sample = int(test_params["n_sample"])
         self.seed = int(test_params.get("seed", 0))
         self.output_file = os.path.join(self.run_folder, test_params["output_file"])
+
+        # --- Cell selection: either a few fixed slices (for spatial/visual
+        # comparison, coordinates kept) or the historical random sample -----
+        self.slices = test_params.get("slices")
+        self.n_sample = int(test_params["n_sample"]) if not self.slices else None
 
         # --- Model folder / training configuration -------------------------
         self.models_folder = os.path.join(self.run_folder, "MODELS", test_params["models_folder"])
@@ -147,6 +151,9 @@ class CFDSnapshotTester:
 
             T = cell_data["TEMPERATURE"][()].astype(np.float64)
             P = cell_data["PRESSURE"][()].astype(np.float64)
+            coord_x = cell_data["XCEN_X"][()].astype(np.float64)
+            coord_y = cell_data["XCEN_Y"][()].astype(np.float64)
+            coord_z = cell_data["XCEN_Z"][()].astype(np.float64)
 
             Y = np.empty((T.shape[0], self.n_species), dtype=np.float64)
             for i_sp, name in enumerate(self.species_names):
@@ -155,22 +162,43 @@ class CFDSnapshotTester:
                     raise KeyError(f"Species '{name}' (dataset '{key}') not found in {self.test_data_file}")
                 Y[:, i_sp] = cell_data[key][()].astype(np.float64)
 
-        return T, P, Y
+        return T, P, Y, coord_x, coord_y, coord_z
 
-    def _sample_cells(self, T, P, Y):
+    def _select_cells(self, T, P, Y, coord_x, coord_y, coord_z):
 
         mask = T > self.T_threshold
-        T, P, Y = T[mask], P[mask], Y[mask]
 
-        rng = np.random.default_rng(self.seed)
-        n = min(self.n_sample, T.shape[0])
-        idx = rng.choice(T.shape[0], size=n, replace=False)
-        T, P, Y = T[idx], P[idx], Y[idx]
+        # slice_id[i] = index of the slice (in self.slices) cell i was picked
+        # from, or -1 when slices aren't used (random-sample path).
+        if self.slices:
+            coords = {"X": coord_x, "Y": coord_y, "Z": coord_z}
+            slice_id_full = np.full(T.shape[0], -1, dtype=int)
+            for i, sl in enumerate(self.slices):
+                axis_coord = coords[str(sl["axis"]).upper()]
+                half_thickness = 0.5 * float(sl["thickness"])
+                in_slice = np.abs(axis_coord - float(sl["center"])) <= half_thickness
+                # first matching slice wins for cells that fall in an overlap
+                slice_id_full[in_slice & (slice_id_full == -1)] = i
+            mask &= slice_id_full >= 0
+            slice_id = slice_id_full[mask]
+        else:
+            slice_id = np.full(mask.sum(), -1, dtype=int)
+
+        T, P, Y = T[mask], P[mask], Y[mask]
+        coord_x, coord_y, coord_z = coord_x[mask], coord_y[mask], coord_z[mask]
+
+        if not self.slices:
+            rng = np.random.default_rng(self.seed)
+            n = min(self.n_sample, T.shape[0])
+            idx = rng.choice(T.shape[0], size=n, replace=False)
+            T, P, Y = T[idx], P[idx], Y[idx]
+            coord_x, coord_y, coord_z = coord_x[idx], coord_y[idx], coord_z[idx]
+            slice_id = slice_id[idx]
 
         # CFD post-processing mass fractions rarely sum exactly to 1.
         Y = Y / Y.sum(axis=1, keepdims=True)
 
-        return T, P, Y
+        return T, P, Y, coord_x, coord_y, coord_z, slice_id
 
     # ------------------------------------------------------------------
     # CVODE reference
@@ -311,12 +339,17 @@ class CFDSnapshotTester:
     def run(self):
 
         print(f">> Reading test snapshot {self.test_data_file}")
-        T_all, P_all, Y_all = self._read_cfd_snapshot()
+        T_all, P_all, Y_all, X_all, Ycoord_all, Z_all = self._read_cfd_snapshot()
 
-        print(f">> Sampling {self.n_sample} cells above T_threshold={self.T_threshold:g} K")
-        T0, P0, Y0 = self._sample_cells(T_all, P_all, Y_all)
+        if self.slices:
+            print(f">> Selecting cells in {len(self.slices)} slice(s) above T_threshold={self.T_threshold:g} K")
+        else:
+            print(f">> Sampling {self.n_sample} cells above T_threshold={self.T_threshold:g} K")
+        T0, P0, Y0, X0, Ycoord0, Z0, slice_id = self._select_cells(
+            T_all, P_all, Y_all, X_all, Ycoord_all, Z_all
+        )
         n = T0.shape[0]
-        print(f"   >> {n} cells sampled")
+        print(f"   >> {n} cells selected")
 
         print(f">> Reacting with CVODE (dt={self.time_step:g} s)")
         T_cvode, Y_cvode = self._react_cvode(T0, P0, Y0)
@@ -331,6 +364,8 @@ class CFDSnapshotTester:
             h5f.attrs["test_data_file"] = self.test_data_file
             h5f.attrs["models_folder"] = self.models_folder
             h5f.attrs["species"] = self.species_names
+            if self.slices:
+                h5f.attrs["slices"] = yaml.dump(self.slices)
 
             h5f.create_dataset("T_ini", data=T0)
             h5f.create_dataset("P_ini", data=P0)
@@ -340,5 +375,9 @@ class CFDSnapshotTester:
             h5f.create_dataset("T_ann", data=T_ann)
             h5f.create_dataset("Y_ann", data=Y_ann)
             h5f.create_dataset("cluster", data=cluster_labels)
+            h5f.create_dataset("XCEN_X", data=X0)
+            h5f.create_dataset("XCEN_Y", data=Ycoord0)
+            h5f.create_dataset("XCEN_Z", data=Z0)
+            h5f.create_dataset("slice_id", data=slice_id)
 
         print(">> Done")
