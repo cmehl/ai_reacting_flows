@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>ai_reacting_flows &mdash; ANN vs CVODE, tous modèles</title>
+<style>
+  :root {
+    --bg: #12141a;
+    --panel: #1b1e27;
+    --panel-2: #232733;
+    --border: #2e323f;
+    --text: #e6e8ee;
+    --text-dim: #9aa0b0;
+    --accent: #5fa8ff;
+    --accent-dim: #2c4a70;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  header {
+    padding: 10px 16px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; white-space: nowrap; }
+  header .sub { font-size: 12px; color: var(--text-dim); }
+
+  select#case-select {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 7px 10px; font-size: 13px; font-weight: 600;
+    min-width: 260px;
+  }
+
+  .slices {
+    display: flex; gap: 6px; padding: 8px 16px;
+    background: var(--panel); border-bottom: 1px solid var(--border);
+    overflow-x: auto; flex-wrap: wrap;
+  }
+  .slice-btn {
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    padding: 6px 10px; border-radius: 6px; cursor: pointer; font-size: 12.5px;
+    white-space: nowrap;
+  }
+  .slice-btn .note { display: block; font-size: 10.5px; color: var(--text-dim); margin-top: 1px; }
+  .slice-btn.active { background: var(--accent-dim); border-color: var(--accent); }
+  .slice-sep { width: 1px; background: var(--border); margin: 0 6px; align-self: stretch; }
+
+  .layout { display: flex; height: calc(100% - 132px); }
+  nav.fields {
+    width: 220px; flex: 0 0 220px; overflow-y: auto;
+    background: var(--panel); border-right: 1px solid var(--border);
+    padding: 8px 0;
+  }
+  nav.fields h2 {
+    font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em;
+    color: var(--text-dim); margin: 14px 14px 6px; font-weight: 600;
+  }
+  nav.fields h2:first-child { margin-top: 4px; }
+  .field-item {
+    padding: 5px 14px; cursor: pointer; font-size: 13px; color: var(--text);
+    border-left: 3px solid transparent;
+  }
+  .field-item:hover { background: var(--panel-2); }
+  .field-item.active { background: var(--accent-dim); border-left-color: var(--accent); font-weight: 600; }
+
+  main {
+    flex: 1; display: flex; flex-direction: column; align-items: center;
+    padding: 14px; overflow: auto;
+  }
+  .imgwrap {
+    max-width: 100%; text-align: center;
+    background: #fff; border-radius: 8px; padding: 6px;
+    border: 1px solid var(--border);
+  }
+  .imgwrap img { max-width: 100%; height: auto; display: block; border-radius: 4px; }
+  .controls {
+    display: flex; align-items: center; gap: 10px; margin-top: 10px; color: var(--text-dim); font-size: 12.5px;
+  }
+  .controls button {
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 13px;
+  }
+  .controls button:hover { background: var(--accent-dim); }
+  .hint { font-size: 11.5px; color: var(--text-dim); margin-top: 4px; }
+  a.openraw { color: var(--accent); text-decoration: none; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>ai_reacting_flows &mdash; ANN vs CVODE</h1>
+  <select id="case-select"></select>
+  <span class="sub" id="case-sub"></span>
+</header>
+
+<div class="slices" id="slices"></div>
+
+<div class="layout">
+  <nav class="fields" id="fields"></nav>
+  <main>
+    <div class="imgwrap">
+      <img id="viewer" src="" alt="figure">
+    </div>
+    <div class="controls">
+      <button id="prev">&larr; précédent</button>
+      <span id="caption"></span>
+      <button id="next">suivant &rarr;</button>
+    </div>
+    <div class="hint">flèches gauche/droite: champ suivant/précédent &middot; haut/bas: coupe &middot; <a class="openraw" id="openraw" href="#" target="_blank">ouvrir l'image seule</a></div>
+  </main>
+</div>
+
+<script>
+const CASES = [{"id": "CFD_DETAILED_high_resolution", "dir": "CFD_DETAILED_high_resolution/figs_explore", "models_folder": "MODEL_DETAILED_HR_dt5e7_1D", "test_data_file": "DATA/testing/Slice_Z_0.3_2.95s.csv;DATA/testing/Slice_Z_0.15_2.95s.csv;DATA/testing/Slice_Z_0.11_2.95s.csv;DATA/testing/Slice_Z_0.10_2.95s.csv;DATA/testing/Slice_Z_0.09_2.95s.csv;DATA/testing/Slice_Z_0.08_2.95s.csv;DATA/testing/Slice_Z_0.065_2.95s.csv;DATA/testing/Slice_Z_0.05_2.95s.csv;DATA/testing/Slice_X_2.95s.csv", "time_step": 5e-07, "species": [{"name": "N2", "mean_Y": 0.7619153211928965, "group": "major"}, {"name": "H2", "mean_Y": 0.0012312354425779567, "group": "major"}, {"name": "H", "mean_Y": 1.4725400045648973e-05, "group": "trace"}, {"name": "O2", "mean_Y": 0.022492611867012558, "group": "major"}, {"name": "O", "mean_Y": 4.0171063554256156e-05, "group": "trace"}, {"name": "H2O", "mean_Y": 0.1958378706289087, "group": "major"}, {"name": "OH", "mean_Y": 0.0011251308225842698, "group": "major"}, {"name": "OHV", "mean_Y": 3.194639664251348e-13, "group": "trace"}, {"name": "H2O2", "mean_Y": 4.510459880104341e-07, "group": "trace"}, {"name": "HO2", "mean_Y": 1.389117338136248e-06, "group": "trace"}, {"name": "NO", "mean_Y": 0.006359320316612313, "group": "major"}, {"name": "NH3", "mean_Y": 0.010869582320149677, "group": "major"}, {"name": "NH2", "mean_Y": 1.7317729564090656e-05, "group": "trace"}, {"name": "NH", "mean_Y": 1.861997514679831e-06, "group": "trace"}, {"name": "N", "mean_Y": 4.921993183892112e-07, "group": "trace"}, {"name": "NNH", "mean_Y": 5.00610181057865e-09, "group": "trace"}, {"name": "N2H4", "mean_Y": 2.082840630126204e-06, "group": "trace"}, {"name": "N2H3", "mean_Y": 1.3034608675713308e-06, "group": "trace"}, {"name": "N2H2", "mean_Y": 9.106402471833017e-07, "group": "trace"}, {"name": "H2NN", "mean_Y": 2.1007892175804948e-08, "group": "trace"}, {"name": "NH2OH", "mean_Y": 3.617477753614844e-08, "group": "trace"}, {"name": "H2NO", "mean_Y": 2.551280608914621e-07, "group": "trace"}, {"name": "HNOH", "mean_Y": 4.489860821444466e-09, "group": "trace"}, {"name": "HNO", "mean_Y": 2.551442121285315e-06, "group": "trace"}, {"name": "HON", "mean_Y": 3.125749444203742e-08, "group": "trace"}, {"name": "NO2", "mean_Y": 2.455076653589793e-06, "group": "trace"}, {"name": "HONO", "mean_Y": 1.4530147322607456e-07, "group": "trace"}, {"name": "HNO2", "mean_Y": 1.419756867785356e-09, "group": "trace"}, {"name": "NO3", "mean_Y": 7.317706910599489e-11, "group": "trace"}, {"name": "HONO2", "mean_Y": 1.6511735705838811e-09, "group": "trace"}, {"name": "N2O", "mean_Y": 8.27138853271957e-05, "group": "trace"}, {"name": "HNO3", "mean_Y": 0.0, "group": "trace"}], "slices": [{"dir": "radial/Z-0.300", "kind": "radial", "axis": "Z", "center": -0.3, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 10726, "T_rmse": 0.000320115491168159, "T_maxerr": 0.001150926821082976}, {"dir": "radial/Z-0.150", "kind": "radial", "axis": "Z", "center": -0.15, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 89844, "T_rmse": 0.000809017862546573, "T_maxerr": 0.01178318718166338}, {"dir": "radial/Z-0.110", "kind": "radial", "axis": "Z", "center": -0.11, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 46839, "T_rmse": 0.022027729524636983, "T_maxerr": 1.3790405642378119}, {"dir": "radial/Z-0.100", "kind": "radial", "axis": "Z", "center": -0.1, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 39009, "T_rmse": 0.03349865720720843, "T_maxerr": 1.8296407904222178}, {"dir": "radial/Z-0.090", "kind": "radial", "axis": "Z", "center": -0.09, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 31572, "T_rmse": 0.039836519829917025, "T_maxerr": 0.7787187631381585}, {"dir": "radial/Z-0.080", "kind": "radial", "axis": "Z", "center": -0.08, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 25566, "T_rmse": 0.06389395538714292, "T_maxerr": 1.1309763942958853}, {"dir": "radial/Z-0.065", "kind": "radial", "axis": "Z", "center": -0.065, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 18535, "T_rmse": 0.2779513076474883, "T_maxerr": 4.458575624875039}, {"dir": "radial/Z-0.050", "kind": "radial", "axis": "Z", "center": -0.05, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 7970, "T_rmse": 0.0, "T_maxerr": 0.0}, {"dir": "axial/X+0.000_full", "kind": "axial", "axis": "X", "center": 0.0, "thickness": 0.0, "rotated": true, "view": "full", "n_cells": 145193, "T_rmse": 0.051716129398105555, "T_maxerr": 3.252561889655624}, {"dir": "axial/X+0.000_zoom", "kind": "axial", "axis": "X", "center": 0.0, "thickness": 0.0, "rotated": true, "view": "zoom", "n_cells": 112287, "T_rmse": 0.05880615815423084, "T_maxerr": 3.252561889655624}]}, {"id": "CFD_REDUCED_high_resolution", "dir": "CFD_REDUCED_high_resolution/figs_explore", "models_folder": "MODEL_REDUCED_HR_dt5e7_2D", "test_data_file": "DATA/testing/Slice_Z_0.3_3.0s.csv;DATA/testing/Slice_Z_0.15_3.0s.csv;DATA/testing/Slice_Z_0.11_3.0s.csv;DATA/testing/Slice_Z_0.10_3.0s.csv;DATA/testing/Slice_Z_0.09_3.0s.csv;DATA/testing/Slice_Z_0.08_3.0s.csv;DATA/testing/Slice_Z_0.065_3.0s.csv;DATA/testing/Slice_Z_0.05_3.0s.csv;DATA/testing/Slice_X_3.0s.csv", "time_step": 5e-07, "species": [{"name": "N2", "mean_Y": 0.7619601883826919, "group": "major"}, {"name": "H2", "mean_Y": 0.0012196430062390625, "group": "major"}, {"name": "H", "mean_Y": 1.4689601409618611e-05, "group": "trace"}, {"name": "O2", "mean_Y": 0.022785647546699758, "group": "major"}, {"name": "O", "mean_Y": 3.927865394099315e-05, "group": "trace"}, {"name": "H2O", "mean_Y": 0.19574027150758, "group": "major"}, {"name": "OH", "mean_Y": 0.001134626859535254, "group": "major"}, {"name": "HO2", "mean_Y": 1.5944321183235172e-06, "group": "trace"}, {"name": "NO", "mean_Y": 0.005784453195535092, "group": "major"}, {"name": "NH3", "mean_Y": 0.01121368691130841, "group": "major"}, {"name": "NH2", "mean_Y": 1.5527440529413972e-05, "group": "trace"}, {"name": "NH", "mean_Y": 1.6894364941683087e-06, "group": "trace"}, {"name": "N", "mean_Y": 4.1457849352854923e-07, "group": "trace"}, {"name": "NNH", "mean_Y": 4.972427412734461e-09, "group": "trace"}, {"name": "N2H2", "mean_Y": 6.993532063406763e-07, "group": "trace"}, {"name": "HNO", "mean_Y": 2.5473693011780127e-06, "group": "trace"}, {"name": "NO2", "mean_Y": 1.929293574491408e-06, "group": "trace"}, {"name": "N2O", "mean_Y": 8.310745891504762e-05, "group": "trace"}], "slices": [{"dir": "radial/Z-0.300", "kind": "radial", "axis": "Z", "center": -0.3, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 5424, "T_rmse": 0.004253054112789196, "T_maxerr": 0.011211701005777286}, {"dir": "radial/Z-0.150", "kind": "radial", "axis": "Z", "center": -0.15, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 44638, "T_rmse": 0.006361862730553707, "T_maxerr": 0.04093167727887703}, {"dir": "radial/Z-0.110", "kind": "radial", "axis": "Z", "center": -0.11, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 23245, "T_rmse": 0.02555590059541454, "T_maxerr": 0.5051189886552265}, {"dir": "radial/Z-0.100", "kind": "radial", "axis": "Z", "center": -0.1, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 19359, "T_rmse": 0.05250117499185007, "T_maxerr": 0.8871516511575237}, {"dir": "radial/Z-0.090", "kind": "radial", "axis": "Z", "center": -0.09, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 15670, "T_rmse": 0.1852390742042076, "T_maxerr": 5.650904188905656}, {"dir": "radial/Z-0.080", "kind": "radial", "axis": "Z", "center": -0.08, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 12696, "T_rmse": 0.2098591846365018, "T_maxerr": 5.318033620994015}, {"dir": "radial/Z-0.065", "kind": "radial", "axis": "Z", "center": -0.065, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 9391, "T_rmse": 0.5920110850045626, "T_maxerr": 7.367956000097706}, {"dir": "radial/Z-0.050", "kind": "radial", "axis": "Z", "center": -0.05, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 4118, "T_rmse": 0.0, "T_maxerr": 0.0}, {"dir": "axial/X+0.000_full", "kind": "axial", "axis": "X", "center": 0.0, "thickness": 0.0, "rotated": true, "view": "full", "n_cells": 72581, "T_rmse": 0.1292118912695975, "T_maxerr": 7.1941081280256185}, {"dir": "axial/X+0.000_zoom", "kind": "axial", "axis": "X", "center": 0.0, "thickness": 0.0, "rotated": true, "view": "zoom", "n_cells": 56009, "T_rmse": 0.14706587530841517, "T_maxerr": 7.1941081280256185}]}, {"id": "CFD_REDUCED_high_resolution (1D)", "dir": "CFD_REDUCED_high_resolution/figs_explore_1D", "models_folder": "MODEL_REDUCED_HR_dt5e7_1D", "test_data_file": "DATA/testing/Slice_Z_0.3_3.0s.csv;DATA/testing/Slice_Z_0.15_3.0s.csv;DATA/testing/Slice_Z_0.11_3.0s.csv;DATA/testing/Slice_Z_0.10_3.0s.csv;DATA/testing/Slice_Z_0.09_3.0s.csv;DATA/testing/Slice_Z_0.08_3.0s.csv;DATA/testing/Slice_Z_0.065_3.0s.csv;DATA/testing/Slice_Z_0.05_3.0s.csv;DATA/testing/Slice_X_3.0s.csv", "time_step": 5e-07, "species": [{"name": "N2", "mean_Y": 0.7619601883826919, "group": "major"}, {"name": "H2", "mean_Y": 0.0012196430062390625, "group": "major"}, {"name": "H", "mean_Y": 1.4689601409618611e-05, "group": "trace"}, {"name": "O2", "mean_Y": 0.022785647546699758, "group": "major"}, {"name": "O", "mean_Y": 3.927865394099315e-05, "group": "trace"}, {"name": "H2O", "mean_Y": 0.19574027150758, "group": "major"}, {"name": "OH", "mean_Y": 0.001134626859535254, "group": "major"}, {"name": "HO2", "mean_Y": 1.5944321183235172e-06, "group": "trace"}, {"name": "NO", "mean_Y": 0.005784453195535092, "group": "major"}, {"name": "NH3", "mean_Y": 0.01121368691130841, "group": "major"}, {"name": "NH2", "mean_Y": 1.5527440529413972e-05, "group": "trace"}, {"name": "NH", "mean_Y": 1.6894364941683087e-06, "group": "trace"}, {"name": "N", "mean_Y": 4.1457849352854923e-07, "group": "trace"}, {"name": "NNH", "mean_Y": 4.972427412734461e-09, "group": "trace"}, {"name": "N2H2", "mean_Y": 6.993532063406763e-07, "group": "trace"}, {"name": "HNO", "mean_Y": 2.5473693011780127e-06, "group": "trace"}, {"name": "NO2", "mean_Y": 1.929293574491408e-06, "group": "trace"}, {"name": "N2O", "mean_Y": 8.310745891504762e-05, "group": "trace"}], "slices": [{"dir": "radial/Z-0.300", "kind": "radial", "axis": "Z", "center": -0.3, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 5424, "T_rmse": 0.000356586519528378, "T_maxerr": 0.0013171911900826672}, {"dir": "radial/Z-0.150", "kind": "radial", "axis": "Z", "center": -0.15, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 44638, "T_rmse": 0.0010103584263734826, "T_maxerr": 0.007207974446373555}, {"dir": "radial/Z-0.110", "kind": "radial", "axis": "Z", "center": -0.11, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 23245, "T_rmse": 0.013367299556979195, "T_maxerr": 0.5051189886552265}, {"dir": "radial/Z-0.100", "kind": "radial", "axis": "Z", "center": -0.1, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 19359, "T_rmse": 0.049563212663041124, "T_maxerr": 0.8871516511575237}, {"dir": "radial/Z-0.090", "kind": "radial", "axis": "Z", "center": -0.09, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 15670, "T_rmse": 0.18386320177039375, "T_maxerr": 5.650904188905656}, {"dir": "radial/Z-0.080", "kind": "radial", "axis": "Z", "center": -0.08, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 12696, "T_rmse": 0.2090401461414326, "T_maxerr": 5.318033620994015}, {"dir": "radial/Z-0.065", "kind": "radial", "axis": "Z", "center": -0.065, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 9391, "T_rmse": 0.5885845121922474, "T_maxerr": 7.367956000097706}, {"dir": "radial/Z-0.050", "kind": "radial", "axis": "Z", "center": -0.05, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 4118, "T_rmse": 0.0, "T_maxerr": 0.0}, {"dir": "axial/X+0.000_full", "kind": "axial", "axis": "X", "center": 0.0, "thickness": 0.0, "rotated": true, "view": "full", "n_cells": 72581, "T_rmse": 0.12856932675896465, "T_maxerr": 7.1941081280256185}, {"dir": "axial/X+0.000_zoom", "kind": "axial", "axis": "X", "center": 0.0, "thickness": 0.0, "rotated": true, "view": "zoom", "n_cells": 56009, "T_rmse": 0.14635891094768494, "T_maxerr": 7.1941081280256185}]}, {"id": "CFD_REDUCED_high_resolution (2D_T_NH3)", "dir": "CFD_REDUCED_high_resolution/figs_explore_2D_T_NH3", "models_folder": "MODEL_REDUCED_HR_dt5e7_2D_T_NH3", "test_data_file": "DATA/testing/Slice_Z_0.3_3.0s.csv;DATA/testing/Slice_Z_0.15_3.0s.csv;DATA/testing/Slice_Z_0.11_3.0s.csv;DATA/testing/Slice_Z_0.10_3.0s.csv;DATA/testing/Slice_Z_0.09_3.0s.csv;DATA/testing/Slice_Z_0.08_3.0s.csv;DATA/testing/Slice_Z_0.065_3.0s.csv;DATA/testing/Slice_Z_0.05_3.0s.csv;DATA/testing/Slice_X_3.0s.csv", "time_step": 5e-07, "species": [{"name": "N2", "mean_Y": 0.7619601883826919, "group": "major"}, {"name": "H2", "mean_Y": 0.0012196430062390625, "group": "major"}, {"name": "H", "mean_Y": 1.4689601409618611e-05, "group": "trace"}, {"name": "O2", "mean_Y": 0.022785647546699758, "group": "major"}, {"name": "O", "mean_Y": 3.927865394099315e-05, "group": "trace"}, {"name": "H2O", "mean_Y": 0.19574027150758, "group": "major"}, {"name": "OH", "mean_Y": 0.001134626859535254, "group": "major"}, {"name": "HO2", "mean_Y": 1.5944321183235172e-06, "group": "trace"}, {"name": "NO", "mean_Y": 0.005784453195535092, "group": "major"}, {"name": "NH3", "mean_Y": 0.01121368691130841, "group": "major"}, {"name": "NH2", "mean_Y": 1.5527440529413972e-05, "group": "trace"}, {"name": "NH", "mean_Y": 1.6894364941683087e-06, "group": "trace"}, {"name": "N", "mean_Y": 4.1457849352854923e-07, "group": "trace"}, {"name": "NNH", "mean_Y": 4.972427412734461e-09, "group": "trace"}, {"name": "N2H2", "mean_Y": 6.993532063406763e-07, "group": "trace"}, {"name": "HNO", "mean_Y": 2.5473693011780127e-06, "group": "trace"}, {"name": "NO2", "mean_Y": 1.929293574491408e-06, "group": "trace"}, {"name": "N2O", "mean_Y": 8.310745891504762e-05, "group": "trace"}], "slices": [{"dir": "radial/Z-0.300", "kind": "radial", "axis": "Z", "center": -0.3, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 5424, "T_rmse": 0.0003804542065983626, "T_maxerr": 0.001122849208968546}, {"dir": "radial/Z-0.150", "kind": "radial", "axis": "Z", "center": -0.15, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 44638, "T_rmse": 0.0007784474107571228, "T_maxerr": 0.007028770013221219}, {"dir": "radial/Z-0.110", "kind": "radial", "axis": "Z", "center": -0.11, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 23245, "T_rmse": 0.01567516780723031, "T_maxerr": 0.7234741197208905}, {"dir": "radial/Z-0.100", "kind": "radial", "axis": "Z", "center": -0.1, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 19359, "T_rmse": 0.05143775842614549, "T_maxerr": 0.8871516511575237}, {"dir": "radial/Z-0.090", "kind": "radial", "axis": "Z", "center": -0.09, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 15670, "T_rmse": 0.18538540751857874, "T_maxerr": 5.650904188905656}, {"dir": "radial/Z-0.080", "kind": "radial", "axis": "Z", "center": -0.08, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 12696, "T_rmse": 0.21158584043849865, "T_maxerr": 5.318033620994015}, {"dir": "radial/Z-0.065", "kind": "radial", "axis": "Z", "center": -0.065, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 9391, "T_rmse": 0.5930242882471679, "T_maxerr": 7.367956000097706}, {"dir": "radial/Z-0.050", "kind": "radial", "axis": "Z", "center": -0.05, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 4118, "T_rmse": 0.0, "T_maxerr": 0.0}, {"dir": "axial/X+0.000_full", "kind": "axial", "axis": "X", "center": 0.0, "thickness": 0.0, "rotated": true, "view": "full", "n_cells": 72581, "T_rmse": 0.12899030438720424, "T_maxerr": 7.1941081280256185}, {"dir": "axial/X+0.000_zoom", "kind": "axial", "axis": "X", "center": 0.0, "thickness": 0.0, "rotated": true, "view": "zoom", "n_cells": 56009, "T_rmse": 0.14683821460009694, "T_maxerr": 7.1941081280256185}]}, {"id": "NH3_H2_N2_DETAILED_FOR_REDUCED", "dir": "NH3_H2_N2_DETAILED_FOR_REDUCED/figs_explore", "models_folder": "MODEL_NH3_H2_N2_DETAILED_FOR_REDUCED", "test_data_file": "../CFD_REDUCED_high_resolution/DATA/testing/Slice_Z_0.3_3.0s.csv;../CFD_REDUCED_high_resolution/DATA/testing/Slice_Z_0.15_3.0s.csv;../CFD_REDUCED_high_resolution/DATA/testing/Slice_Z_0.11_3.0s.csv;../CFD_REDUCED_high_resolution/DATA/testing/Slice_Z_0.10_3.0s.csv;../CFD_REDUCED_high_resolution/DATA/testing/Slice_Z_0.09_3.0s.csv;../CFD_REDUCED_high_resolution/DATA/testing/Slice_Z_0.08_3.0s.csv;../CFD_REDUCED_high_resolution/DATA/testing/Slice_Z_0.065_3.0s.csv;../CFD_REDUCED_high_resolution/DATA/testing/Slice_Z_0.05_3.0s.csv;../CFD_REDUCED_high_resolution/DATA/testing/Slice_X_3.0s.csv", "time_step": 5e-07, "species": [{"name": "N2", "mean_Y": 0.7619601883826919, "group": "major"}, {"name": "H2", "mean_Y": 0.0012196430062390625, "group": "major"}, {"name": "H", "mean_Y": 1.4689601409618611e-05, "group": "trace"}, {"name": "O2", "mean_Y": 0.022785647546699758, "group": "major"}, {"name": "O", "mean_Y": 3.927865394099315e-05, "group": "trace"}, {"name": "H2O", "mean_Y": 0.19574027150758, "group": "major"}, {"name": "OH", "mean_Y": 0.001134626859535254, "group": "major"}, {"name": "HO2", "mean_Y": 1.5944321183235172e-06, "group": "trace"}, {"name": "NO", "mean_Y": 0.005784453195535092, "group": "major"}, {"name": "NH3", "mean_Y": 0.01121368691130841, "group": "major"}, {"name": "NH2", "mean_Y": 1.5527440529413972e-05, "group": "trace"}, {"name": "NH", "mean_Y": 1.6894364941683087e-06, "group": "trace"}, {"name": "N", "mean_Y": 4.1457849352854923e-07, "group": "trace"}, {"name": "NNH", "mean_Y": 4.972427412734461e-09, "group": "trace"}, {"name": "N2H2", "mean_Y": 6.993532063406763e-07, "group": "trace"}, {"name": "HNO", "mean_Y": 2.5473693011780127e-06, "group": "trace"}, {"name": "NO2", "mean_Y": 1.929293574491408e-06, "group": "trace"}, {"name": "N2O", "mean_Y": 8.310745891504762e-05, "group": "trace"}], "slices": [{"dir": "radial/Z-0.300", "kind": "radial", "axis": "Z", "center": -0.3, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 5424, "T_rmse": 0.03183202701775561, "T_maxerr": 0.08654392989592452}, {"dir": "radial/Z-0.150", "kind": "radial", "axis": "Z", "center": -0.15, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 44638, "T_rmse": 0.08609298772236619, "T_maxerr": 0.34114474603165945}, {"dir": "radial/Z-0.110", "kind": "radial", "axis": "Z", "center": -0.11, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 23245, "T_rmse": 1.2535592385595256, "T_maxerr": 17.532299453733003}, {"dir": "radial/Z-0.100", "kind": "radial", "axis": "Z", "center": -0.1, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 19359, "T_rmse": 1.8889911863115176, "T_maxerr": 19.608005017078767}, {"dir": "radial/Z-0.090", "kind": "radial", "axis": "Z", "center": -0.09, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 15670, "T_rmse": 2.7169107299300785, "T_maxerr": 43.299770334399}, {"dir": "radial/Z-0.080", "kind": "radial", "axis": "Z", "center": -0.08, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 12696, "T_rmse": 2.7372111996368487, "T_maxerr": 80.51073292016326}, {"dir": "radial/Z-0.065", "kind": "radial", "axis": "Z", "center": -0.065, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 9391, "T_rmse": 3.309983180508892, "T_maxerr": 49.56693726955791}, {"dir": "radial/Z-0.050", "kind": "radial", "axis": "Z", "center": -0.05, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 4118, "T_rmse": 0.0, "T_maxerr": 0.0}, {"dir": "axial/X+0.000_full", "kind": "axial", "axis": "X", "center": 0.0, "thickness": 0.0, "rotated": true, "view": "full", "n_cells": 72581, "T_rmse": 1.1384191673843393, "T_maxerr": 34.80297132198507}, {"dir": "axial/X+0.000_zoom", "kind": "axial", "axis": "X", "center": 0.0, "thickness": 0.0, "rotated": true, "view": "zoom", "n_cells": 56009, "T_rmse": 1.295855048586804, "T_maxerr": 34.80297132198507}]}, {"id": "NH3_H2_N2_REDUCED (raffine)", "dir": "NH3_H2_N2_REDUCED/figs_explore_raffine", "models_folder": "MODEL_NH3_H2_N2_REDUCED_logk2", "test_data_file": "../CFD_REDUCED_high_resolution/DATA/testing/Slice_Z_0.3_3.0s.csv;../CFD_REDUCED_high_resolution/DATA/testing/Slice_Z_0.15_3.0s.csv;../CFD_REDUCED_high_resolution/DATA/testing/Slice_Z_0.11_3.0s.csv;../CFD_REDUCED_high_resolution/DATA/testing/Slice_Z_0.10_3.0s.csv;../CFD_REDUCED_high_resolution/DATA/testing/Slice_Z_0.09_3.0s.csv;../CFD_REDUCED_high_resolution/DATA/testing/Slice_Z_0.08_3.0s.csv;../CFD_REDUCED_high_resolution/DATA/testing/Slice_Z_0.065_3.0s.csv;../CFD_REDUCED_high_resolution/DATA/testing/Slice_Z_0.05_3.0s.csv;../CFD_REDUCED_high_resolution/DATA/testing/Slice_X_3.0s.csv", "time_step": 5e-06, "species": [{"name": "N2", "mean_Y": 0.7619768948746557, "group": "major"}, {"name": "H2", "mean_Y": 0.0012187697051899036, "group": "major"}, {"name": "H", "mean_Y": 1.4654467599303459e-05, "group": "trace"}, {"name": "O2", "mean_Y": 0.0227469075744036, "group": "major"}, {"name": "O", "mean_Y": 3.917166885638198e-05, "group": "trace"}, {"name": "H2O", "mean_Y": 0.1957822686052322, "group": "major"}, {"name": "OH", "mean_Y": 0.0011350418460868007, "group": "major"}, {"name": "HO2", "mean_Y": 1.6191810842439672e-06, "group": "trace"}, {"name": "NO", "mean_Y": 0.005786311193422442, "group": "major"}, {"name": "NH3", "mean_Y": 0.011192319849311209, "group": "major"}, {"name": "NH2", "mean_Y": 1.5270806960241034e-05, "group": "trace"}, {"name": "NH", "mean_Y": 1.7379377244952178e-06, "group": "trace"}, {"name": "N", "mean_Y": 4.3701429061886145e-07, "group": "trace"}, {"name": "NNH", "mean_Y": 5.162709958924975e-09, "group": "trace"}, {"name": "N2H2", "mean_Y": 7.391792080494066e-07, "group": "trace"}, {"name": "HNO", "mean_Y": 2.6575961910673946e-06, "group": "trace"}, {"name": "NO2", "mean_Y": 2.0219998484721685e-06, "group": "trace"}, {"name": "N2O", "mean_Y": 8.31713372252713e-05, "group": "trace"}], "slices": [{"dir": "radial/Z-0.300", "kind": "radial", "axis": "Z", "center": -0.3, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 5424, "T_rmse": 0.011376058328077018, "T_maxerr": 0.029020713993759273}, {"dir": "radial/Z-0.150", "kind": "radial", "axis": "Z", "center": -0.15, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 44638, "T_rmse": 0.00925945996752245, "T_maxerr": 0.033727787053749125}, {"dir": "radial/Z-0.110", "kind": "radial", "axis": "Z", "center": -0.11, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 23245, "T_rmse": 0.1823684628847641, "T_maxerr": 3.5279023887660514}, {"dir": "radial/Z-0.100", "kind": "radial", "axis": "Z", "center": -0.1, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 19359, "T_rmse": 0.2682071685414012, "T_maxerr": 7.625464558306476}, {"dir": "radial/Z-0.090", "kind": "radial", "axis": "Z", "center": -0.09, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 15670, "T_rmse": 0.5410734177437885, "T_maxerr": 48.03098538458403}, {"dir": "radial/Z-0.080", "kind": "radial", "axis": "Z", "center": -0.08, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 12696, "T_rmse": 0.5159450880418567, "T_maxerr": 31.34919637380858}, {"dir": "radial/Z-0.065", "kind": "radial", "axis": "Z", "center": -0.065, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 9391, "T_rmse": 1.246029150642843, "T_maxerr": 20.977850545971705}, {"dir": "radial/Z-0.050", "kind": "radial", "axis": "Z", "center": -0.05, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 4118, "T_rmse": 0.0, "T_maxerr": 0.0}, {"dir": "axial/X+0.000_full", "kind": "axial", "axis": "X", "center": 0.0, "thickness": 0.0, "rotated": true, "view": "full", "n_cells": 72581, "T_rmse": 0.4527459720592528, "T_maxerr": 91.2830550520664}, {"dir": "axial/X+0.000_zoom", "kind": "axial", "axis": "X", "center": 0.0, "thickness": 0.0, "rotated": true, "view": "zoom", "n_cells": 56009, "T_rmse": 0.5153568117073176, "T_maxerr": 91.2830550520664}]}];
+
+let caseIdx = 0;
+let sliceIdx = 0;
+let fieldIdx = 0;
+let SLICES = [];
+let FIELD_GROUPS = [];
+let FIELDS = [];
+
+function loadCase() {
+  const c = CASES[caseIdx];
+  document.getElementById('case-sub').textContent =
+    `modèle ${c.models_folder} · dt=${c.time_step.toExponential(1)}s · test=${c.test_data_file.split('/').pop()}`;
+
+  SLICES = c.slices.map(s => {
+    const viewLabel = s.view === 'zoom' ? 'zoom flamme' : s.view === 'full' ? 'vue complète' : '';
+    const label = s.kind === 'radial' ? `Z = ${s.center.toFixed(3)} m` : `${s.axis} = ${s.center.toFixed(3)} m (${viewLabel})`;
+    const note = `n=${s.n_cells} · RMSE T=${s.T_rmse.toFixed(3)}K`;
+    return {dir: s.dir, label, note, group: s.kind};
+  });
+
+  FIELD_GROUPS = [
+    {name: 'Température', items: ['Temperature']},
+    {name: 'Espèces majeures', items: c.species.filter(s => s.group === 'major').map(s => s.name)},
+    {name: 'Espèces traces / NOx', items: c.species.filter(s => s.group === 'trace').map(s => s.name)},
+  ].filter(g => g.items.length > 0);
+
+  FIELDS = [];
+  for (const g of FIELD_GROUPS) {
+    for (const key of g.items) {
+      FIELDS.push({key, file: key === 'Temperature' ? 'Temperature.png' : `species/${key}.png`});
+    }
+  }
+
+  sliceIdx = 0;
+  fieldIdx = 0;
+  buildSlices();
+  buildFields();
+  render();
+}
+
+function render() {
+  const c = CASES[caseIdx];
+  const slice = SLICES[sliceIdx];
+  const field = FIELDS[fieldIdx];
+  const src = `${c.dir}/${slice.dir}/${field.file}`;
+
+  document.getElementById('viewer').src = src;
+  document.getElementById('openraw').href = src;
+  document.getElementById('caption').textContent = `${slice.label} — ${field.key} (${fieldIdx + 1}/${FIELDS.length})`;
+
+  document.querySelectorAll('.slice-btn').forEach((el, i) => el.classList.toggle('active', i === sliceIdx));
+  document.querySelectorAll('.field-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.key === field.key);
+  });
+}
+
+function buildSlices() {
+  const container = document.getElementById('slices');
+  container.innerHTML = '';
+  let lastGroup = null;
+  SLICES.forEach((s, i) => {
+    if (lastGroup !== null && s.group !== lastGroup) {
+      const sep = document.createElement('div');
+      sep.className = 'slice-sep';
+      container.appendChild(sep);
+    }
+    lastGroup = s.group;
+
+    const btn = document.createElement('div');
+    btn.className = 'slice-btn';
+    btn.innerHTML = `${s.label}<span class="note">${s.note}</span>`;
+    btn.addEventListener('click', () => { sliceIdx = i; render(); });
+    container.appendChild(btn);
+  });
+}
+
+function buildFields() {
+  const container = document.getElementById('fields');
+  container.innerHTML = '';
+  for (const g of FIELD_GROUPS) {
+    const h = document.createElement('h2');
+    h.textContent = g.name;
+    container.appendChild(h);
+    for (const key of g.items) {
+      const item = document.createElement('div');
+      item.className = 'field-item';
+      item.textContent = key;
+      item.dataset.key = key;
+      item.addEventListener('click', () => {
+        fieldIdx = FIELDS.findIndex(f => f.key === key);
+        render();
+      });
+      container.appendChild(item);
+    }
+  }
+}
+
+function buildCaseSelect() {
+  const sel = document.getElementById('case-select');
+  CASES.forEach((c, i) => {
+    const opt = document.createElement('option');
+    opt.value = i;
+    opt.textContent = `${c.id} — ${c.models_folder}`;
+    sel.appendChild(opt);
+  });
+  sel.addEventListener('change', () => { caseIdx = parseInt(sel.value, 10); loadCase(); });
+}
+
+document.getElementById('prev').addEventListener('click', () => {
+  fieldIdx = (fieldIdx - 1 + FIELDS.length) % FIELDS.length;
+  render();
+});
+document.getElementById('next').addEventListener('click', () => {
+  fieldIdx = (fieldIdx + 1) % FIELDS.length;
+  render();
+});
+document.addEventListener('keydown', (e) => {
+  if (['ArrowRight','ArrowLeft','ArrowUp','ArrowDown'].includes(e.key) && document.activeElement.tagName === 'SELECT') return;
+  if (e.key === 'ArrowRight') { fieldIdx = (fieldIdx + 1) % FIELDS.length; render(); }
+  if (e.key === 'ArrowLeft') { fieldIdx = (fieldIdx - 1 + FIELDS.length) % FIELDS.length; render(); }
+  if (e.key === 'ArrowDown') { sliceIdx = (sliceIdx + 1) % SLICES.length; render(); }
+  if (e.key === 'ArrowUp') { sliceIdx = (sliceIdx - 1 + SLICES.length) % SLICES.length; render(); }
+});
+
+buildCaseSelect();
+loadCase();
+</script>
+
+</body>
+</html>

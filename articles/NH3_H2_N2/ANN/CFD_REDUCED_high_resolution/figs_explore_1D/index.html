@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>CFD_REDUCED_high_resolution (1D) &mdash; ANN vs CVODE, coupes de champs</title>
+<style>
+  :root {
+    --bg: #12141a;
+    --panel: #1b1e27;
+    --panel-2: #232733;
+    --border: #2e323f;
+    --text: #e6e8ee;
+    --text-dim: #9aa0b0;
+    --accent: #5fa8ff;
+    --accent-dim: #2c4a70;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  header {
+    padding: 10px 16px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+  }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  header .sub { font-size: 12px; color: var(--text-dim); }
+
+  .slices {
+    display: flex; gap: 6px; padding: 8px 16px;
+    background: var(--panel); border-bottom: 1px solid var(--border);
+    overflow-x: auto; flex-wrap: wrap;
+  }
+  .slice-btn {
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    padding: 6px 10px; border-radius: 6px; cursor: pointer; font-size: 12.5px;
+    white-space: nowrap;
+  }
+  .slice-btn .note { display: block; font-size: 10.5px; color: var(--text-dim); margin-top: 1px; }
+  .slice-btn.active { background: var(--accent-dim); border-color: var(--accent); }
+  .slice-sep { width: 1px; background: var(--border); margin: 0 6px; align-self: stretch; }
+
+  .layout { display: flex; height: calc(100% - 96px); }
+  nav.fields {
+    width: 220px; flex: 0 0 220px; overflow-y: auto;
+    background: var(--panel); border-right: 1px solid var(--border);
+    padding: 8px 0;
+  }
+  nav.fields h2 {
+    font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em;
+    color: var(--text-dim); margin: 14px 14px 6px; font-weight: 600;
+  }
+  nav.fields h2:first-child { margin-top: 4px; }
+  .field-item {
+    padding: 5px 14px; cursor: pointer; font-size: 13px; color: var(--text);
+    border-left: 3px solid transparent;
+  }
+  .field-item:hover { background: var(--panel-2); }
+  .field-item.active { background: var(--accent-dim); border-left-color: var(--accent); font-weight: 600; }
+
+  main {
+    flex: 1; display: flex; flex-direction: column; align-items: center;
+    padding: 14px; overflow: auto;
+  }
+  .imgwrap {
+    max-width: 100%; text-align: center;
+    background: #fff; border-radius: 8px; padding: 6px;
+    border: 1px solid var(--border);
+  }
+  .imgwrap img { max-width: 100%; height: auto; display: block; border-radius: 4px; }
+  .controls {
+    display: flex; align-items: center; gap: 10px; margin-top: 10px; color: var(--text-dim); font-size: 12.5px;
+  }
+  .controls button {
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 13px;
+  }
+  .controls button:hover { background: var(--accent-dim); }
+  .hint { font-size: 11.5px; color: var(--text-dim); margin-top: 4px; }
+  a.openraw { color: var(--accent); text-decoration: none; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>CFD_REDUCED_high_resolution (1D) &mdash; ANN vs CVODE</h1>
+  <span class="sub">panneaux: CVODE / ANN / erreur (ANN&minus;CVODE) &middot; coupes radiales (Z) et axiale (profil, tournée 90&deg; anti-horaire)</span>
+</header>
+
+<div class="slices" id="slices"></div>
+
+<div class="layout">
+  <nav class="fields" id="fields"></nav>
+  <main>
+    <div class="imgwrap">
+      <img id="viewer" src="" alt="figure">
+    </div>
+    <div class="controls">
+      <button id="prev">&larr; précédent</button>
+      <span id="caption"></span>
+      <button id="next">suivant &rarr;</button>
+    </div>
+    <div class="hint">flèches gauche/droite pour naviguer entre les champs, haut/bas pour changer de coupe &middot; <a class="openraw" id="openraw" href="#" target="_blank">ouvrir l'image seule</a></div>
+  </main>
+</div>
+
+<script>
+const MANIFEST = {"models_folder": "MODEL_REDUCED_HR_dt5e7_1D", "test_data_file": "DATA/testing/Slice_Z_0.3_3.0s.csv;DATA/testing/Slice_Z_0.15_3.0s.csv;DATA/testing/Slice_Z_0.11_3.0s.csv;DATA/testing/Slice_Z_0.10_3.0s.csv;DATA/testing/Slice_Z_0.09_3.0s.csv;DATA/testing/Slice_Z_0.08_3.0s.csv;DATA/testing/Slice_Z_0.065_3.0s.csv;DATA/testing/Slice_Z_0.05_3.0s.csv;DATA/testing/Slice_X_3.0s.csv", "time_step": 5e-07, "species": [{"name": "N2", "mean_Y": 0.7619601883826919, "group": "major"}, {"name": "H2", "mean_Y": 0.0012196430062390625, "group": "major"}, {"name": "H", "mean_Y": 1.4689601409618611e-05, "group": "trace"}, {"name": "O2", "mean_Y": 0.022785647546699758, "group": "major"}, {"name": "O", "mean_Y": 3.927865394099315e-05, "group": "trace"}, {"name": "H2O", "mean_Y": 0.19574027150758, "group": "major"}, {"name": "OH", "mean_Y": 0.001134626859535254, "group": "major"}, {"name": "HO2", "mean_Y": 1.5944321183235172e-06, "group": "trace"}, {"name": "NO", "mean_Y": 0.005784453195535092, "group": "major"}, {"name": "NH3", "mean_Y": 0.01121368691130841, "group": "major"}, {"name": "NH2", "mean_Y": 1.5527440529413972e-05, "group": "trace"}, {"name": "NH", "mean_Y": 1.6894364941683087e-06, "group": "trace"}, {"name": "N", "mean_Y": 4.1457849352854923e-07, "group": "trace"}, {"name": "NNH", "mean_Y": 4.972427412734461e-09, "group": "trace"}, {"name": "N2H2", "mean_Y": 6.993532063406763e-07, "group": "trace"}, {"name": "HNO", "mean_Y": 2.5473693011780127e-06, "group": "trace"}, {"name": "NO2", "mean_Y": 1.929293574491408e-06, "group": "trace"}, {"name": "N2O", "mean_Y": 8.310745891504762e-05, "group": "trace"}], "slices": [{"dir": "radial/Z-0.300", "kind": "radial", "axis": "Z", "center": -0.3, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 5424, "T_rmse": 0.000356586519528378, "T_maxerr": 0.0013171911900826672}, {"dir": "radial/Z-0.150", "kind": "radial", "axis": "Z", "center": -0.15, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 44638, "T_rmse": 0.0010103584263734826, "T_maxerr": 0.007207974446373555}, {"dir": "radial/Z-0.110", "kind": "radial", "axis": "Z", "center": -0.11, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 23245, "T_rmse": 0.013367299556979195, "T_maxerr": 0.5051189886552265}, {"dir": "radial/Z-0.100", "kind": "radial", "axis": "Z", "center": -0.1, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 19359, "T_rmse": 0.049563212663041124, "T_maxerr": 0.8871516511575237}, {"dir": "radial/Z-0.090", "kind": "radial", "axis": "Z", "center": -0.09, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 15670, "T_rmse": 0.18386320177039375, "T_maxerr": 5.650904188905656}, {"dir": "radial/Z-0.080", "kind": "radial", "axis": "Z", "center": -0.08, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 12696, "T_rmse": 0.2090401461414326, "T_maxerr": 5.318033620994015}, {"dir": "radial/Z-0.065", "kind": "radial", "axis": "Z", "center": -0.065, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 9391, "T_rmse": 0.5885845121922474, "T_maxerr": 7.367956000097706}, {"dir": "radial/Z-0.050", "kind": "radial", "axis": "Z", "center": -0.05, "thickness": 0.0, "rotated": false, "view": "", "n_cells": 4118, "T_rmse": 0.0, "T_maxerr": 0.0}, {"dir": "axial/X+0.000_full", "kind": "axial", "axis": "X", "center": 0.0, "thickness": 0.0, "rotated": true, "view": "full", "n_cells": 72581, "T_rmse": 0.12856932675896465, "T_maxerr": 7.1941081280256185}, {"dir": "axial/X+0.000_zoom", "kind": "axial", "axis": "X", "center": 0.0, "thickness": 0.0, "rotated": true, "view": "zoom", "n_cells": 56009, "T_rmse": 0.14635891094768494, "T_maxerr": 7.1941081280256185}]};
+
+const SLICES = MANIFEST.slices.map(s => {
+  const viewLabel = s.view === 'zoom' ? 'zoom flamme' : s.view === 'full' ? 'vue complète' : '';
+  const label = s.kind === 'radial' ? `Z = ${s.center.toFixed(3)} m` : `${s.axis} = ${s.center.toFixed(3)} m (${viewLabel})`;
+  const note = `n=${s.n_cells} · RMSE T=${s.T_rmse.toFixed(3)}K`;
+  return {dir: s.dir, label, note, group: s.kind};
+});
+
+const FIELD_GROUPS = [
+  {name: 'Température', items: ['Temperature']},
+  {name: 'Espèces majeures', items: MANIFEST.species.filter(s => s.group === 'major').map(s => s.name)},
+  {name: 'Espèces traces / NOx', items: MANIFEST.species.filter(s => s.group === 'trace').map(s => s.name)},
+].filter(g => g.items.length > 0);
+
+const FIELDS = [];
+for (const g of FIELD_GROUPS) {
+  for (const key of g.items) {
+    FIELDS.push({key, file: key === 'Temperature' ? 'Temperature.png' : `species/${key}.png`});
+  }
+}
+
+let sliceIdx = 0;
+let fieldIdx = 0;
+
+function render() {
+  const slice = SLICES[sliceIdx];
+  const field = FIELDS[fieldIdx];
+  const src = `${slice.dir}/${field.file}`;
+
+  document.getElementById('viewer').src = src;
+  document.getElementById('openraw').href = src;
+  document.getElementById('caption').textContent = `${slice.label} — ${field.key} (${fieldIdx + 1}/${FIELDS.length})`;
+
+  document.querySelectorAll('.slice-btn').forEach((el, i) => el.classList.toggle('active', i === sliceIdx));
+  document.querySelectorAll('.field-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.key === field.key);
+  });
+}
+
+function buildSlices() {
+  const container = document.getElementById('slices');
+  let lastGroup = null;
+  SLICES.forEach((s, i) => {
+    if (lastGroup !== null && s.group !== lastGroup) {
+      const sep = document.createElement('div');
+      sep.className = 'slice-sep';
+      container.appendChild(sep);
+    }
+    lastGroup = s.group;
+
+    const btn = document.createElement('div');
+    btn.className = 'slice-btn';
+    btn.innerHTML = `${s.label}<span class="note">${s.note}</span>`;
+    btn.addEventListener('click', () => { sliceIdx = i; render(); });
+    container.appendChild(btn);
+  });
+}
+
+function buildFields() {
+  const container = document.getElementById('fields');
+  for (const g of FIELD_GROUPS) {
+    const h = document.createElement('h2');
+    h.textContent = g.name;
+    container.appendChild(h);
+    for (const key of g.items) {
+      const item = document.createElement('div');
+      item.className = 'field-item';
+      item.textContent = key;
+      item.dataset.key = key;
+      item.addEventListener('click', () => {
+        fieldIdx = FIELDS.findIndex(f => f.key === key);
+        render();
+      });
+      container.appendChild(item);
+    }
+  }
+}
+
+document.getElementById('prev').addEventListener('click', () => {
+  fieldIdx = (fieldIdx - 1 + FIELDS.length) % FIELDS.length;
+  render();
+});
+document.getElementById('next').addEventListener('click', () => {
+  fieldIdx = (fieldIdx + 1) % FIELDS.length;
+  render();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowRight') { fieldIdx = (fieldIdx + 1) % FIELDS.length; render(); }
+  if (e.key === 'ArrowLeft') { fieldIdx = (fieldIdx - 1 + FIELDS.length) % FIELDS.length; render(); }
+  if (e.key === 'ArrowDown') { sliceIdx = (sliceIdx + 1) % SLICES.length; render(); }
+  if (e.key === 'ArrowUp') { sliceIdx = (sliceIdx - 1 + SLICES.length) % SLICES.length; render(); }
+});
+
+buildSlices();
+buildFields();
+render();
+</script>
+
+</body>
+</html>
