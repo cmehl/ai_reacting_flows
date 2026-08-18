@@ -153,41 +153,56 @@ class LearningDatabase(object):
         self.col_names_X = h5file_r["ITERATION_00000/X"].attrs["cols"]
         self.col_names_Y = h5file_r["ITERATION_00000/Y"].attrs["cols"]
 
-        list_df_X = []
-        list_df_Y = []
+        # Memory-bounded load: read each ITERATION group's shape first (cheap,
+        # no data read), preallocate the final float64 arrays once, then read
+        # every group directly into its slice. Avoids the old
+        # list-of-per-file-DataFrames + pd.concat pattern, which transiently
+        # holds both the source list and the concatenated result at once (up
+        # to ~2x peak memory). Made large raw databases (>~20GB) reliably OOM
+        # on a 30GB machine; this cuts peak memory roughly 2x for the load
+        # step.
         if self.dt_var:
+            list_df_X = []
             list_dt_arrays = []
-
-        # Loop on solutions
-        for i in range(self.nb_solutions):
-
-            if i%100==0:
-                print(f"Opening solution: {i} / {self.nb_solutions}")
-
-            data_X = h5file_r.get(f"ITERATION_{i:05d}/X")[()]
-            data_Y = h5file_r.get(f"ITERATION_{i:05d}/Y")[()]
-            if self.dt_var:
+            list_Y_arrays = []
+            for i in range(self.nb_solutions):
+                if i % 100 == 0:
+                    print(f"Opening solution: {i} / {self.nb_solutions}")
+                data_X = h5file_r.get(f"ITERATION_{i:05d}/X")[()]
+                data_Y = h5file_r.get(f"ITERATION_{i:05d}/Y")[()]
                 data_dt = h5file_r.get(f"ITERATION_{i:05d}/DT")[()]
-
-            list_df_X.append(pd.DataFrame(data=data_X, columns=self.col_names_X))
-            if self.dt_var:
+                list_df_X.append(pd.DataFrame(data=data_X, columns=self.col_names_X))
+                list_Y_arrays.append(data_Y)  # 3D array cannot be stored in pandas dataframe
                 list_dt_arrays.append(data_dt)
-                list_df_Y.append(data_Y)    # 3D array cannot be stored in pandas dataframe
-            else:
-                list_df_Y.append(pd.DataFrame(data=data_Y, columns=self.col_names_Y))
+            h5file_r.close()
 
-        h5file_r.close()
-
-        print("\n Performing concatenation of dataframes...")
-
-        self.X = pd.concat(list_df_X, ignore_index=True)
-        if self.dt_var:
-            self.Y = np.concatenate(list_df_Y, axis=0)
+            print("\n Performing concatenation of dataframes...")
+            self.X = pd.concat(list_df_X, ignore_index=True)
+            self.Y = np.concatenate(list_Y_arrays, axis=0)
             self.dt_array = np.concatenate(list_dt_arrays, axis=0)
+            print("End of concatenation ! \n")
         else:
-            self.Y = pd.concat(list_df_Y, ignore_index=True)
+            n_rows_per_group = [h5file_r[f"ITERATION_{i:05d}/X"].shape[0] for i in range(self.nb_solutions)]
+            total_rows = sum(n_rows_per_group)
+            n_cols_X = len(self.col_names_X)
+            n_cols_Y = len(self.col_names_Y)
 
-        print("End of concatenation ! \n")
+            X_arr = np.empty((total_rows, n_cols_X), dtype=np.float64)
+            Y_arr = np.empty((total_rows, n_cols_Y), dtype=np.float64)
+
+            offset = 0
+            for i in range(self.nb_solutions):
+                if i % 100 == 0:
+                    print(f"Opening solution: {i} / {self.nb_solutions}")
+                n = n_rows_per_group[i]
+                X_arr[offset:offset + n] = h5file_r.get(f"ITERATION_{i:05d}/X")[()]
+                Y_arr[offset:offset + n] = h5file_r.get(f"ITERATION_{i:05d}/Y")[()]
+                offset += n
+            h5file_r.close()
+
+            self.X = pd.DataFrame(data=X_arr, columns=self.col_names_X, copy=False)
+            self.Y = pd.DataFrame(data=Y_arr, columns=self.col_names_Y, copy=False)
+            print("End of load ! \n")
 
 
     def database_to_h5(self, file_path, file_name):

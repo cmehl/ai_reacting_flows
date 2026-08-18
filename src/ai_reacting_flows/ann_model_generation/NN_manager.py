@@ -17,12 +17,12 @@ import torch.nn as nn
 import torch.optim as optim
 
 import ai_reacting_flows.tools.utilities as utils
-from ai_reacting_flows.ann_model_generation.NN_models import MLPModel, DeepONet, DeepONet_shift
+from ai_reacting_flows.ann_model_generation.NN_models import MLPModel, DeepONet, DeepONet_shift, PerSpeciesMLP
 
 torch.set_default_dtype(torch.float64)
 
 activation_functions = {"relu": nn.ReLU, "gelu" : nn.GELU, "tanh" : nn.Tanh, "id" : nn.Identity}
-model_type = {"MLP": MLPModel, "DeepONet": DeepONet, "DeepONetShift": DeepONet_shift}
+model_type = {"MLP": MLPModel, "DeepONet": DeepONet, "DeepONetShift": DeepONet_shift, "PerSpeciesMLP": PerSpeciesMLP}
 
 class NN_manager():
     def __init__(self, run_folder: str | None = None):
@@ -214,6 +214,17 @@ class NN_manager():
                 layers_type = network_parameters["layers_type"]
             
                 model = model_type[network_type](self.device, nb_units_in_layers_list, layers_type, layers_activation_list)
+            elif (network_type == "PerSpeciesMLP"):
+                # Same shape convention as MLP, except each of the n_out
+                # independent sub-networks predicts a single scalar, so the
+                # per-network layer list ends in 1, not n_out.
+                nb_units_in_layers_list = copy.deepcopy(network_parameters["nb_units_in_layers_list"])
+                nb_units_in_layers_list.insert(0, n_in)
+                nb_units_in_layers_list.append(1)
+                layers_activation_list = [activation_functions[str(act).lower()] for act in network_parameters["layers_activation_list"]]
+                layers_type = network_parameters["layers_type"]
+
+                model = model_type[network_type](self.device, nb_units_in_layers_list, layers_type, layers_activation_list, n_out)
             elif (network_type=="DeepONet"):
                 # Network shapes
                 nb_units_in_layers_list = copy.deepcopy(network_parameters["nb_units_in_layers_list"])
@@ -718,6 +729,14 @@ class NN_manager():
                 save_module(layer_group, child_module, child_name, parent_activation_map)
 
         with h5py.File(h5_path, "w") as f:
-            # Save each top-level layer directly, no 'model' group
-            for layer_name, module in model.model.named_children():  # note: model.model is nn.Sequential
-                save_module(f, module, layer_name, getattr(model, 'activation_map', {}))
+            if isinstance(model, PerSpeciesMLP):
+                # One group per species sub-network, each holding its own
+                # MLPModel layers (same layout as the single-network case).
+                for i_species, sub_model in enumerate(model.species_models):
+                    species_group = f.create_group(f"species_{i_species}")
+                    for layer_name, module in sub_model.model.named_children():
+                        save_module(species_group, module, layer_name, getattr(sub_model, 'activation_map', {}))
+            else:
+                # Save each top-level layer directly, no 'model' group
+                for layer_name, module in model.model.named_children():  # note: model.model is nn.Sequential
+                    save_module(f, module, layer_name, getattr(model, 'activation_map', {}))

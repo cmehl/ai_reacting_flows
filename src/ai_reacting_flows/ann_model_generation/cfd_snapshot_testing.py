@@ -19,6 +19,7 @@ import os
 import glob
 
 import numpy as np
+import pandas as pd
 import h5py
 import oyaml as yaml
 import cantera as ct
@@ -37,16 +38,29 @@ class CFDSnapshotTester:
         with open(os.path.join(self.run_folder, "test_ann_vs_cvode.yaml"), "r") as file:
             test_params = yaml.safe_load(file)
 
-        self.test_data_file = os.path.join(self.run_folder, test_params["test_data_file"])
         self.time_step = float(test_params["time_step"])
         self.T_threshold = float(test_params["T_threshold"])
         self.seed = int(test_params.get("seed", 0))
         self.output_file = os.path.join(self.run_folder, test_params["output_file"])
 
-        # --- Cell selection: either a few fixed slices (for spatial/visual
-        # comparison, coordinates kept) or the historical random sample -----
+        # --- Cell selection: one of three modes --------------------------
+        # 1. csv_slices: pre-cut slices (e.g. exported from ParaView), one CSV
+        #    per slice, every row used as-is (no thickness/sampling -- the
+        #    cut is already exact). Preferred whenever available: a real
+        #    plane cut through the mesh, not an approximation via a thin 3D
+        #    slab that can under/over-sample depending on local mesh density.
+        # 2. slices: a few fixed thin 3D slabs cut programmatically from a
+        #    full raw snapshot (coordinates kept, for spatial comparison).
+        # 3. neither: historical random sample of n_sample cells.
+        self.csv_slices = test_params.get("csv_slices")
         self.slices = test_params.get("slices")
-        self.n_sample = int(test_params["n_sample"]) if not self.slices else None
+        self.test_data_file = (
+            os.path.join(self.run_folder, test_params["test_data_file"])
+            if not self.csv_slices else None
+        )
+        self.n_sample = (
+            int(test_params["n_sample"]) if not (self.csv_slices or self.slices) else None
+        )
 
         # --- Model folder / training configuration -------------------------
         self.models_folder = os.path.join(self.run_folder, "MODELS", test_params["models_folder"])
@@ -118,7 +132,9 @@ class CFDSnapshotTester:
         with h5py.File(os.path.join(self.dataset_path, "training_data.h5"), "r") as h5file_r:
             for i in range(self.nb_clusters):
                 model = torch.load(
-                    os.path.join(self.models_folder, f"cluster{i}_model.pth"), weights_only=False
+                    os.path.join(self.models_folder, f"cluster{i}_model.pth"),
+                    map_location=self.device,
+                    weights_only=False,
                 )
                 model.to(self.device)
                 model.eval()
@@ -164,6 +180,94 @@ class CFDSnapshotTester:
 
         return T, P, Y, coord_x, coord_y, coord_z
 
+    # ------------------------------------------------------------------
+    # CSV slice reading (pre-cut slices, e.g. exported from ParaView)
+    # ------------------------------------------------------------------
+    def _read_csv_slice(self, csv_path):
+
+        df = pd.read_csv(csv_path)
+
+        T = df["TEMPERATURE"].to_numpy(dtype=np.float64)
+        P = df["PRESSURE"].to_numpy(dtype=np.float64)
+        coord_x = df["XCEN_0"].to_numpy(dtype=np.float64)
+        coord_y = df["XCEN_1"].to_numpy(dtype=np.float64)
+        coord_z = df["XCEN_2"].to_numpy(dtype=np.float64)
+
+        Y = np.empty((T.shape[0], self.n_species), dtype=np.float64)
+        for i_sp, name in enumerate(self.species_names):
+            key = f"MASSFRAC_{name}"
+            if key not in df.columns:
+                raise KeyError(f"Species '{name}' (column '{key}') not found in {csv_path}")
+            Y[:, i_sp] = df[key].to_numpy(dtype=np.float64)
+
+        # No T_threshold masking here: every cell is kept and passed through
+        # to _react_cvode/_predict_ann, which mirror the reference behavior
+        # in NN_testing.run_1D_premixed_case -- CVODE always reacts every
+        # cell (even cold/inert ones, at negligible cost), while the ANN
+        # side only predicts for T >= T_threshold and otherwise returns the
+        # state unchanged (identity), rather than dropping the cell
+        # entirely. Masking here would have silently invented a third,
+        # wrong behavior (cell just doesn't exist in the output).
+
+        # CFD post-processing mass fractions rarely sum exactly to 1.
+        Y = Y / Y.sum(axis=1, keepdims=True)
+
+        return T, P, Y, coord_x, coord_y, coord_z
+
+    def _run_csv_slices(self):
+
+        T_l, P_l, Y_l, X_l, Yc_l, Z_l, sid_l, slices_meta = [], [], [], [], [], [], [], []
+
+        for i, sl in enumerate(self.csv_slices):
+            csv_path = os.path.join(self.run_folder, sl["file"])
+            print(f">> Reading CSV slice {csv_path}")
+            T, P, Y, cx, cy, cz = self._read_csv_slice(csv_path)
+            n = T.shape[0]
+            print(f"   >> {n} cells ({int((T >= self.T_threshold).sum())} >= T_threshold={self.T_threshold:g} K)")
+
+            T_l.append(T); P_l.append(P); Y_l.append(Y)
+            X_l.append(cx); Yc_l.append(cy); Z_l.append(cz)
+            sid_l.append(np.full(n, i, dtype=int))
+            slices_meta.append({
+                "axis": str(sl["axis"]), "center": float(sl["center"]), "thickness": 0.0,
+            })
+
+        T0, P0, Y0 = np.concatenate(T_l), np.concatenate(P_l), np.concatenate(Y_l)
+        X0, Ycoord0, Z0 = np.concatenate(X_l), np.concatenate(Yc_l), np.concatenate(Z_l)
+        slice_id = np.concatenate(sid_l)
+        n = T0.shape[0]
+        print(f">> {n} cells total across {len(self.csv_slices)} CSV slice(s)")
+
+        print(f">> Reacting with CVODE (dt={self.time_step:g} s)")
+        T_cvode, Y_cvode = self._react_cvode(T0, P0, Y0)
+
+        print(">> Predicting with ANN")
+        T_ann, Y_ann, cluster_labels = self._predict_ann(T0, P0, Y0)
+
+        print(f">> Writing results to {self.output_file}")
+        with h5py.File(self.output_file, "w") as h5f:
+            h5f.attrs["time_step"] = self.time_step
+            h5f.attrs["T_threshold"] = self.T_threshold
+            h5f.attrs["test_data_file"] = ";".join(sl["file"] for sl in self.csv_slices)
+            h5f.attrs["models_folder"] = self.models_folder
+            h5f.attrs["species"] = self.species_names
+            h5f.attrs["slices"] = yaml.dump(slices_meta)
+
+            h5f.create_dataset("T_ini", data=T0)
+            h5f.create_dataset("P_ini", data=P0)
+            h5f.create_dataset("Y_ini", data=Y0)
+            h5f.create_dataset("T_cvode", data=T_cvode)
+            h5f.create_dataset("Y_cvode", data=Y_cvode)
+            h5f.create_dataset("T_ann", data=T_ann)
+            h5f.create_dataset("Y_ann", data=Y_ann)
+            h5f.create_dataset("cluster", data=cluster_labels)
+            h5f.create_dataset("XCEN_X", data=X0)
+            h5f.create_dataset("XCEN_Y", data=Ycoord0)
+            h5f.create_dataset("XCEN_Z", data=Z0)
+            h5f.create_dataset("slice_id", data=slice_id)
+
+        print(">> Done")
+
     def _select_cells(self, T, P, Y, coord_x, coord_y, coord_z):
 
         mask = T > self.T_threshold
@@ -208,18 +312,36 @@ class CFDSnapshotTester:
         n = T.shape[0]
         T_new = np.empty(n)
         Y_new = np.empty_like(Y)
+        n_failed = 0
 
         for i in range(n):
             if i % 500 == 0:
                 print(f"  CVODE {i} / {n}", flush=True)
 
-            self.gas.TPY = T[i], P[i], Y[i]
-            r = ct.IdealGasConstPressureReactor(self.gas)
-            sim = ct.ReactorNet([r])
-            sim.advance(self.time_step)
+            try:
+                self.gas.TPY = T[i], P[i], Y[i]
+                r = ct.IdealGasConstPressureReactor(self.gas)
+                sim = ct.ReactorNet([r])
+                sim.advance(self.time_step)
 
-            T_new[i] = self.gas.T
-            Y_new[i] = self.gas.Y
+                T_new[i] = self.gas.T
+                Y_new[i] = self.gas.Y
+            except ct.CanteraError as exc:
+                # Genuinely degenerate/edge-case CFD post-processing states
+                # (typically at/near the cold ambient inlet) can be too stiff
+                # for CVODE to converge even though nothing is really
+                # reacting there. Fall back to identity for that one cell
+                # rather than aborting the whole run -- consistent with the
+                # "negligible reaction -> unchanged state" principle already
+                # applied on the ANN side below T_threshold.
+                n_failed += 1
+                print(f"  CVODE cell {i}: integration failed ({exc.__class__.__name__}), "
+                      f"falling back to identity. T={T[i]:.1f}K", flush=True)
+                T_new[i] = T[i]
+                Y_new[i] = Y[i]
+
+        if n_failed:
+            print(f"  CVODE: {n_failed}/{n} cell(s) fell back to identity after a solver failure", flush=True)
 
         return T_new, Y_new
 
@@ -276,10 +398,19 @@ class CFDSnapshotTester:
 
     def _predict_ann(self, T, P, Y):
 
+        # Mirrors NN_testing.run_1D_premixed_case: below T_threshold the ANN
+        # is not queried at all -- the state is left unchanged (identity),
+        # exactly like the reference deployed behavior -- rather than being
+        # dropped or, worse, fed to a network trained only on T >= threshold
+        # states (undefined behavior on out-of-distribution cold inputs).
         n = T.shape[0]
-        cluster_labels = self._assign_clusters(T, P, Y)
+        above = T >= self.T_threshold
 
-        Y_new = np.empty_like(Y)
+        cluster_labels = np.full(n, -1, dtype=int)
+        if above.any():
+            cluster_labels[above] = self._assign_clusters(T[above], P[above], Y[above])
+
+        Y_new = Y.copy()
         T_new = np.empty(n)
 
         for c in range(self.nb_clusters):
@@ -337,6 +468,10 @@ class CFDSnapshotTester:
 
     # ------------------------------------------------------------------
     def run(self):
+
+        if self.csv_slices:
+            self._run_csv_slices()
+            return
 
         print(f">> Reading test snapshot {self.test_data_file}")
         T_all, P_all, Y_all, X_all, Ycoord_all, Z_all = self._read_cfd_snapshot()

@@ -46,6 +46,23 @@ class MLPModel(nn.Module):
     def forward(self, x):
         return self.model(x)
 
+class PerSpeciesMLP(nn.Module):
+    """One independent MLP per output column, each taking the full input
+    state and predicting a single scalar. Outputs are concatenated in
+    column order, so this is a drop-in replacement for MLPModel wherever a
+    (batch, n_out) tensor is expected (training loop, inference, h5 export).
+    """
+    def __init__(self, device, hidden_layers: list[int], layers_type: list[str], activations: list, n_out: int):
+        super().__init__()
+        # hidden_layers is [n_in, ...hidden..., 1] (n_out already replaced by
+        # 1 by the caller, since each sub-network predicts one species).
+        self.species_models = nn.ModuleList([
+            MLPModel(device, hidden_layers, layers_type, activations) for _ in range(n_out)
+        ])
+
+    def forward(self, x):
+        return torch.cat([m(x) for m in self.species_models], dim=1)
+
 class DeepONet(nn.Module):
     
     def __init__(self, device, hidden_layers : dict[str,list[int]], layers_type : dict[str,list[str]], activations : dict[str,list], n_out, n_neuron):
