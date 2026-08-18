@@ -17,12 +17,12 @@ import torch.nn as nn
 import torch.optim as optim
 
 import ai_reacting_flows.tools.utilities as utils
-from ai_reacting_flows.ann_model_generation.NN_models import MLPModel, DeepONet, DeepONet_shift, PerSpeciesMLP
+from ai_reacting_flows.ann_model_generation.NN_models import MLPModel, DeepONet, DeepONet_shift, PerSpeciesMLP, PerSpeciesMLPSized
 
 torch.set_default_dtype(torch.float64)
 
 activation_functions = {"relu": nn.ReLU, "gelu" : nn.GELU, "tanh" : nn.Tanh, "id" : nn.Identity}
-model_type = {"MLP": MLPModel, "DeepONet": DeepONet, "DeepONetShift": DeepONet_shift, "PerSpeciesMLP": PerSpeciesMLP}
+model_type = {"MLP": MLPModel, "DeepONet": DeepONet, "DeepONetShift": DeepONet_shift, "PerSpeciesMLP": PerSpeciesMLP, "PerSpeciesMLPSized": PerSpeciesMLPSized}
 
 class NN_manager():
     def __init__(self, run_folder: str | None = None):
@@ -225,6 +225,44 @@ class NN_manager():
                 layers_type = network_parameters["layers_type"]
 
                 model = model_type[network_type](self.device, nb_units_in_layers_list, layers_type, layers_activation_list, n_out)
+            elif (network_type == "PerSpeciesMLPSized"):
+                # Same one-sub-network-per-output-species idea as
+                # PerSpeciesMLP, except each sub-network's own architecture
+                # is looked up per species instead of being shared: an
+                # explicit override in "per_species" (keyed by species name,
+                # matched against self.Y_cols_all with its trailing "_Y"
+                # stripped), falling back to "default" for every other
+                # species. Lets e.g. hard-to-fit trace species get a bigger
+                # network than well-behaved majority species.
+                default_cfg = network_parameters["default"]
+                per_species_cfg = network_parameters.get("per_species", {})
+
+                assert len(self.Y_cols_all) == n_out, (
+                    f"PerSpeciesMLPSized: n_out ({n_out}) does not match "
+                    f"len(self.Y_cols_all) ({len(self.Y_cols_all)})"
+                )
+
+                species_hidden_layers = []
+                species_layers_type = []
+                species_activations = []
+
+                for name in self.Y_cols_all:
+                    base = str(name)
+                    if base.endswith("_Y"):
+                        base = base[:-2]
+                    cfg = per_species_cfg.get(base, default_cfg)
+
+                    sp_nb_units_in_layers_list = copy.deepcopy(cfg["nb_units_in_layers_list"])
+                    sp_nb_units_in_layers_list.insert(0, n_in)
+                    sp_nb_units_in_layers_list.append(1)
+                    sp_layers_activation_list = [activation_functions[str(act).lower()] for act in cfg["layers_activation_list"]]
+                    sp_layers_type = cfg["layers_type"]
+
+                    species_hidden_layers.append(sp_nb_units_in_layers_list)
+                    species_layers_type.append(sp_layers_type)
+                    species_activations.append(sp_layers_activation_list)
+
+                model = model_type[network_type](self.device, species_hidden_layers, species_layers_type, species_activations)
             elif (network_type=="DeepONet"):
                 # Network shapes
                 nb_units_in_layers_list = copy.deepcopy(network_parameters["nb_units_in_layers_list"])
@@ -334,9 +372,23 @@ class NN_manager():
 
         loss_list = np.empty(n_epochs)
 
+        # Per-species loss tracking: only meaningful for models made of one
+        # independent sub-network per output species (PerSpeciesMLP,
+        # PerSpeciesMLPSized), detected by duck-typing on "species_models"
+        # rather than isinstance so any future per-species model class picks
+        # this up automatically. Tracked as plain per-column MSE regardless
+        # of the configured loss_fn, so species are comparable to each other
+        # on a common scale; the actual training loss/gradients are
+        # untouched by this.
+        per_species_model = hasattr(model, "species_models")
+        n_out_species = Y_train.shape[1]
+        loss_per_species_list = np.empty((n_epochs, n_out_species)) if per_species_model else None
+
         # Validation / conservation computed every "val_every" epochs (default 10)
         val_every = int(self.val_every)
         n_val_points = max(1, n_epochs // val_every)
+
+        val_loss_per_species_list = np.empty((n_val_points, n_out_species)) if per_species_model else None
 
         # Array to store sum of mass fractions: mean, min and max
         stats_sum_yk = np.empty((n_val_points, 3))
@@ -373,6 +425,8 @@ class NN_manager():
             # Training parameters
             epoch_loss = 0.0
             n_batches = 0
+            if per_species_model:
+                epoch_loss_per_species = np.zeros(n_out_species)
             for i in range(0, len(X_train), self.batch_size):
 
                 Xbatch = X_train[i:i+self.batch_size]
@@ -384,11 +438,16 @@ class NN_manager():
                 optimizer.step()
                 epoch_loss += loss.item()
                 n_batches += 1
+                if per_species_model:
+                    with torch.no_grad():
+                        epoch_loss_per_species += ((y_pred - ybatch) ** 2).mean(dim=0).detach().cpu().numpy()
                 # print("Targets stats:", Y_train.min().item(), Y_train.max().item())
                 # print("Preds stats:", y_pred.min().item(), y_pred.max().item())
                 # input("Press Enter to continue.")
 
             loss_list[epoch] = epoch_loss / max(1, n_batches)
+            if per_species_model:
+                loss_per_species_list[epoch] = epoch_loss_per_species / max(1, n_batches)
 
             # Track learning rate evolution
             before_lr = optimizer.param_groups[0]["lr"]
@@ -403,6 +462,11 @@ class NN_manager():
                     # VALIDATION LOSS
                     y_val_pred = model(X_val)
                     val_loss = loss_fn(y_val_pred, Y_val)
+
+                    if per_species_model:
+                        val_loss_per_species_list[epoch // val_every] = (
+                            ((y_val_pred - Y_val) ** 2).mean(dim=0).detach().cpu().numpy()
+                        )
 
                     # Inverse-scale the model's input state (species part of X),
                     # excluding the time-step column when dt_var is used. We apply
@@ -495,6 +559,13 @@ class NN_manager():
             )
             if epoch % val_every == 0 and val_loss is not None:
                 msg += f" val_loss={val_loss.item():.6e}"
+                if per_species_model:
+                    idx = epoch // val_every
+                    per_sp = ", ".join(
+                        f"{self.Y_cols_all[j]}={val_loss_per_species_list[idx][j]:.3e}"
+                        for j in range(n_out_species)
+                    )
+                    msg += f" val_loss_per_species=[{per_sp}]"
             self._log(msg)
 
             print(f"Finished epoch {epoch}")
@@ -513,8 +584,8 @@ class NN_manager():
             f"best_val_loss={best_val_loss:.6e}"
         )
 
-        return epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements
-    
+        return epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements, loss_per_species_list, val_loss_per_species_list
+
 
     def train_all_clusters(self):
 
@@ -566,10 +637,14 @@ class NN_manager():
                 raise ValueError("Only scheduler implemented yet is ExpLR, ReduceLROnPlateau or None")
             
             # Perform training
-            epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements = self.train_model(i_cluster, model, loss_fn, optimizer, scheduler, X_train, X_val, Y_train, Y_val, Xscaler_mean, np.sqrt(Xscaler_var), Yscaler_mean, np.sqrt(Yscaler_var))
+            epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements, loss_per_species_list, val_loss_per_species_list = self.train_model(i_cluster, model, loss_fn, optimizer, scheduler, X_train, X_val, Y_train, Y_val, Xscaler_mean, np.sqrt(Xscaler_var), Yscaler_mean, np.sqrt(Yscaler_var))
 
             # Plot training monitoring data (loss, conservation,etc...)
             self.plot_losses_conservation(i_cluster, epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements)
+
+            # Per-species loss curves (only produced for per-species model types)
+            if loss_per_species_list is not None:
+                self.plot_per_species_losses(i_cluster, epochs, epochs_small, loss_per_species_list, val_loss_per_species_list)
 
             # Save model (torch format and custom h5 format)
             torch.save(model, os.path.join(self.directory, f"cluster{i_cluster}_model.pth"))
@@ -647,6 +722,55 @@ class NN_manager():
 
 
         plt.savefig( f"{self.directory}/training/cluster_{i_cluster}/elements_conservation.png")
+
+    def plot_per_species_losses(self, i_cluster, epochs, epochs_small, loss_per_species_list, val_loss_per_species_list):
+        """One subplot per output species, train+val MSE curves.
+
+        Only meaningful (and only called) for per-species model types
+        (PerSpeciesMLP, PerSpeciesMLPSized), where each species is predicted
+        by its own independent sub-network and therefore has a loss curve
+        worth inspecting on its own axes, instead of a single aggregate
+        curve hiding which species are actually driving the total loss.
+        """
+        n_species = loss_per_species_list.shape[1]
+        ncols = 4
+        nrows = -(-n_species // ncols)  # ceil division
+
+        fig, axes = plt.subplots(nrows, ncols, figsize=(4*ncols, 3*nrows), squeeze=False)
+        axes = axes.flat
+
+        for j in range(n_species):
+            name = str(self.Y_cols_all[j])
+            if name.endswith("_Y"):
+                name = name[:-2]
+            ax = axes[j]
+            ax.plot(epochs, loss_per_species_list[:, j], color="k", label="Training")
+            ax.plot(epochs_small, val_loss_per_species_list[:, j], color="r", label="Validation")
+            ax.set_yscale("log")
+            ax.set_title(name, fontsize=9)
+            ax.set_xlabel("Epoch")
+            ax.set_ylabel("MSE")
+
+        axes[0].legend(fontsize=7)
+
+        # hide any unused axes (n_species not a multiple of ncols)
+        for ax in list(axes)[n_species:]:
+            ax.set_visible(False)
+
+        fig.tight_layout()
+        plt.savefig(f"{self.directory}/training/cluster_{i_cluster}/per_species_losses.png")
+        plt.close(fig)
+
+        # Also persist the raw per-species validation-loss table (one row
+        # per validation checkpoint, one column per species) so it can be
+        # inspected/compared programmatically, not just visually.
+        np.savetxt(
+            f"{self.directory}/training/cluster_{i_cluster}/per_species_val_loss.csv",
+            val_loss_per_species_list,
+            delimiter=",",
+            header=",".join(str(n) for n in self.Y_cols_all),
+            comments="",
+        )
 
     def copy_clusterer(self):
         if self.clustering_type=="progvar":
@@ -729,7 +853,7 @@ class NN_manager():
                 save_module(layer_group, child_module, child_name, parent_activation_map)
 
         with h5py.File(h5_path, "w") as f:
-            if isinstance(model, PerSpeciesMLP):
+            if isinstance(model, (PerSpeciesMLP, PerSpeciesMLPSized)):
                 # One group per species sub-network, each holding its own
                 # MLPModel layers (same layout as the single-network case).
                 for i_species, sub_model in enumerate(model.species_models):

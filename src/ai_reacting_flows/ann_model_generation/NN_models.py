@@ -63,6 +63,24 @@ class PerSpeciesMLP(nn.Module):
     def forward(self, x):
         return torch.cat([m(x) for m in self.species_models], dim=1)
 
+class PerSpeciesMLPSized(nn.Module):
+    """Like PerSpeciesMLP, but each species sub-network gets its own
+    architecture instead of every species sharing one. species_hidden_layers[i]
+    is the full per-layer unit list for species i (already including n_in at
+    the front and 1 at the end, same convention NN_manager uses for
+    PerSpeciesMLP) -- so different species can have different depths/widths,
+    not just different weights.
+    """
+    def __init__(self, device, species_hidden_layers: list[list[int]], species_layers_type: list[list[str]], species_activations: list[list]):
+        super().__init__()
+        self.species_models = nn.ModuleList([
+            MLPModel(device, hidden_layers, layers_type, activations)
+            for hidden_layers, layers_type, activations in zip(species_hidden_layers, species_layers_type, species_activations)
+        ])
+
+    def forward(self, x):
+        return torch.cat([m(x) for m in self.species_models], dim=1)
+
 class DeepONet(nn.Module):
     
     def __init__(self, device, hidden_layers : dict[str,list[int]], layers_type : dict[str,list[str]], activations : dict[str,list], n_out, n_neuron):
