@@ -1,0 +1,26 @@
+# Tested against the SAME real CFD slices as ../CFD_DETAILED (not synthetic
+# 0D data) -- lets you compare the 0D-stochastic-reactor-trained model
+# directly against the CFD-snapshot-trained model on identical ground
+# truth. Requires ../CFD_DETAILED/DATA/testing/*.csv to exist (built once,
+# shared by both cases). models_folder/output_file below assume the
+# mlp_percluster variant was just trained (python ann_model_learning.py
+# mlp_percluster) -- edit both to match whichever variant/suffix you
+# actually want to test. mask_cvode_below_threshold: true forces CVODE
+# itself to identity below T_threshold on both sides, removing the masking
+# artifact that otherwise inflates RMSE when comparing a T_threshold-masked
+# ANN against an unmasked CVODE reference.
+models_folder: MODEL_NH3_H2_N2_mlp_percluster
+time_step: 5.0e-07
+T_threshold: 800.0
+mask_cvode_below_threshold: true
+output_file: testing_results_NH3_H2_N2_mlp_percluster_maskedCVODE800_csv.h5
+csv_slices:
+  - {file: ../CFD_DETAILED/DATA/testing/Slice_Z_0.3_2.95s.csv, axis: Z, center: -0.30}
+  - {file: ../CFD_DETAILED/DATA/testing/Slice_Z_0.15_2.95s.csv, axis: Z, center: -0.15}
+  - {file: ../CFD_DETAILED/DATA/testing/Slice_Z_0.11_2.95s.csv, axis: Z, center: -0.11}
+  - {file: ../CFD_DETAILED/DATA/testing/Slice_Z_0.10_2.95s.csv, axis: Z, center: -0.10}
+  - {file: ../CFD_DETAILED/DATA/testing/Slice_Z_0.09_2.95s.csv, axis: Z, center: -0.09}
+  - {file: ../CFD_DETAILED/DATA/testing/Slice_Z_0.08_2.95s.csv, axis: Z, center: -0.08}
+  - {file: ../CFD_DETAILED/DATA/testing/Slice_Z_0.065_2.95s.csv, axis: Z, center: -0.065}
+  - {file: ../CFD_DETAILED/DATA/testing/Slice_Z_0.05_2.95s.csv, axis: Z, center: -0.05}
+  - {file: ../CFD_DETAILED/DATA/testing/Slice_X_2.95s.csv, axis: X, center: 0.0}

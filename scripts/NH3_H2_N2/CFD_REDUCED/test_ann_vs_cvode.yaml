@@ -1,0 +1,24 @@
+# CSV-slice variant (exact ParaView cuts), same file-naming / center-sign
+# convention as CFD_DETAILED's test_ann_vs_cvode.yaml. models_folder/
+# output_file below assume the mlp_percluster variant was just trained
+# (python ann_model_learning.py mlp_percluster) -- edit both to match
+# whichever variant/suffix you actually want to test.
+# mask_cvode_below_threshold: true forces CVODE itself to identity below
+# T_threshold on both sides, removing the masking artifact that otherwise
+# inflates RMSE when comparing a T_threshold-masked ANN against an
+# unmasked CVODE reference.
+models_folder: MODEL_REDUCED_HR_dt5e7_1D_mlp_percluster
+time_step: 5.0e-07
+T_threshold: 800.0
+mask_cvode_below_threshold: true
+output_file: testing_results_REDUCED_HR_dt5e7_1D_mlp_percluster_maskedCVODE800_csv.h5
+csv_slices:
+  - {file: DATA/testing/Slice_Z_0.3_3.0s.csv, axis: Z, center: -0.30}
+  - {file: DATA/testing/Slice_Z_0.15_3.0s.csv, axis: Z, center: -0.15}
+  - {file: DATA/testing/Slice_Z_0.11_3.0s.csv, axis: Z, center: -0.11}
+  - {file: DATA/testing/Slice_Z_0.10_3.0s.csv, axis: Z, center: -0.10}
+  - {file: DATA/testing/Slice_Z_0.09_3.0s.csv, axis: Z, center: -0.09}
+  - {file: DATA/testing/Slice_Z_0.08_3.0s.csv, axis: Z, center: -0.08}
+  - {file: DATA/testing/Slice_Z_0.065_3.0s.csv, axis: Z, center: -0.065}
+  - {file: DATA/testing/Slice_Z_0.05_3.0s.csv, axis: Z, center: -0.05}
+  - {file: DATA/testing/Slice_X_3.0s.csv, axis: X, center: 0.0}

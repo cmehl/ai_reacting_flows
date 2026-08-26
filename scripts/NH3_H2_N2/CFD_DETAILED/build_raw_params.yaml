@@ -1,0 +1,6 @@
+T_threshold: 800.0
+cfd_data_dir: DATA/output
+dtb_file: solutions.h5
+mech_file: ../../data/Giovanni/detailed_no_Ar.yaml
+results_folder_suffix: DETAILED_HR_dt5e7
+time_step: 5.0e-07

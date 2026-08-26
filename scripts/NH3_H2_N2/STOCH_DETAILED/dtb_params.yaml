@@ -1,0 +1,56 @@
+mech_file: ../../data/Giovanni/detailed_no_Ar.yaml
+inlets:
+  inlet_1:                     # Inlet_Pmx (boundary.in), NH3/air premixed, main
+    type: pure_species
+    nb_particles: 1680
+    T: 293.0
+    P: 111325.0
+    species:
+      N2: 0.6875
+      NH3: 0.11063
+      O2: 0.20187
+  inlet_2:                     # Inlet_Diff (boundary.in), same composition as Pmx
+    type: pure_species
+    nb_particles: 308
+    T: 293.0
+    P: 111325.0
+    species:
+      N2: 0.6875
+      NH3: 0.11063
+      O2: 0.20187
+  inlet_3:                     # Inlet_H2_Pmx + Inlet_H2_Diff merged (both pure H2, same T/P)
+    type: fuel
+    nb_particles: 12
+    fuel: H2
+    T: 293.0
+    P: 111325.0
+  inlet_4:                     # Hot recirculation pilot (burnt gas, needed to ignite the ensemble)
+    # Composition: mole-fraction equivalent of the design point phi=1 with a
+    # NH3/H2/N2 = 66.7/25/8.3 %vol fuel blend against air. Validated with Cantera to
+    # equilibrate to T=2118 K, matching the CFD field's peak T of 2114 K almost exactly.
+    type: burnt_from_flowrates
+    nb_particles: 400
+    T: 293.0
+    P: 111325.0
+    flowrates:
+      N2: 0.610
+      NH3: 0.1615
+      O2: 0.1568
+      H2: 0.0715
+results_folder_suffix: NH3_H2_N2
+dtb_file: solutions.h5
+build_ml_dtb: true
+time_step: 5.0e-6
+time_max: 0.05
+automatic_termination: true
+mixing_model: CURL_MODIFIED
+mixing_time: 1.0e-3
+read_mixing: false
+T_threshold: 800.0
+pv_species:
+- H2O
+fuel:
+- NH3
+- H2
+calc_mean_traj: true
+ML_inference_flag: false

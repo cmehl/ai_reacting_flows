@@ -1,0 +1,20 @@
+database_params:
+  database_type: stoch
+  dtb_folder_suffix: NH3_H2_N2
+  dtb_file: solutions.h5
+  database_name: dtb_log_k2
+  dt_var: false
+  fuel: NH3
+  mech_file: ./STOCH_DTB_NH3_H2_N2/STEC_A_noAR.yaml
+data_processing:
+  log_transform_X: 1
+  log_transform_Y: 1
+  threshold: 1.0e-10
+  T_threshold: 800.0
+  output_omegas: true
+  with_N_chemistry: true
+data_clustering:
+  clusterize_on: phys
+  clustering_method: kmeans
+  nb_clusters: 2
+train_set_size: 0.75
