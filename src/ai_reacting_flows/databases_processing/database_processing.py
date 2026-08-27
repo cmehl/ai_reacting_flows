@@ -323,7 +323,16 @@ class LearningDatabase(object):
                 #     data_kmeans_phys = self.X[spec_list].values.copy()
                 #     data_kmeans_time = self.dt_array.copy()
             else:
-                data_kmeans = self.X.values.copy()
+                # Constant dt: cluster on the physical state only, i.e.
+                # [Temperature, species...]. self.X still carries the raw CFD
+                # columns (Pressure, Prog_var, HRR) plus the "cluster"
+                # placeholder, so self.X.values would feed 4 extra features to
+                # k-means, misalign the positional log-transform below, and
+                # produce kmeans_norm.dat / km_centroids.dat / Xscaler_kmeans.pkl
+                # with the wrong width. NN_testing.attribute_cluster and
+                # cfd_snapshot_testing._assign_clusters both rebuild the feature
+                # vector as [T, species...], so this must match.
+                data_kmeans = self.X[spec_list].values.copy()
 
             # ------------------------------------------------------------------
             # Apply log / Box-Cox transform
