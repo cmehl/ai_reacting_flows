@@ -374,24 +374,25 @@ class CFDSnapshotTester:
         if self.nb_clusters == 1:
             return np.zeros(n, dtype=int)
 
-        # Feature vector exactly as actually fitted by
-        # LearningDatabase.clusterize_dataset for dt_var=False (kmeans branch):
-        # raw = [Temperature, Pressure, species..., Prog_var(-1), HRR(-1), cluster(0)],
-        # then log-transform is applied to columns [1, n_species] inclusive
-        # (i.e. Pressure + all species except the last one) because that code
-        # indexes into this raw layout using offsets meant for a [T, species]
-        # vector. This mismatch is a pre-existing bug (see NN_manager fix
-        # discussion); it is reproduced here on purpose so cells are routed to
-        # the same cluster/model the training pipeline actually used.
-        raw = np.column_stack([T, P, Y, -np.ones(n), -np.ones(n), np.zeros(n)])
+        # Feature vector as fitted by LearningDatabase.clusterize_dataset
+        # (kmeans branch, dt_var=False): [Temperature, species...], with the
+        # log/BCT transform applied to the species columns only (Temperature
+        # untouched), respecting log_excluded_species. Must stay in lockstep
+        # with database_processing.py's clusterize_dataset -- see branch
+        # fix/kmeans-cluster-features. with_N_chemistry=false (N2 dropped) is
+        # rejected in __init__, so N2 is always present here.
+        raw = np.column_stack([T, Y])
 
         if self.log_transform_X > 0:
-            log_cols = list(range(1, 1 + self.n_species))
-            raw[:, log_cols] = np.clip(raw[:, log_cols], self.threshold, None)
-            if self.log_transform_X == 1:
-                raw[:, log_cols] = np.log(raw[:, log_cols])
-            elif self.log_transform_X == 2:
-                raw[:, log_cols] = (raw[:, log_cols] ** self.lambda_bct - 1.0) / self.lambda_bct
+            for j, name in enumerate(self.species_names):
+                if name in self.log_excluded_species:
+                    continue
+                col = 1 + j
+                val = np.clip(raw[:, col], self.threshold, None)
+                if self.log_transform_X == 1:
+                    raw[:, col] = np.log(val)
+                elif self.log_transform_X == 2:
+                    raw[:, col] = (val ** self.lambda_bct - 1.0) / self.lambda_bct
 
         scaled = self.kmeans_scaler.transform(raw)
         return self.kmeans.predict(scaled)
