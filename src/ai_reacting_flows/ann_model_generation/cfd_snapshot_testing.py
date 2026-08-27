@@ -40,6 +40,13 @@ class CFDSnapshotTester:
 
         self.time_step = float(test_params["time_step"])
         self.T_threshold = float(test_params["T_threshold"])
+        # Opt-in diagnostic mode: also skip CVODE (identity) below
+        # T_threshold, instead of always reacting every cell. Default False
+        # preserves the reference-deployed-behavior mirroring documented on
+        # _react_cvode/_predict_ann -- only turn this on to isolate genuine
+        # model error from the below-threshold masking artifact (cells where
+        # CVODE reacts but the ANN is skipped by design).
+        self.mask_cvode_below_threshold = bool(test_params.get("mask_cvode_below_threshold", False))
         self.seed = int(test_params.get("seed", 0))
         self.output_file = os.path.join(self.run_folder, test_params["output_file"])
 
@@ -313,10 +320,20 @@ class CFDSnapshotTester:
         T_new = np.empty(n)
         Y_new = np.empty_like(Y)
         n_failed = 0
+        n_masked = 0
 
         for i in range(n):
             if i % 500 == 0:
                 print(f"  CVODE {i} / {n}", flush=True)
+
+            if self.mask_cvode_below_threshold and T[i] < self.T_threshold:
+                # Diagnostic mode: mirror the ANN's own masking so cells
+                # below T_threshold don't react on either side, isolating
+                # genuine model error from the masking artifact.
+                n_masked += 1
+                T_new[i] = T[i]
+                Y_new[i] = Y[i]
+                continue
 
             try:
                 self.gas.TPY = T[i], P[i], Y[i]
@@ -340,6 +357,8 @@ class CFDSnapshotTester:
                 T_new[i] = T[i]
                 Y_new[i] = Y[i]
 
+        if n_masked:
+            print(f"  CVODE: {n_masked}/{n} cell(s) skipped (identity) below T_threshold={self.T_threshold:g}K, mask_cvode_below_threshold=true", flush=True)
         if n_failed:
             print(f"  CVODE: {n_failed}/{n} cell(s) fell back to identity after a solver failure", flush=True)
 
