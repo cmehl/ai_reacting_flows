@@ -106,6 +106,26 @@ def index_by_time(directory, name_re):
     return by_time
 
 
+def slice_indices(coords, axcfg, slab, res):
+    """Indices of the cells forming the <axis>=0 slice. The mesh is AMR: a fixed
+    |coord| < slab threshold either misses the coarse downstream region (too
+    thin) or stacks several refined layers upstream (too thick). Instead: keep a
+    generous slab, bucket its cells on the two in-plane coordinates at
+    resolution ``res``, and within each bucket keep the single cell closest to
+    the plane. That yields a clean one-cell-thick slice over the *whole* domain
+    at every refinement level."""
+    c = coords[:, axcfg["idx"]]
+    cand = np.where(np.abs(c) < slab)[0]
+    h = coords[cand, axcfg["h"][0]]
+    v = coords[cand, axcfg["v"][0]]
+    hb = np.round(h / res).astype(np.int64)
+    vb = np.round(v / res).astype(np.int64)
+    key = hb * 4_000_003 + vb
+    order = np.argsort(np.abs(c[cand]), kind="stable")   # nearest-to-plane first
+    _, first = np.unique(key[order], return_index=True)
+    return np.sort(cand[order[first]])
+
+
 def build_cache(args):
     """One pass over the shared timesteps: extract every field on the slice for
     SAGE / ANN / Hybrid, re-indexing the accelerated runs onto SAGE cell order.
@@ -134,27 +154,32 @@ def build_cache(args):
     n_cells = None
 
     t0 = _time.time()
+    sel = None
     for i, tkey in enumerate(common):
         coords_s, data_s, t_s = load(sage_by_time[tkey], FIELDS)
         tree = cKDTree(coords_s)
-        mask = np.abs(coords_s[:, axcfg["idx"]]) < args.slice_halfwidth
         times[i] = t_s
 
         if h_coord is None:
-            h_coord = h_sign * coords_s[mask, h_idx]
-            v_coord = v_sign * coords_s[mask, v_idx]
-            n_cells = int(mask.sum())
+            sel = slice_indices(coords_s, axcfg, args.slice_halfwidth, args.slice_res)
+            h_coord = h_sign * coords_s[sel, h_idx]
+            v_coord = v_sign * coords_s[sel, v_idx]
+            n_cells = sel.size
+            print(f"  slice: {n_cells} cells, "
+                  f"{axcfg['h'][2]} in [{h_coord.min():.3f}, {h_coord.max():.3f}], "
+                  f"{axcfg['v'][2]} in [{v_coord.min():.3f}, {v_coord.max():.3f}]", flush=True)
             sage = np.empty((len(FIELDS), n, n_cells), dtype=np.float32)
             ann = np.empty_like(sage)
             hyb = np.empty_like(sage)
-        elif int(mask.sum()) != n_cells:
+        elif coords_s.shape[0] != sel_nmesh:
             raise RuntimeError(
-                f"slice cell count changed at t={t_s:.3e}s "
-                f"({int(mask.sum())} vs {n_cells}) -- adaptive mesh not supported"
+                f"mesh cell count changed at t={t_s:.3e}s "
+                f"({coords_s.shape[0]} vs {sel_nmesh}) -- adaptive mesh not supported"
             )
+        sel_nmesh = coords_s.shape[0]
 
         for fj, f in enumerate(FIELDS):
-            sage[fj, i] = data_s[f][mask].astype(np.float32)
+            sage[fj, i] = data_s[f][sel].astype(np.float32)
 
         for by_time, store in ((ann_by_time, ann), (hybrid_by_time, hyb)):
             coords_m, data_m, t_m = load(by_time[tkey], FIELDS)
@@ -166,7 +191,7 @@ def build_cache(args):
             for fj, f in enumerate(FIELDS):
                 a = np.empty_like(data_m[f])
                 a[idx] = data_m[f]
-                store[fj, i] = a[mask].astype(np.float32)
+                store[fj, i] = a[sel].astype(np.float32)
 
         if (i + 1) % 25 == 0 or i == n - 1:
             el = _time.time() - t0
@@ -229,8 +254,14 @@ def render_field(lbl, times, sv, av, hv, binner, axis, args, out_dir):
     err_cmap.set_bad("#dddddd")
     im_kw = dict(extent=binner["extent"], origin="lower", interpolation="nearest", aspect="equal")
 
-    fig, axes = plt.subplots(2, 3, figsize=(13, 8))
-    fig.subplots_adjust(left=0.05, right=0.9, top=0.9, bottom=0.06, wspace=0.25, hspace=0.15)
+    # size the figure to the slice aspect so the equal-aspect panels fill it
+    e = binner["extent"]
+    panel_ar = (e[1] - e[0]) / (e[3] - e[2])           # width / height of one panel
+    pw = 5.4
+    fig_w = 3 * pw + 2.4
+    fig_h = 2 * (pw / panel_ar) + 1.7
+    fig, axes = plt.subplots(2, 3, figsize=(fig_w, fig_h))
+    fig.subplots_adjust(left=0.05, right=0.93, top=0.88, bottom=0.1, wspace=0.2, hspace=0.35)
     (ax_s, ax_a, ax_h), (ax_blank, ax_ea, ax_eh) = axes
 
     im_s = ax_s.imshow(to_img(sv[0]), cmap=val_cmap, vmin=vmin, vmax=vmax, **im_kw)
@@ -253,10 +284,10 @@ def render_field(lbl, times, sv, av, hv, binner, axis, args, out_dir):
         ax.set_xlabel(axcfg["h"][2])
         ax.set_ylabel(axcfg["v"][2])
 
-    cax_v = fig.add_axes([0.92, 0.55, 0.015, 0.33])
-    cax_e = fig.add_axes([0.92, 0.10, 0.015, 0.33])
-    fig.colorbar(im_s, cax=cax_v, label=f"{lbl} (SAGE-scaled)", extend="both")
-    fig.colorbar(im_ea, cax=cax_e, label=f"{lbl} error", extend="both")
+    fig.colorbar(im_s, ax=[ax_s, ax_a, ax_h], fraction=0.015, pad=0.02,
+                 label=f"{lbl} (SAGE-scaled)", extend="both")
+    fig.colorbar(im_ea, ax=[ax_ea, ax_eh], fraction=0.015, pad=0.02,
+                 label=f"{lbl} error", extend="both")
     suptitle = fig.suptitle("", fontsize=15)
 
     def update(k):
@@ -297,14 +328,21 @@ def main():
                         help="Build the --cache file and exit without rendering")
     parser.add_argument("--slice-axis", choices=["X", "Y", "Z"], default="Y",
                         help="Coordinate held ~constant to define the slice plane (default: Y)")
-    parser.add_argument("--slice-halfwidth", type=float, default=0.001,
-                        help="Half-width [m] of the |coord| < value slab used as the <axis>=0 slice")
+    parser.add_argument("--slice-halfwidth", type=float, default=0.005,
+                        help="Half-width [m] of the |coord| < value slab pre-filter; within it only "
+                             "the cell closest to the plane is kept per --slice-res bucket, so this "
+                             "just needs to exceed the coarsest cell's half-size (it is NOT the "
+                             "final slice thickness)")
+    parser.add_argument("--slice-res", type=float, default=0.0005,
+                        help="In-plane bucket size [m] for de-duplicating the slab down to one "
+                             "cell-thick; ~ the finest cell size (smaller keeps more upstream detail)")
     parser.add_argument("--stride", type=int, default=1,
                         help="Use every Nth shared timestep (default: 1 = all)")
     parser.add_argument("--grid", type=int, default=320,
                         help="Horizontal pixel resolution the slice cells are binned onto")
-    parser.add_argument("--fill-radius", type=float, default=0.004,
-                        help="Pixels farther than this [m] from any slice cell stay blank")
+    parser.add_argument("--fill-radius", type=float, default=0.006,
+                        help="Pixels farther than this [m] from any slice cell stay blank "
+                             "(should exceed the coarsest cell spacing so the domain fills solid)")
     parser.add_argument("--fps", type=int, default=12, help="Animation frames per second")
     parser.add_argument("--dpi", type=int, default=85, help="Animation raster resolution")
     parser.add_argument("--clip-percentile", type=float, default=99.5,
