@@ -21,9 +21,11 @@ each filename, not by position.
 
 Outputs, written under ``--out-dir`` (default: ``comparison_<axis>0_slice``
 next to the SAGE/ANN ``output/`` dirs):
-    stats_<axis>0_slice.csv             - per-timestep, per-field, per-model error stats
+    stats_<axis>0_slice.csv             - per-timestep, per-field, per-model error stats (vs SAGE)
     stats_<axis>0_slice_aggregated.csv  - per-field, per-model stats aggregated over all timesteps
+    values_<axis>0_slice.csv            - per-timestep, per-field, per-run (SAGE + each model) raw value stats
     figs/error_vs_time_<field>.png      - RMSE / relative-RMSE vs time, one per field, all models overlaid
+    figs/value_vs_time_<field>.png      - raw mean/max value vs time, SAGE + every model on the same axes
     figs/<field>.png                    - final-timestep slice plot: SAGE, each model, each model's error vs SAGE
 
 Usage:
@@ -72,7 +74,7 @@ SLICE_AXES = {
 
 # Consistent color per model across figures; extra models beyond this list
 # cycle through matplotlib's default palette.
-MODEL_COLORS = {"ANN": "tab:blue", "Hybrid": "tab:green"}
+MODEL_COLORS = {"SAGE": "black", "ANN": "tab:blue", "Hybrid": "tab:green"}
 FALLBACK_COLORS = itertools.cycle(
     ["tab:purple", "tab:orange", "tab:brown", "tab:pink", "tab:gray", "tab:olive"]
 )
@@ -176,6 +178,7 @@ def main():
     model_files = {name: [by_time[t] for t in common] for name, by_time in model_by_time.items()}
 
     records = []
+    value_records = []
     last_slice = None
 
     n_steps = len(sage_files)
@@ -189,6 +192,14 @@ def main():
         h_coord = h_sign * coords_s[mask, h_idx]
         v_coord = v_sign * coords_s[mask, v_idx]
         print(f"  t={t_s:.3e}s ({i + 1}/{n_steps}): {mask.sum()} cells in {axis}=0 slice")
+
+        sv_by_field = {field: data_s[field][mask] for field in FIELDS}
+        for field in FIELDS:
+            sv = sv_by_field[field]
+            value_records.append(
+                dict(timestep=i + 1, time=t_s, model="SAGE", field=field_label(field),
+                     value_mean=float(sv.mean()), value_max=float(sv.max()), value_min=float(sv.min()))
+            )
 
         aligned_by_model = {}
         for name, files in model_files.items():
@@ -208,7 +219,7 @@ def main():
             aligned_by_model[name] = aligned
 
             for field in FIELDS:
-                sv = data_s[field][mask]
+                sv = sv_by_field[field]
                 mv = aligned[field][mask]
                 diff = mv - sv
                 rmse = float(np.sqrt(np.mean(diff ** 2)))
@@ -222,6 +233,10 @@ def main():
                         rmse=rmse, mae=mae, max_abs_err=maxerr, mean_sage=mean_ref, rel_rmse=rel_rmse,
                     )
                 )
+                value_records.append(
+                    dict(timestep=i + 1, time=t_s, model=name, field=field_label(field),
+                         value_mean=float(mv.mean()), value_max=float(mv.max()), value_min=float(mv.min()))
+                )
 
         if i == n_steps - 1:
             last_slice = dict(
@@ -232,6 +247,10 @@ def main():
 
     df = pd.DataFrame.from_records(records)
     df.to_csv(os.path.join(out_dir, stats_name), index=False)
+
+    values_name = f"values_{axis}0_slice.csv"
+    df_values = pd.DataFrame.from_records(value_records)
+    df_values.to_csv(os.path.join(out_dir, values_name), index=False)
 
     agg = (
         df.groupby(["model", "field"])
@@ -273,6 +292,28 @@ def main():
         fig.suptitle(f"Error vs SAGE on {axis}=0 slice — {label}")
         fig.tight_layout()
         fig.savefig(os.path.join(fig_dir, f"error_vs_time_{label}.png"), dpi=150)
+        plt.close(fig)
+
+    # --- raw value (mean/max over the slice) vs time, SAGE + every model on the same axes ---
+    for field in FIELDS:
+        label = field_label(field)
+        sub_field = df_values[df_values["field"] == label]
+        fig, (ax_mean, ax_max) = plt.subplots(2, 1, figsize=(7, 7), sharex=True)
+        for name in ["SAGE"] + [n for n, _ in models]:
+            sub = sub_field[sub_field["model"] == name]
+            color = model_color(name)
+            lw = 2.5 if name == "SAGE" else 1.5
+            ax_mean.plot(sub["time"], sub["value_mean"], "-", color=color, lw=lw, label=name)
+            ax_max.plot(sub["time"], sub["value_max"], "-", color=color, lw=lw, label=name)
+        ax_mean.set_ylabel(f"mean {label} over slice")
+        ax_mean.legend(fontsize=8, loc="best")
+        ax_mean.set_title("Mean over slice")
+        ax_max.set_xlabel("time [s]")
+        ax_max.set_ylabel(f"max {label} over slice")
+        ax_max.set_title("Max over slice")
+        fig.suptitle(f"{label}: SAGE vs {', '.join(n for n, _ in models)} on {axis}=0 slice")
+        fig.tight_layout()
+        fig.savefig(os.path.join(fig_dir, f"value_vs_time_{label}.png"), dpi=150)
         plt.close(fig)
 
     # --- final-timestep slice plots: SAGE, each model, each model's error ---
@@ -319,8 +360,10 @@ def main():
         fig.savefig(os.path.join(fig_dir, f"{label}.png"), dpi=150)
         plt.close(fig)
 
-    print(f"\nWrote {len(FIELDS)} final-slice figures + {len(FIELDS)} error-vs-time figures to {fig_dir}")
-    print(f"Wrote stats to {os.path.join(out_dir, stats_name)} and {os.path.join(out_dir, stats_agg_name)}")
+    print(f"\nWrote {len(FIELDS)} final-slice figures + {len(FIELDS)} error-vs-time figures "
+          f"+ {len(FIELDS)} value-vs-time figures to {fig_dir}")
+    print(f"Wrote stats to {os.path.join(out_dir, stats_name)}, {os.path.join(out_dir, stats_agg_name)} "
+          f"and {os.path.join(out_dir, values_name)}")
 
 
 if __name__ == "__main__":
