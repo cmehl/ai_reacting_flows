@@ -13,10 +13,13 @@ frame per shared timestep:
     |   caption)|  - SAGE   |  - SAGE         |   <- error vs SAGE, shared +/- scale
     +-----------+-----------+-----------------+
 
-The value color scale (top row) and the symmetric error color scale (bottom
-row) are fixed across the whole animation -- computed once from robust
-percentiles over every frame and every model -- so brightness/contrast is
-comparable frame to frame.
+The value color scale (top row, from the SAGE field) and the symmetric error
+color scale (bottom row) are fixed across the whole animation so brightness /
+contrast is comparable frame to frame.
+
+The slice cells are binned once onto a regular pixel grid; every frame is then
+an ``imshow`` data swap rather than a 30k-point scatter redraw, which is what
+makes animating hundreds of frames for 19 fields tractable.
 
 Inputs are raw CONVERGE post-processing snapshots (STREAM_00/CELL_CENTER_DATA)
 under sibling ``output/`` directories -- one per run -- with matching
@@ -26,14 +29,20 @@ cells are re-indexed to the SAGE cell order via a coordinate KDTree before
 comparison. Only timesteps present on every side are animated, matched by the
 time encoded in the filename (not by position).
 
-Usage:
+Two-stage use (recommended for the full 19-field run): build the slice cache
+once, then render fields in parallel (e.g. a SLURM array) off the cache:
+
+    python animate_ann_sage_hybrid.py ... --cache slices.npz --cache-only
+    python animate_ann_sage_hybrid.py ... --cache slices.npz --fields Temperature
+    python animate_ann_sage_hybrid.py ... --cache slices.npz --fields NO OH ...
+
+Single-shot use:
+
     python animate_ann_sage_hybrid.py \\
         --sage-dir   .../outputs_original_COVDE/output \\
         --ann-dir    .../outputs_original_ANN/output \\
         --hybrid-dir .../outputs_original_ANN_Hybrid/output \\
-        --slice-axis Y \\
-        --out-dir    .../comparison_Y0_slice_hybrid/anim \\
-        --stride 1 --fps 12
+        --slice-axis Y --out-dir .../anim --stride 1 --fps 12
 
 Only pillow (GIF) is required as an animation writer -- no ffmpeg needed.
 """
@@ -43,6 +52,7 @@ import glob
 import os
 import re
 import time as _time
+from copy import copy
 
 import h5py
 import matplotlib
@@ -96,58 +106,19 @@ def index_by_time(directory, name_re):
     return by_time
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
-    parser.add_argument("--sage-dir", required=True,
-                        help="Directory of SAGE (reference chemistry) post*.h5 snapshots")
-    parser.add_argument("--ann-dir", required=True,
-                        help="Directory of ANN-accelerated post*.h5 snapshots")
-    parser.add_argument("--hybrid-dir", required=True,
-                        help="Directory of ANN-Hybrid post*.h5 snapshots")
-    parser.add_argument("--out-dir", required=True,
-                        help="Output directory for the per-field GIF animations")
-    parser.add_argument("--slice-axis", choices=["X", "Y", "Z"], default="Y",
-                        help="Coordinate held ~constant to define the slice plane (default: Y)")
-    parser.add_argument("--slice-halfwidth", type=float, default=0.001,
-                        help="Half-width [m] of the |coord| < value slab used as the <axis>=0 slice")
-    parser.add_argument("--stride", type=int, default=1,
-                        help="Use every Nth shared timestep (default: 1 = all)")
-    parser.add_argument("--fps", type=int, default=12, help="Animation frames per second")
-    parser.add_argument("--dpi", type=int, default=90, help="Animation raster resolution")
-    parser.add_argument("--marker-size", type=float, default=6.0, help="Scatter marker size")
-    parser.add_argument("--clip-percentile", type=float, default=99.5,
-                        help="Percentile (p and 100-p) of the SAGE field for the fixed value color scale")
-    parser.add_argument("--err-percentile", type=float, default=99.0,
-                        help="Percentile of |error| for the fixed symmetric error color scale")
-    parser.add_argument("--vmin", type=float, default=None, help="Override value color-scale minimum")
-    parser.add_argument("--vmax", type=float, default=None, help="Override value color-scale maximum")
-    parser.add_argument("--emax", type=float, default=None,
-                        help="Override symmetric error color-scale half-range (+/- this)")
-    parser.add_argument("--fields", nargs="+", default=None,
-                        help="Subset of field labels to animate (e.g. Temperature NO OH); default: all")
-    args = parser.parse_args()
-
+def build_cache(args):
+    """One pass over the shared timesteps: extract every field on the slice for
+    SAGE / ANN / Hybrid, re-indexing the accelerated runs onto SAGE cell order.
+    Returns a dict of [n_frames, n_cells] float32 arrays plus slice coords."""
     axis = args.slice_axis
     axcfg = SLICE_AXES[axis]
-    h_idx, h_sign, h_label = axcfg["h"]
-    v_idx, v_sign, v_label = axcfg["v"]
-
-    sage_dir = os.path.abspath(args.sage_dir)
-    ann_dir = os.path.abspath(args.ann_dir)
-    hybrid_dir = os.path.abspath(args.hybrid_dir)
-    out_dir = os.path.abspath(args.out_dir)
-    os.makedirs(out_dir, exist_ok=True)
-
-    want = set(args.fields) if args.fields else None
-    fields = [f for f in FIELDS if want is None or field_label(f) in want]
-    assert fields, f"No field matched {args.fields}; valid: {[field_label(f) for f in FIELDS]}"
+    h_idx, h_sign, _ = axcfg["h"]
+    v_idx, v_sign, _ = axcfg["v"]
 
     name_re = re.compile(r"^post\d+_(?P<time>[+-][0-9.eE+-]+)\.h5$")
-    sage_by_time = index_by_time(sage_dir, name_re)
-    ann_by_time = index_by_time(ann_dir, name_re)
-    hybrid_by_time = index_by_time(hybrid_dir, name_re)
+    sage_by_time = index_by_time(os.path.abspath(args.sage_dir), name_re)
+    ann_by_time = index_by_time(os.path.abspath(args.ann_dir), name_re)
+    hybrid_by_time = index_by_time(os.path.abspath(args.hybrid_dir), name_re)
 
     common = sorted(set(sage_by_time) & set(ann_by_time) & set(hybrid_by_time), key=float)
     assert common, "No timestep is common to SAGE + ANN + Hybrid runs"
@@ -156,18 +127,15 @@ def main():
     print(f"Common time range: t={float(common[0]):.3e}s to t={float(common[-1]):.3e}s "
           f"({n} frames after stride {args.stride})", flush=True)
 
-    # ---- pass 1: extract the slice for every field/model at every frame ----
-    # Stored as [n_frames, n_cells] float32 arrays keyed by field label.
-    sage = {field_label(f): None for f in fields}
-    ann = {field_label(f): None for f in fields}
-    hyb = {field_label(f): None for f in fields}
+    labels = [field_label(f) for f in FIELDS]
+    sage = ann = hyb = None
     times = np.empty(n, dtype=np.float64)
     h_coord = v_coord = None
     n_cells = None
 
     t0 = _time.time()
     for i, tkey in enumerate(common):
-        coords_s, data_s, t_s = load(sage_by_time[tkey], fields)
+        coords_s, data_s, t_s = load(sage_by_time[tkey], FIELDS)
         tree = cKDTree(coords_s)
         mask = np.abs(coords_s[:, axcfg["idx"]]) < args.slice_halfwidth
         times[i] = t_s
@@ -176,126 +144,217 @@ def main():
             h_coord = h_sign * coords_s[mask, h_idx]
             v_coord = v_sign * coords_s[mask, v_idx]
             n_cells = int(mask.sum())
-            for d in (sage, ann, hyb):
-                for lbl in d:
-                    d[lbl] = np.empty((n, n_cells), dtype=np.float32)
+            sage = np.empty((len(FIELDS), n, n_cells), dtype=np.float32)
+            ann = np.empty_like(sage)
+            hyb = np.empty_like(sage)
         elif int(mask.sum()) != n_cells:
             raise RuntimeError(
                 f"slice cell count changed at t={t_s:.3e}s "
                 f"({int(mask.sum())} vs {n_cells}) -- adaptive mesh not supported"
             )
 
-        for other_dir_by_time, store in (
-            (ann_by_time, ann), (hybrid_by_time, hyb)
-        ):
-            coords_m, data_m, t_m = load(other_dir_by_time[tkey], fields)
+        for fj, f in enumerate(FIELDS):
+            sage[fj, i] = data_s[f][mask].astype(np.float32)
+
+        for by_time, store in ((ann_by_time, ann), (hybrid_by_time, hyb)):
+            coords_m, data_m, t_m = load(by_time[tkey], FIELDS)
             assert abs(t_s - t_m) < 1e-9, (t_s, t_m)
             dist, idx = tree.query(coords_m, k=1)
             if dist.max() > 1e-9:
                 print(f"  WARNING t={t_s:.3e}: max nearest-neighbor dist = {dist.max():.3e}",
                       flush=True)
-            for f in fields:
-                lbl = field_label(f)
+            for fj, f in enumerate(FIELDS):
                 a = np.empty_like(data_m[f])
                 a[idx] = data_m[f]
-                store[lbl][i] = a[mask].astype(np.float32)
-
-        for f in fields:
-            lbl = field_label(f)
-            sage[lbl][i] = data_s[f][mask].astype(np.float32)
+                store[fj, i] = a[mask].astype(np.float32)
 
         if (i + 1) % 25 == 0 or i == n - 1:
             el = _time.time() - t0
-            print(f"  loaded frame {i + 1}/{n}  ({el:.0f}s, {el / (i + 1):.2f}s/frame)",
-                  flush=True)
+            print(f"  loaded frame {i + 1}/{n}  ({el:.0f}s, {el / (i + 1):.2f}s/frame)", flush=True)
 
-    print(f"pass 1 done: {n} frames x {n_cells} slice cells x {len(fields)} fields", flush=True)
+    print(f"pass 1 done: {n} frames x {n_cells} slice cells x {len(FIELDS)} fields", flush=True)
+    return dict(
+        labels=np.array(labels), times=times, h_coord=h_coord, v_coord=v_coord,
+        sage=sage, ann=ann, hyb=hyb, axis=np.array(axis),
+    )
 
-    # ---- pass 2: one GIF per field ----
-    writer = manimation.PillowWriter(fps=args.fps)
-    for f in fields:
-        lbl = field_label(f)
-        sv, av, hv = sage[lbl], ann[lbl], hyb[lbl]
-        err_a = av - sv
-        err_h = hv - sv
 
-        # Value scale from the SAGE reference only -- ANN can numerically
-        # diverge (T -> 1e4+ K in a blow-up cell); letting that set the scale
-        # would wash out every other frame. Such excursions just saturate.
-        lo_p = 100.0 - args.clip_percentile
-        vmin = args.vmin if args.vmin is not None else float(np.percentile(sv, lo_p))
-        vmax = args.vmax if args.vmax is not None else float(np.percentile(sv, args.clip_percentile))
-        if vmax <= vmin:
-            vmax = vmin + 1e-30
-        # Error scale: robust percentile of |err| over all frames of both
-        # models -- a blow-up in a handful of late frames stays a small
-        # fraction of the whole dataset so it does not dominate.
-        if args.emax is not None:
-            emax = args.emax
-        else:
-            emax = float(np.percentile(np.abs(np.concatenate([err_a, err_h])), args.err_percentile))
-            # Never resolve an error wider than the reference field's own full
-            # span -- a diverged ANN cell just saturates deep red/blue.
-            emax = min(emax, float(sv.max() - sv.min()) or emax)
-        emax = emax or 1e-30
+def make_binner(h_coord, v_coord, grid, fill_radius):
+    """Map every pixel of a regular grid to its nearest slice cell once (KDTree
+    on the 2-D slice coords). ``to_img`` then turns a per-cell vector into a
+    [ny, nx] image by plain fancy-indexing -- no per-frame averaging, no gaps
+    inside the meshed region. Pixels farther than ``fill_radius`` from any cell
+    (the empty background outside the flow wedge) are left NaN."""
+    h0, h1 = float(h_coord.min()), float(h_coord.max())
+    v0, v1 = float(v_coord.min()), float(v_coord.max())
+    nx = int(grid)
+    ny = max(1, int(round(grid * (v1 - v0) / (h1 - h0))))
+    hc = h0 + (np.arange(nx) + 0.5) * (h1 - h0) / nx
+    vc = v0 + (np.arange(ny) + 0.5) * (v1 - v0) / ny
+    hh, vv = np.meshgrid(hc, vc)
+    dist, near = cKDTree(np.c_[h_coord, v_coord]).query(np.c_[hh.ravel(), vv.ravel()], k=1)
+    bad = dist > fill_radius
 
-        fig, axes = plt.subplots(2, 3, figsize=(15, 9))
-        fig.subplots_adjust(left=0.05, right=0.9, top=0.9, bottom=0.06, wspace=0.25, hspace=0.15)
-        (ax_s, ax_a, ax_h), (ax_blank, ax_ea, ax_eh) = axes
+    def to_img(vals):
+        img = vals[near].astype(np.float64)
+        img[bad] = np.nan
+        return img.reshape(ny, nx)
 
-        sc_kw = dict(s=args.marker_size, cmap="inferno", vmin=vmin, vmax=vmax)
-        ec_kw = dict(s=args.marker_size, cmap="coolwarm", vmin=-emax, vmax=emax)
-        pc_s = ax_s.scatter(h_coord, v_coord, c=sv[0], **sc_kw)
-        pc_a = ax_a.scatter(h_coord, v_coord, c=av[0], **sc_kw)
-        pc_h = ax_h.scatter(h_coord, v_coord, c=hv[0], **sc_kw)
-        pc_ea = ax_ea.scatter(h_coord, v_coord, c=err_a[0], **ec_kw)
-        pc_eh = ax_eh.scatter(h_coord, v_coord, c=err_h[0], **ec_kw)
+    return dict(extent=[h0, h1, v0, v1], nx=nx, ny=ny, to_img=to_img)
 
-        ax_s.set_title("SAGE (reference)")
-        ax_a.set_title("ANN")
-        ax_h.set_title("ANN Hybrid")
-        ax_ea.set_title("ANN - SAGE")
-        ax_eh.set_title("ANN Hybrid - SAGE")
-        ax_blank.axis("off")
-        caption = ax_blank.text(0.5, 0.5, "", ha="center", va="center",
-                                fontsize=13, transform=ax_blank.transAxes)
 
-        for ax in (ax_s, ax_a, ax_h, ax_ea, ax_eh):
-            ax.set_xlabel(h_label)
-            ax.set_ylabel(v_label)
-            ax.set_aspect("equal")
+def render_field(lbl, times, sv, av, hv, binner, axis, args, out_dir):
+    err_a = av - sv
+    err_h = hv - sv
+    n = sv.shape[0]
 
-        cax_v = fig.add_axes([0.92, 0.55, 0.015, 0.33])
-        cax_e = fig.add_axes([0.92, 0.10, 0.015, 0.33])
-        fig.colorbar(pc_s, cax=cax_v, label=f"{lbl} (SAGE-scaled)", extend="both")
-        fig.colorbar(pc_ea, cax=cax_e, label=f"{lbl} error", extend="both")
+    lo_p = 100.0 - args.clip_percentile
+    vmin = args.vmin if args.vmin is not None else float(np.percentile(sv, lo_p))
+    vmax = args.vmax if args.vmax is not None else float(np.percentile(sv, args.clip_percentile))
+    if vmax <= vmin:
+        vmax = vmin + 1e-30
+    if args.emax is not None:
+        emax = args.emax
+    else:
+        emax = float(np.percentile(np.abs(np.concatenate([err_a, err_h])), args.err_percentile))
+        # never resolve an error wider than the reference field's own span --
+        # a diverged ANN cell just saturates deep red / blue
+        emax = min(emax, float(sv.max() - sv.min()) or emax)
+    emax = emax or 1e-30
 
-        suptitle = fig.suptitle("", fontsize=15)
+    to_img = binner["to_img"]
+    val_cmap = copy(matplotlib.colormaps["inferno"])
+    val_cmap.set_bad("#dddddd")
+    err_cmap = copy(matplotlib.colormaps["coolwarm"])
+    err_cmap.set_bad("#dddddd")
+    im_kw = dict(extent=binner["extent"], origin="lower", interpolation="nearest", aspect="equal")
 
-        def update(k):
-            pc_s.set_array(sv[k])
-            pc_a.set_array(av[k])
-            pc_h.set_array(hv[k])
-            pc_ea.set_array(err_a[k])
-            pc_eh.set_array(err_h[k])
-            suptitle.set_text(
-                f"{axis}=0 slice  --  {lbl}  --  t = {times[k]:.3e} s   (frame {k + 1}/{n})"
-            )
-            caption.set_text(
-                f"{lbl}\n\nt = {times[k]:.3e} s\nframe {k + 1} / {n}\n\n"
-                f"color scale fixed\n[{vmin:.3g}, {vmax:.3g}]\n"
-                f"error scale +/- {emax:.3g}"
-            )
-            return pc_s, pc_a, pc_h, pc_ea, pc_eh, suptitle, caption
+    fig, axes = plt.subplots(2, 3, figsize=(13, 8))
+    fig.subplots_adjust(left=0.05, right=0.9, top=0.9, bottom=0.06, wspace=0.25, hspace=0.15)
+    (ax_s, ax_a, ax_h), (ax_blank, ax_ea, ax_eh) = axes
 
-        anim = manimation.FuncAnimation(fig, update, frames=n, blit=False)
-        out_fp = os.path.join(out_dir, f"anim_{lbl}.gif")
-        ta = _time.time()
-        anim.save(out_fp, writer=writer, dpi=args.dpi)
-        plt.close(fig)
-        print(f"  wrote {out_fp}  ({_time.time() - ta:.0f}s)", flush=True)
+    im_s = ax_s.imshow(to_img(sv[0]), cmap=val_cmap, vmin=vmin, vmax=vmax, **im_kw)
+    im_a = ax_a.imshow(to_img(av[0]), cmap=val_cmap, vmin=vmin, vmax=vmax, **im_kw)
+    im_h = ax_h.imshow(to_img(hv[0]), cmap=val_cmap, vmin=vmin, vmax=vmax, **im_kw)
+    im_ea = ax_ea.imshow(to_img(err_a[0]), cmap=err_cmap, vmin=-emax, vmax=emax, **im_kw)
+    im_eh = ax_eh.imshow(to_img(err_h[0]), cmap=err_cmap, vmin=-emax, vmax=emax, **im_kw)
 
-    print(f"\nDone: {len(fields)} animations in {out_dir}", flush=True)
+    ax_s.set_title("SAGE (reference)")
+    ax_a.set_title("ANN")
+    ax_h.set_title("ANN Hybrid")
+    ax_ea.set_title("ANN - SAGE")
+    ax_eh.set_title("ANN Hybrid - SAGE")
+    ax_blank.axis("off")
+    caption = ax_blank.text(0.5, 0.5, "", ha="center", va="center", fontsize=13,
+                            transform=ax_blank.transAxes)
+
+    axcfg = SLICE_AXES[axis]
+    for ax in (ax_s, ax_a, ax_h, ax_ea, ax_eh):
+        ax.set_xlabel(axcfg["h"][2])
+        ax.set_ylabel(axcfg["v"][2])
+
+    cax_v = fig.add_axes([0.92, 0.55, 0.015, 0.33])
+    cax_e = fig.add_axes([0.92, 0.10, 0.015, 0.33])
+    fig.colorbar(im_s, cax=cax_v, label=f"{lbl} (SAGE-scaled)", extend="both")
+    fig.colorbar(im_ea, cax=cax_e, label=f"{lbl} error", extend="both")
+    suptitle = fig.suptitle("", fontsize=15)
+
+    def update(k):
+        im_s.set_data(to_img(sv[k]))
+        im_a.set_data(to_img(av[k]))
+        im_h.set_data(to_img(hv[k]))
+        im_ea.set_data(to_img(err_a[k]))
+        im_eh.set_data(to_img(err_h[k]))
+        suptitle.set_text(
+            f"{axis}=0 slice  --  {lbl}  --  t = {times[k]:.3e} s   (frame {k + 1}/{n})"
+        )
+        caption.set_text(
+            f"{lbl}\n\nt = {times[k]:.3e} s\nframe {k + 1} / {n}\n\n"
+            f"value scale (SAGE)\n[{vmin:.3g}, {vmax:.3g}]\nerror scale +/- {emax:.3g}"
+        )
+        return im_s, im_a, im_h, im_ea, im_eh, suptitle, caption
+
+    anim = manimation.FuncAnimation(fig, update, frames=n, blit=False)
+    out_fp = os.path.join(out_dir, f"anim_{lbl}.gif")
+    ta = _time.time()
+    anim.save(out_fp, writer=manimation.PillowWriter(fps=args.fps), dpi=args.dpi)
+    plt.close(fig)
+    print(f"  wrote {out_fp}  ({_time.time() - ta:.0f}s)", flush=True)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument("--sage-dir", help="Directory of SAGE (reference chemistry) post*.h5 snapshots")
+    parser.add_argument("--ann-dir", help="Directory of ANN-accelerated post*.h5 snapshots")
+    parser.add_argument("--hybrid-dir", help="Directory of ANN-Hybrid post*.h5 snapshots")
+    parser.add_argument("--out-dir", required=True, help="Output directory for the per-field GIFs")
+    parser.add_argument("--cache", default=None,
+                        help="Path to an .npz slice cache: loaded if it exists (skips pass 1), "
+                             "else built from the --*-dir inputs and written here")
+    parser.add_argument("--cache-only", action="store_true",
+                        help="Build the --cache file and exit without rendering")
+    parser.add_argument("--slice-axis", choices=["X", "Y", "Z"], default="Y",
+                        help="Coordinate held ~constant to define the slice plane (default: Y)")
+    parser.add_argument("--slice-halfwidth", type=float, default=0.001,
+                        help="Half-width [m] of the |coord| < value slab used as the <axis>=0 slice")
+    parser.add_argument("--stride", type=int, default=1,
+                        help="Use every Nth shared timestep (default: 1 = all)")
+    parser.add_argument("--grid", type=int, default=320,
+                        help="Horizontal pixel resolution the slice cells are binned onto")
+    parser.add_argument("--fill-radius", type=float, default=0.004,
+                        help="Pixels farther than this [m] from any slice cell stay blank")
+    parser.add_argument("--fps", type=int, default=12, help="Animation frames per second")
+    parser.add_argument("--dpi", type=int, default=85, help="Animation raster resolution")
+    parser.add_argument("--clip-percentile", type=float, default=99.5,
+                        help="Percentile (p and 100-p) of the SAGE field for the fixed value scale")
+    parser.add_argument("--err-percentile", type=float, default=99.0,
+                        help="Percentile of |error| for the fixed symmetric error scale")
+    parser.add_argument("--vmin", type=float, default=None, help="Override value color-scale minimum")
+    parser.add_argument("--vmax", type=float, default=None, help="Override value color-scale maximum")
+    parser.add_argument("--emax", type=float, default=None,
+                        help="Override symmetric error color-scale half-range (+/- this)")
+    parser.add_argument("--fields", nargs="+", default=None,
+                        help="Subset of field labels to animate (e.g. Temperature NO OH); default: all")
+    args = parser.parse_args()
+
+    out_dir = os.path.abspath(args.out_dir)
+    os.makedirs(out_dir, exist_ok=True)
+
+    if args.cache and os.path.exists(args.cache):
+        print(f"loading slice cache {args.cache}", flush=True)
+        c = np.load(args.cache, allow_pickle=False)
+        cache = {k: c[k] for k in c.files}
+    else:
+        assert args.sage_dir and args.ann_dir and args.hybrid_dir, (
+            "--sage-dir/--ann-dir/--hybrid-dir are required when no --cache file exists"
+        )
+        cache = build_cache(args)
+        if args.cache:
+            print(f"writing slice cache {args.cache}", flush=True)
+            np.savez(args.cache, **cache)
+
+    if args.cache_only:
+        print("cache-only: done", flush=True)
+        return
+
+    axis = str(cache["axis"])
+    times = cache["times"]
+    labels = list(cache["labels"])
+    binner = make_binner(cache["h_coord"], cache["v_coord"], args.grid, args.fill_radius)
+    print(f"binned {cache['h_coord'].size} slice cells onto {binner['nx']}x{binner['ny']} grid",
+          flush=True)
+
+    want = set(args.fields) if args.fields else None
+    todo = [(j, lbl) for j, lbl in enumerate(labels) if want is None or lbl in want]
+    assert todo, f"No field matched {args.fields}; valid: {labels}"
+
+    for j, lbl in todo:
+        render_field(lbl, times, cache["sage"][j], cache["ann"][j], cache["hyb"][j],
+                     binner, axis, args, out_dir)
+
+    print(f"\nDone: {len(todo)} animations in {out_dir}", flush=True)
 
 
 if __name__ == "__main__":
