@@ -31,6 +31,7 @@ Run with no arguments to use the REDUCED case's default paths.
 import argparse
 import glob
 import os
+import re
 
 import h5py
 import matplotlib
@@ -88,13 +89,35 @@ def main():
     fig_dir = os.path.join(out_dir, "figs")
     os.makedirs(fig_dir, exist_ok=True)
 
-    sage_files = sorted(glob.glob(os.path.join(sage_dir, "post*.h5")))
-    ann_files = sorted(glob.glob(os.path.join(ann_dir, "post*.h5")))
-    assert len(sage_files) == len(ann_files) and len(sage_files) > 0, (
-        f"Mismatched or empty snapshot lists: {len(sage_files)} SAGE vs {len(ann_files)} ANN "
-        f"({sage_dir} / {ann_dir})"
-    )
-    print(f"Found {len(sage_files)} timesteps.")
+    # Match snapshots by the time encoded in the filename (post<idx>_+<time>.h5)
+    # rather than by position -- the two runs can have different file counts
+    # (e.g. one still running, or stopped earlier) even when every timestep
+    # they DO share matches exactly.
+    name_re = re.compile(r"^post\d+_(?P<time>[+-][0-9.eE+-]+)\.h5$")
+
+    def index_by_time(directory):
+        by_time = {}
+        for fp in glob.glob(os.path.join(directory, "post*.h5")):
+            m = name_re.match(os.path.basename(fp))
+            if m:
+                by_time[m.group("time")] = fp
+        return by_time
+
+    sage_by_time = index_by_time(sage_dir)
+    ann_by_time = index_by_time(ann_dir)
+    common = sorted(set(sage_by_time) & set(ann_by_time), key=float)
+    sage_only = sorted(set(sage_by_time) - set(ann_by_time), key=float)
+    ann_only = sorted(set(ann_by_time) - set(sage_by_time), key=float)
+    assert common, f"No matching timesteps between {sage_dir} and {ann_dir}"
+    if sage_only or ann_only:
+        print(f"  NOTE: {len(sage_only)} SAGE-only timestep(s), {len(ann_only)} ANN-only "
+              f"timestep(s) skipped (not present on both sides): "
+              f"SAGE-only={sage_only[:3]}{'...' if len(sage_only) > 3 else ''}, "
+              f"ANN-only={ann_only[:3]}{'...' if len(ann_only) > 3 else ''}")
+
+    sage_files = [sage_by_time[t] for t in common]
+    ann_files = [ann_by_time[t] for t in common]
+    print(f"Found {len(sage_files)} matching timesteps.")
 
     records = []
     last_slice = None
