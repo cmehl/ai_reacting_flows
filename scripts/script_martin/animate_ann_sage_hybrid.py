@@ -228,7 +228,7 @@ def make_binner(h_coord, v_coord, grid, fill_radius):
     return dict(extent=[h0, h1, v0, v1], nx=nx, ny=ny, to_img=to_img)
 
 
-def render_field(lbl, times, sv, av, hv, binner, axis, args, out_dir):
+def render_field(lbl, times, sv, av, hv, binner, axis, args, out_dir, ann_label, hybrid_label):
     err_a = av - sv
     err_h = hv - sv
     n = sv.shape[0]
@@ -271,10 +271,10 @@ def render_field(lbl, times, sv, av, hv, binner, axis, args, out_dir):
     im_eh = ax_eh.imshow(to_img(err_h[0]), cmap=err_cmap, vmin=-emax, vmax=emax, **im_kw)
 
     ax_s.set_title("SAGE (reference)")
-    ax_a.set_title("ANN")
-    ax_h.set_title("ANN Hybrid")
-    ax_ea.set_title("ANN - SAGE")
-    ax_eh.set_title("ANN Hybrid - SAGE")
+    ax_a.set_title(ann_label)
+    ax_h.set_title(hybrid_label)
+    ax_ea.set_title(f"{ann_label} - SAGE")
+    ax_eh.set_title(f"{hybrid_label} - SAGE")
     ax_blank.axis("off")
     caption = ax_blank.text(0.5, 0.5, "", ha="center", va="center", fontsize=13,
                             transform=ax_blank.transAxes)
@@ -320,6 +320,10 @@ def main():
     parser.add_argument("--sage-dir", help="Directory of SAGE (reference chemistry) post*.h5 snapshots")
     parser.add_argument("--ann-dir", help="Directory of ANN-accelerated post*.h5 snapshots")
     parser.add_argument("--hybrid-dir", help="Directory of ANN-Hybrid post*.h5 snapshots")
+    parser.add_argument("--ann-label", default="ANN",
+                        help="Panel/title label for the --ann-dir run (default: ANN)")
+    parser.add_argument("--hybrid-label", default="ANN Hybrid",
+                        help="Panel/title label for the --hybrid-dir run (default: ANN Hybrid)")
     parser.add_argument("--out-dir", required=True, help="Output directory for the per-field GIFs")
     parser.add_argument("--cache", default=None,
                         help="Path to an .npz slice cache: loaded if it exists (skips pass 1), "
@@ -390,7 +394,7 @@ def main():
 
     for j, lbl in todo:
         render_field(lbl, times, cache["sage"][j], cache["ann"][j], cache["hyb"][j],
-                     binner, axis, args, out_dir)
+                     binner, axis, args, out_dir, args.ann_label, args.hybrid_label)
 
     print(f"\nDone: {len(todo)} animations in {out_dir}", flush=True)
 

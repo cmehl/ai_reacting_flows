@@ -124,6 +124,10 @@ def main():
     parser.add_argument("--hybrid-dir", default=None,
                          help="Optional directory of hybrid (ANN, falling back to SAGE above an error "
                               "threshold) post*.h5 snapshots -- compared alongside ANN if given")
+    parser.add_argument("--ann-label", default="ANN",
+                         help="Legend/column label for the --ann-dir run (default: ANN)")
+    parser.add_argument("--hybrid-label", default="Hybrid",
+                         help="Legend/column label for the --hybrid-dir run (default: Hybrid)")
     parser.add_argument("--out-dir", default=None,
                          help="Output directory for stats CSVs and figures "
                               "(default: comparison_<axis>0_slice next to the SAGE/ANN output/ dirs)")
@@ -144,9 +148,9 @@ def main():
     stats_name = f"stats_{axis}0_slice.csv"
     stats_agg_name = f"stats_{axis}0_slice_aggregated.csv"
 
-    models = [("ANN", os.path.abspath(args.ann_dir))]
+    models = [(args.ann_label, os.path.abspath(args.ann_dir))]
     if args.hybrid_dir:
-        models.append(("Hybrid", os.path.abspath(args.hybrid_dir)))
+        models.append((args.hybrid_label, os.path.abspath(args.hybrid_dir)))
 
     # Match snapshots by the time encoded in the filename (post<idx>_+<time>.h5)
     # rather than by position -- the runs can have different file counts (e.g.
