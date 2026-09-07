@@ -128,6 +128,9 @@ def main():
                          help="Legend/column label for the --ann-dir run (default: ANN)")
     parser.add_argument("--hybrid-label", default="Hybrid",
                          help="Legend/column label for the --hybrid-dir run (default: Hybrid)")
+    parser.add_argument("--model", action="append", default=[], metavar="LABEL=DIR",
+                         help="Additional accelerated run to compare, beyond --ann-dir/--hybrid-dir -- "
+                              "repeatable, e.g. --model ANN_512=.../output --model ANN_512_Renorm=.../output")
     parser.add_argument("--out-dir", default=None,
                          help="Output directory for stats CSVs and figures "
                               "(default: comparison_<axis>0_slice next to the SAGE/ANN output/ dirs)")
@@ -151,6 +154,10 @@ def main():
     models = [(args.ann_label, os.path.abspath(args.ann_dir))]
     if args.hybrid_dir:
         models.append((args.hybrid_label, os.path.abspath(args.hybrid_dir)))
+    for spec in args.model:
+        label, _, mdir = spec.partition("=")
+        assert mdir, f"--model expects LABEL=DIR, got {spec!r}"
+        models.append((label, os.path.abspath(mdir)))
 
     # Match snapshots by the time encoded in the filename (post<idx>_+<time>.h5)
     # rather than by position -- the runs can have different file counts (e.g.
