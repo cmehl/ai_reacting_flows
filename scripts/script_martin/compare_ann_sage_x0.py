@@ -74,7 +74,7 @@ SLICE_AXES = {
 
 # Consistent color per model across figures; extra models beyond this list
 # cycle through matplotlib's default palette.
-MODEL_COLORS = {"SAGE": "black", "ANN": "tab:blue", "Hybrid": "tab:green"}
+MODEL_COLORS = {"SAGE": "black", "ANN": "tab:blue", "Hybrid": "tab:green", "ANN-Renorm": "tab:green"}
 FALLBACK_COLORS = itertools.cycle(
     ["tab:purple", "tab:orange", "tab:brown", "tab:pink", "tab:gray", "tab:olive"]
 )
