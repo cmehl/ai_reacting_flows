@@ -1,17 +1,18 @@
 """Animate the temporal evolution of a full-CFD SAGE (reference chemistry) run
-against an ANN run and an ANN-Hybrid run (ANN prediction, falling back to SAGE
-where the ANN error exceeds a threshold), on a single planar slice
-(X=0, Y=0 or Z=0), for Temperature and every species mass fraction.
+against one or more accelerated runs (typically an ANN run, optionally a
+second one -- Hybrid, a different architecture, etc.), on a single planar
+slice (X=0, Y=0 or Z=0), for Temperature and every species mass fraction.
 
-For each field one animation (GIF) is written with a 2x3 panel layout, one
-frame per shared timestep:
+For each field one animation (GIF) is written with a 2x(1+N) panel layout
+(N = number of accelerated runs -- 1 for a single --ann-dir, 2 with
+--hybrid-dir/--model too), one frame per shared timestep:
 
-    +-----------+-----------+-----------------+
-    |   SAGE    |    ANN    |   ANN Hybrid    |   <- raw field, shared color scale
-    +-----------+-----------+-----------------+
-    |  (blank / |  ANN      |  ANN Hybrid     |
-    |   caption)|  - SAGE   |  - SAGE         |   <- error vs SAGE, shared +/- scale
-    +-----------+-----------+-----------------+
+    +-----------+-----------+-----+
+    |   SAGE    |    ANN    | ... |   <- raw field, shared color scale
+    +-----------+-----------+-----+
+    |  (blank / |  ANN      | ... |
+    |   caption)|  - SAGE   |     |   <- error vs SAGE, shared +/- scale
+    +-----------+-----------+-----+
 
 The value color scale (top row, from the SAGE field) and the symmetric error
 color scale (bottom row) are fixed across the whole animation so brightness /
@@ -126,10 +127,13 @@ def slice_indices(coords, axcfg, slab, res):
     return np.sort(cand[order[first]])
 
 
-def build_cache(args):
+def build_cache(args, models):
     """One pass over the shared timesteps: extract every field on the slice for
-    SAGE / ANN / Hybrid, re-indexing the accelerated runs onto SAGE cell order.
-    Returns a dict of [n_frames, n_cells] float32 arrays plus slice coords."""
+    SAGE and every accelerated run in ``models`` (list of (label, dir)),
+    re-indexing each onto SAGE cell order. Returns a dict of [n_frames, n_cells]
+    float32 arrays plus slice coords. Stored .npz-flat: model arrays go under
+    model_0, model_1, ... (order matches the model_labels array) since npz
+    cannot nest a dict of arrays."""
     axis = args.slice_axis
     axcfg = SLICE_AXES[axis]
     h_idx, h_sign, _ = axcfg["h"]
@@ -137,18 +141,21 @@ def build_cache(args):
 
     name_re = re.compile(r"^post\d+_(?P<time>[+-][0-9.eE+-]+)\.h5$")
     sage_by_time = index_by_time(os.path.abspath(args.sage_dir), name_re)
-    ann_by_time = index_by_time(os.path.abspath(args.ann_dir), name_re)
-    hybrid_by_time = index_by_time(os.path.abspath(args.hybrid_dir), name_re)
+    model_by_time = [(name, index_by_time(os.path.abspath(d), name_re)) for name, d in models]
 
-    common = sorted(set(sage_by_time) & set(ann_by_time) & set(hybrid_by_time), key=float)
-    assert common, "No timestep is common to SAGE + ANN + Hybrid runs"
+    common = set(sage_by_time)
+    for _, by_time in model_by_time:
+        common &= set(by_time)
+    common = sorted(common, key=float)
+    assert common, f"No timestep is common to SAGE + {[n for n, _ in models]}"
     common = common[:: args.stride]
     n = len(common)
     print(f"Common time range: t={float(common[0]):.3e}s to t={float(common[-1]):.3e}s "
           f"({n} frames after stride {args.stride})", flush=True)
 
     labels = [field_label(f) for f in FIELDS]
-    sage = ann = hyb = None
+    sage = None
+    model_arrays = [None] * len(models)
     times = np.empty(n, dtype=np.float64)
     h_coord = v_coord = None
     n_cells = None
@@ -169,8 +176,7 @@ def build_cache(args):
                   f"{axcfg['h'][2]} in [{h_coord.min():.3f}, {h_coord.max():.3f}], "
                   f"{axcfg['v'][2]} in [{v_coord.min():.3f}, {v_coord.max():.3f}]", flush=True)
             sage = np.empty((len(FIELDS), n, n_cells), dtype=np.float32)
-            ann = np.empty_like(sage)
-            hyb = np.empty_like(sage)
+            model_arrays = [np.empty_like(sage) for _ in models]
         elif coords_s.shape[0] != sel_nmesh:
             raise RuntimeError(
                 f"mesh cell count changed at t={t_s:.3e}s "
@@ -181,12 +187,12 @@ def build_cache(args):
         for fj, f in enumerate(FIELDS):
             sage[fj, i] = data_s[f][sel].astype(np.float32)
 
-        for by_time, store in ((ann_by_time, ann), (hybrid_by_time, hyb)):
+        for (name, by_time), store in zip(model_by_time, model_arrays):
             coords_m, data_m, t_m = load(by_time[tkey], FIELDS)
-            assert abs(t_s - t_m) < 1e-9, (t_s, t_m)
+            assert abs(t_s - t_m) < 1e-9, (name, t_s, t_m)
             dist, idx = tree.query(coords_m, k=1)
             if dist.max() > 1e-9:
-                print(f"  WARNING t={t_s:.3e}: max nearest-neighbor dist = {dist.max():.3e}",
+                print(f"  WARNING t={t_s:.3e} [{name}]: max nearest-neighbor dist = {dist.max():.3e}",
                       flush=True)
             for fj, f in enumerate(FIELDS):
                 a = np.empty_like(data_m[f])
@@ -197,11 +203,15 @@ def build_cache(args):
             el = _time.time() - t0
             print(f"  loaded frame {i + 1}/{n}  ({el:.0f}s, {el / (i + 1):.2f}s/frame)", flush=True)
 
-    print(f"pass 1 done: {n} frames x {n_cells} slice cells x {len(FIELDS)} fields", flush=True)
-    return dict(
+    print(f"pass 1 done: {n} frames x {n_cells} slice cells x {len(FIELDS)} fields "
+          f"x {len(models)} model(s)", flush=True)
+    cache = dict(
         labels=np.array(labels), times=times, h_coord=h_coord, v_coord=v_coord,
-        sage=sage, ann=ann, hyb=hyb, axis=np.array(axis),
+        sage=sage, axis=np.array(axis), model_labels=np.array([n for n, _ in models]),
     )
+    for mi, arr in enumerate(model_arrays):
+        cache[f"model_{mi}"] = arr
+    return cache
 
 
 def make_binner(h_coord, v_coord, grid, fill_radius):
@@ -228,9 +238,11 @@ def make_binner(h_coord, v_coord, grid, fill_radius):
     return dict(extent=[h0, h1, v0, v1], nx=nx, ny=ny, to_img=to_img)
 
 
-def render_field(lbl, times, sv, av, hv, binner, axis, args, out_dir, ann_label, hybrid_label):
-    err_a = av - sv
-    err_h = hv - sv
+def render_field(lbl, times, sv, mvals, binner, axis, args, out_dir, model_labels):
+    """mvals: list of [n_frames, n_cells] arrays, one per accelerated model,
+    matching model_labels (order and length)."""
+    n_models = len(mvals)
+    errs = [mv - sv for mv in mvals]
     n = sv.shape[0]
 
     lo_p = 100.0 - args.clip_percentile
@@ -241,7 +253,7 @@ def render_field(lbl, times, sv, av, hv, binner, axis, args, out_dir, ann_label,
     if args.emax is not None:
         emax = args.emax
     else:
-        emax = float(np.percentile(np.abs(np.concatenate([err_a, err_h])), args.err_percentile))
+        emax = float(np.percentile(np.abs(np.concatenate(errs)), args.err_percentile))
         # never resolve an error wider than the reference field's own span --
         # a diverged ANN cell just saturates deep red / blue
         emax = min(emax, float(sv.max() - sv.min()) or emax)
@@ -255,47 +267,51 @@ def render_field(lbl, times, sv, av, hv, binner, axis, args, out_dir, ann_label,
     im_kw = dict(extent=binner["extent"], origin="lower", interpolation="nearest", aspect="equal")
 
     # size the figure to the slice aspect so the equal-aspect panels fill it
+    n_cols = 1 + n_models
     e = binner["extent"]
     panel_ar = (e[1] - e[0]) / (e[3] - e[2])           # width / height of one panel
     pw = 5.4
-    fig_w = 3 * pw + 2.4
+    fig_w = n_cols * pw + 2.4
     fig_h = 2 * (pw / panel_ar) + 1.7
-    fig, axes = plt.subplots(2, 3, figsize=(fig_w, fig_h))
+    fig, axes = plt.subplots(2, n_cols, figsize=(fig_w, fig_h), squeeze=False)
     fig.subplots_adjust(left=0.05, right=0.93, top=0.88, bottom=0.1, wspace=0.2, hspace=0.35)
-    (ax_s, ax_a, ax_h), (ax_blank, ax_ea, ax_eh) = axes
+    top_row, bottom_row = axes
+    ax_s, model_axes = top_row[0], top_row[1:]
+    ax_blank, err_axes = bottom_row[0], bottom_row[1:]
 
     im_s = ax_s.imshow(to_img(sv[0]), cmap=val_cmap, vmin=vmin, vmax=vmax, **im_kw)
-    im_a = ax_a.imshow(to_img(av[0]), cmap=val_cmap, vmin=vmin, vmax=vmax, **im_kw)
-    im_h = ax_h.imshow(to_img(hv[0]), cmap=val_cmap, vmin=vmin, vmax=vmax, **im_kw)
-    im_ea = ax_ea.imshow(to_img(err_a[0]), cmap=err_cmap, vmin=-emax, vmax=emax, **im_kw)
-    im_eh = ax_eh.imshow(to_img(err_h[0]), cmap=err_cmap, vmin=-emax, vmax=emax, **im_kw)
-
     ax_s.set_title("SAGE (reference)")
-    ax_a.set_title(ann_label)
-    ax_h.set_title(hybrid_label)
-    ax_ea.set_title(f"{ann_label} - SAGE")
-    ax_eh.set_title(f"{hybrid_label} - SAGE")
+    im_models = []
+    for ax, mv, name in zip(model_axes, mvals, model_labels):
+        im_models.append(ax.imshow(to_img(mv[0]), cmap=val_cmap, vmin=vmin, vmax=vmax, **im_kw))
+        ax.set_title(name)
+    im_errs = []
+    for ax, err, name in zip(err_axes, errs, model_labels):
+        im_errs.append(ax.imshow(to_img(err[0]), cmap=err_cmap, vmin=-emax, vmax=emax, **im_kw))
+        ax.set_title(f"{name} - SAGE")
+
     ax_blank.axis("off")
     caption = ax_blank.text(0.5, 0.5, "", ha="center", va="center", fontsize=13,
                             transform=ax_blank.transAxes)
 
     axcfg = SLICE_AXES[axis]
-    for ax in (ax_s, ax_a, ax_h, ax_ea, ax_eh):
+    for ax in [ax_s] + list(model_axes) + list(err_axes):
         ax.set_xlabel(axcfg["h"][2])
         ax.set_ylabel(axcfg["v"][2])
 
-    fig.colorbar(im_s, ax=[ax_s, ax_a, ax_h], fraction=0.015, pad=0.02,
+    fig.colorbar(im_s, ax=[ax_s] + list(model_axes), fraction=0.015, pad=0.02,
                  label=f"{lbl} (SAGE-scaled)", extend="both")
-    fig.colorbar(im_ea, ax=[ax_ea, ax_eh], fraction=0.015, pad=0.02,
-                 label=f"{lbl} error", extend="both")
+    if im_errs:
+        fig.colorbar(im_errs[0], ax=list(err_axes), fraction=0.015, pad=0.02,
+                     label=f"{lbl} error", extend="both")
     suptitle = fig.suptitle("", fontsize=15)
 
     def update(k):
         im_s.set_data(to_img(sv[k]))
-        im_a.set_data(to_img(av[k]))
-        im_h.set_data(to_img(hv[k]))
-        im_ea.set_data(to_img(err_a[k]))
-        im_eh.set_data(to_img(err_h[k]))
+        for im, mv in zip(im_models, mvals):
+            im.set_data(to_img(mv[k]))
+        for im, err in zip(im_errs, errs):
+            im.set_data(to_img(err[k]))
         suptitle.set_text(
             f"{axis}=0 slice  --  {lbl}  --  t = {times[k]:.3e} s   (frame {k + 1}/{n})"
         )
@@ -303,7 +319,7 @@ def render_field(lbl, times, sv, av, hv, binner, axis, args, out_dir, ann_label,
             f"{lbl}\n\nt = {times[k]:.3e} s\nframe {k + 1} / {n}\n\n"
             f"value scale (SAGE)\n[{vmin:.3g}, {vmax:.3g}]\nerror scale +/- {emax:.3g}"
         )
-        return im_s, im_a, im_h, im_ea, im_eh, suptitle, caption
+        return [im_s] + im_models + im_errs + [suptitle, caption]
 
     anim = manimation.FuncAnimation(fig, update, frames=n, blit=False)
     out_fp = os.path.join(out_dir, f"anim_{lbl}.gif")
@@ -319,11 +335,16 @@ def main():
     )
     parser.add_argument("--sage-dir", help="Directory of SAGE (reference chemistry) post*.h5 snapshots")
     parser.add_argument("--ann-dir", help="Directory of ANN-accelerated post*.h5 snapshots")
-    parser.add_argument("--hybrid-dir", help="Directory of ANN-Hybrid post*.h5 snapshots")
+    parser.add_argument("--hybrid-dir", default=None,
+                        help="Optional second accelerated run's post*.h5 snapshots (e.g. ANN-Hybrid) -- "
+                             "animated alongside --ann-dir if given, omit for a single-model animation")
     parser.add_argument("--ann-label", default="ANN",
                         help="Panel/title label for the --ann-dir run (default: ANN)")
     parser.add_argument("--hybrid-label", default="ANN Hybrid",
                         help="Panel/title label for the --hybrid-dir run (default: ANN Hybrid)")
+    parser.add_argument("--model", action="append", default=[], metavar="LABEL=DIR",
+                        help="Additional accelerated run to animate, beyond --ann-dir/--hybrid-dir -- "
+                             "repeatable")
     parser.add_argument("--out-dir", required=True, help="Output directory for the per-field GIFs")
     parser.add_argument("--cache", default=None,
                         help="Path to an .npz slice cache: loaded if it exists (skips pass 1), "
@@ -364,15 +385,24 @@ def main():
     out_dir = os.path.abspath(args.out_dir)
     os.makedirs(out_dir, exist_ok=True)
 
+    models = [(args.ann_label, args.ann_dir)] if args.ann_dir else []
+    if args.hybrid_dir:
+        models.append((args.hybrid_label, args.hybrid_dir))
+    for spec in args.model:
+        label, _, mdir = spec.partition("=")
+        assert mdir, f"--model expects LABEL=DIR, got {spec!r}"
+        models.append((label, mdir))
+
     if args.cache and os.path.exists(args.cache):
         print(f"loading slice cache {args.cache}", flush=True)
         c = np.load(args.cache, allow_pickle=False)
         cache = {k: c[k] for k in c.files}
     else:
-        assert args.sage_dir and args.ann_dir and args.hybrid_dir, (
-            "--sage-dir/--ann-dir/--hybrid-dir are required when no --cache file exists"
+        assert args.sage_dir and models, (
+            "--sage-dir and at least one of --ann-dir/--hybrid-dir/--model are required "
+            "when no --cache file exists"
         )
-        cache = build_cache(args)
+        cache = build_cache(args, models)
         if args.cache:
             print(f"writing slice cache {args.cache}", flush=True)
             np.savez(args.cache, **cache)
@@ -384,6 +414,8 @@ def main():
     axis = str(cache["axis"])
     times = cache["times"]
     labels = list(cache["labels"])
+    model_labels = [str(lbl) for lbl in cache["model_labels"]]
+    n_models = len(model_labels)
     binner = make_binner(cache["h_coord"], cache["v_coord"], args.grid, args.fill_radius)
     print(f"binned {cache['h_coord'].size} slice cells onto {binner['nx']}x{binner['ny']} grid",
           flush=True)
@@ -393,8 +425,8 @@ def main():
     assert todo, f"No field matched {args.fields}; valid: {labels}"
 
     for j, lbl in todo:
-        render_field(lbl, times, cache["sage"][j], cache["ann"][j], cache["hyb"][j],
-                     binner, axis, args, out_dir, args.ann_label, args.hybrid_label)
+        mvals = [cache[f"model_{mi}"][j] for mi in range(n_models)]
+        render_field(lbl, times, cache["sage"][j], mvals, binner, axis, args, out_dir, model_labels)
 
     print(f"\nDone: {len(todo)} animations in {out_dir}", flush=True)
 
