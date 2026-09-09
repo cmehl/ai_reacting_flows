@@ -30,16 +30,20 @@ next to the SAGE/ANN ``output/`` dirs):
                                            --flame-axis) of cells within --flame-halfwidth of --flame-tref,
                                            a simple flame-front proxy -- reveals a spatial lag/lead of the
                                            accelerated runs' flame relative to SAGE
-    mass_conservation_<axis>0_slice.csv - per-model, sampled-cell (every --scatter-stride-th timestep,
-                                           --scatter-cells random cells) e_T (Eq. 13 of Mehl & Aubagnac-Karkar,
-                                           Phys. Fluids 2023) vs e_Sigma = |sum_k Y_k - 1| (Eq. 10, ibid.),
-                                           the model's own mass-fraction-sum conservation violation
+    mass_conservation_<axis>0_slice_by_<color>.csv - per-model, sampled-cell (every --scatter-stride-th
+                                           timestep, --scatter-cells random cells) e_T (Eq. 13 of Mehl &
+                                           Aubagnac-Karkar, Phys. Fluids 2023) vs e_Sigma = |sum_k Y_k - 1|
+                                           (Eq. 10, ibid., the model's own mass-fraction-sum conservation
+                                           violation) vs a coloring field (--scatter-color-field, default
+                                           TEMPERATURE; <color> in the filename is that field's label)
     figs/error_vs_time_<field>.png      - RMSE / relative-RMSE vs time, one per field, all models overlaid
     figs/mass_weighted/error_vs_time_<field>.png - same, mass-weighted RMSE/relative-RMSE
     figs/value_vs_time_<field>.png      - raw mean/max value vs time, SAGE + every model on the same axes
     figs/<field>.png                    - final-timestep slice plot: SAGE, each model, each model's error vs SAGE
     figs/flame_position_vs_time.png     - flame-front position vs time (top) and offset from SAGE (bottom)
-    figs/mass_conservation_scatter.png  - e_Sigma vs e_T scatter per model, colored by SAGE temperature
+    figs/mass_conservation_scatter_by_<color>.png - e_Sigma vs e_T scatter per model, colored by
+                                           --scatter-color-field (SAGE temperature by default, or a
+                                           species mass fraction as a progress-variable-style coloring)
 
 Usage:
     python compare_ann_sage_x0.py \\
@@ -168,12 +172,29 @@ def main():
     parser.add_argument("--scatter-cells", type=int, default=3000,
                          help="Random cells sampled per included timestep for the scatter (default: 3000)")
     parser.add_argument("--scatter-seed", type=int, default=0, help="RNG seed for scatter cell sampling")
+    parser.add_argument("--scatter-color-field", default="TEMPERATURE",
+                         help="SAGE field the e_Sigma-vs-e_T scatter is colored by -- 'TEMPERATURE' "
+                              "(default) or a species label/name (e.g. H2O, MASSFRAC_H2O) to use as a "
+                              "progress-variable-style coloring instead")
     args = parser.parse_args()
 
     axis = args.slice_axis
     axcfg = SLICE_AXES[axis]
     flame_idx = SLICE_AXES[args.flame_axis]["idx"]
     rng = np.random.default_rng(args.scatter_seed)
+
+    # Resolve the scatter's coloring field: TEMPERATURE, a bare species name (H2O), or MASSFRAC_H2O.
+    raw = args.scatter_color_field
+    if raw.upper() == "TEMPERATURE":
+        color_field = "TEMPERATURE"
+    elif raw in FIELDS:
+        color_field = raw
+    elif f"MASSFRAC_{raw}" in FIELDS:
+        color_field = f"MASSFRAC_{raw}"
+    else:
+        raise SystemExit(f"--scatter-color-field {raw!r} is not TEMPERATURE or a known species "
+                          f"(valid: TEMPERATURE, {', '.join(field_label(f) for f in SPECIES)})")
+    color_label = field_label(color_field)
 
     sage_dir = os.path.abspath(args.sage_dir)
     out_dir = os.path.abspath(args.out_dir) if args.out_dir else os.path.join(default_base, f"comparison_{axis}0_slice")
@@ -264,6 +285,7 @@ def main():
             n_pick = min(args.scatter_cells, mask.sum())
             pick = rng.choice(mask.sum(), size=n_pick, replace=False)
             t_sage_pick = sv_by_field["TEMPERATURE"][pick]
+            color_pick = sv_by_field[color_field][pick]
 
         aligned_by_model = {}
         for name, files in model_files.items():
@@ -325,10 +347,10 @@ def main():
                     y_sum_pick += aligned[sp][mask][pick]
                 e_t = 100.0 * np.abs(t_model_pick - t_sage_pick) / t_sage_pick
                 e_sigma = np.abs(y_sum_pick - 1.0)
-                for e_t_i, e_sigma_i, t_i in zip(e_t, e_sigma, t_sage_pick):
+                for e_t_i, e_sigma_i, c_i in zip(e_t, e_sigma, color_pick):
                     scatter_records.append(
                         dict(model=name, timestep=i + 1, time=t_s,
-                             e_T=float(e_t_i), e_Sigma=float(e_sigma_i), T_sage=float(t_i))
+                             e_T=float(e_t_i), e_Sigma=float(e_sigma_i), color_value=float(c_i))
                     )
 
         if i == n_steps - 1:
@@ -349,7 +371,7 @@ def main():
     df_flame = pd.DataFrame.from_records(flame_records)
     df_flame.to_csv(os.path.join(out_dir, flame_name), index=False)
 
-    scatter_name = f"mass_conservation_{axis}0_slice.csv"
+    scatter_name = f"mass_conservation_{axis}0_slice_by_{color_label}.csv"
     df_scatter = pd.DataFrame.from_records(scatter_records)
     df_scatter.to_csv(os.path.join(out_dir, scatter_name), index=False)
 
@@ -500,29 +522,33 @@ def main():
     plt.close(fig)
 
     # --- e_Sigma (mass-fraction-sum conservation error) vs e_T (temperature error), per model,
-    # colored by SAGE temperature -- same diagnostic as Fig. 11/12 of Mehl & Aubagnac-Karkar,
-    # Phys. Fluids 35, 067115 (2023), applied a posteriori to this simulation's slice states.
+    # colored by --scatter-color-field (SAGE temperature by default, or a species mass fraction
+    # as a progress-variable-style coloring) -- same diagnostic as Fig. 11/12 of Mehl &
+    # Aubagnac-Karkar, Phys. Fluids 35, 067115 (2023), applied a posteriori to this simulation's
+    # slice states.
     model_names_all = [n for n, _ in models]
     n_m = len(model_names_all)
     fig, axes = plt.subplots(1, n_m, figsize=(5.5 * n_m, 5), squeeze=False)
     axes = axes[0]
+    color_bar_label = "SAGE T [K]" if color_field == "TEMPERATURE" else f"SAGE Y_{color_label} [-]"
     for ax, name in zip(axes, model_names_all):
         sub = df_scatter[df_scatter["model"] == name]
-        sc = ax.scatter(sub["e_T"], sub["e_Sigma"], c=sub["T_sage"], cmap="inferno", s=4, alpha=0.5)
+        sc = ax.scatter(sub["e_T"], sub["e_Sigma"], c=sub["color_value"], cmap="inferno", s=4, alpha=0.5)
         ax.set_yscale("log")
         ax.set_xlabel(r"$e_T$ [%]")
         ax.set_ylabel(r"$e_\Sigma = |\sum_k Y_k - 1|$")
         ax.set_title(name)
-        plt.colorbar(sc, ax=ax, label="SAGE T [K]")
-    fig.suptitle(f"Mass-conservation error vs temperature error, {axis}=0 slice "
+        plt.colorbar(sc, ax=ax, label=color_bar_label)
+    fig.suptitle(f"Mass-conservation error vs temperature error, {axis}=0 slice, colored by {color_label} "
                  f"(every {args.scatter_stride}th timestep, {args.scatter_cells} cells/timestep)")
     fig.tight_layout()
-    fig.savefig(os.path.join(fig_dir, "mass_conservation_scatter.png"), dpi=150)
+    scatter_fig_name = f"mass_conservation_scatter_by_{color_label}.png"
+    fig.savefig(os.path.join(fig_dir, scatter_fig_name), dpi=150)
     plt.close(fig)
 
     print(f"\nWrote {len(FIELDS)} final-slice figures + {len(FIELDS)} error-vs-time figures "
           f"(x2, unweighted + mass-weighted) + {len(FIELDS)} value-vs-time figures "
-          f"+ flame_position_vs_time.png + mass_conservation_scatter.png to {fig_dir}")
+          f"+ flame_position_vs_time.png + {scatter_fig_name} to {fig_dir}")
     print(f"Wrote stats to {os.path.join(out_dir, stats_name)}, {os.path.join(out_dir, stats_agg_name)}, "
           f"{os.path.join(out_dir, values_name)}, {os.path.join(out_dir, flame_name)} "
           f"and {os.path.join(out_dir, scatter_name)}")
