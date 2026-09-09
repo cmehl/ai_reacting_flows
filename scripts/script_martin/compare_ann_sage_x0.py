@@ -30,19 +30,22 @@ next to the SAGE/ANN ``output/`` dirs):
                                            --flame-axis) of cells within --flame-halfwidth of --flame-tref,
                                            a simple flame-front proxy -- reveals a spatial lag/lead of the
                                            accelerated runs' flame relative to SAGE
-    mass_conservation_<axis>0_slice_by_<color>.csv - per-model, sampled-cell (every --scatter-stride-th
-                                           timestep, --scatter-cells random cells) e_T (Eq. 13 of Mehl &
+    mass_conservation_<axis>0_slice_by_<color>.csv - per-model, per-cell e_T (Eq. 13 of Mehl &
                                            Aubagnac-Karkar, Phys. Fluids 2023) vs e_Sigma = |sum_k Y_k - 1|
                                            (Eq. 10, ibid., the model's own mass-fraction-sum conservation
                                            violation) vs a coloring field (--scatter-color-field, default
-                                           TEMPERATURE; <color> in the filename is that field's label)
+                                           TEMPERATURE; <color> in the filename is that field's label).
+                                           Default is the FULL database (every timestep, every slice
+                                           cell) -- --scatter-stride/--scatter-cells subsample if needed;
+                                           this file can get large (tens of millions of rows) at full scale
     figs/error_vs_time_<field>.png      - RMSE / relative-RMSE vs time, one per field, all models overlaid
     figs/mass_weighted/error_vs_time_<field>.png - same, mass-weighted RMSE/relative-RMSE
     figs/value_vs_time_<field>.png      - raw mean/max value vs time, SAGE + every model on the same axes
     figs/<field>.png                    - final-timestep slice plot: SAGE, each model, each model's error vs SAGE
     figs/flame_position_vs_time.png     - flame-front position vs time (top) and offset from SAGE (bottom)
-    figs/mass_conservation_scatter_by_<color>.png - e_Sigma vs e_T scatter per model, colored by
-                                           --scatter-color-field (SAGE temperature by default, or a
+    figs/mass_conservation_scatter_by_<color>.png - e_Sigma vs e_T hexbin per model (density-aware,
+                                           handles the full database), each hexagon colored by the mean
+                                           of --scatter-color-field (SAGE temperature by default, or a
                                            species mass fraction as a progress-variable-style coloring)
 
 Usage:
@@ -167,11 +170,17 @@ def main():
     parser.add_argument("--flame-halfwidth", type=float, default=150.0,
                          help="Half-width [K] of the |T - flame-tref| band used for the flame-front "
                               "centroid (default: 150)")
-    parser.add_argument("--scatter-stride", type=int, default=20,
-                         help="Sample the e_Sigma-vs-e_T scatter every Nth timestep (default: 20)")
-    parser.add_argument("--scatter-cells", type=int, default=3000,
-                         help="Random cells sampled per included timestep for the scatter (default: 3000)")
-    parser.add_argument("--scatter-seed", type=int, default=0, help="RNG seed for scatter cell sampling")
+    parser.add_argument("--scatter-stride", type=int, default=1,
+                         help="Include the e_Sigma-vs-e_T scatter every Nth timestep (default: 1 -- "
+                              "every timestep, i.e. the full database; raise this to subsample)")
+    parser.add_argument("--scatter-cells", type=int, default=10**9,
+                         help="Cap on cells included per timestep for the scatter (default: effectively "
+                              "unbounded, i.e. every cell in the slice -- lower this to subsample). The "
+                              "figure is rendered as a hexbin (density-aware), so the full database is "
+                              "the intended default -- a raw per-point scatter would oversaturate visually "
+                              "and be slow to render at this scale")
+    parser.add_argument("--scatter-seed", type=int, default=0,
+                         help="RNG seed for scatter cell sampling (only matters when subsampling)")
     parser.add_argument("--scatter-color-field", default="TEMPERATURE",
                          help="SAGE field the e_Sigma-vs-e_T scatter is colored by -- 'TEMPERATURE' "
                               "(default) or a species label/name (e.g. H2O, MASSFRAC_H2O) to use as a "
@@ -244,7 +253,10 @@ def main():
     records = []
     value_records = []
     flame_records = []
-    scatter_records = []
+    # Per-model lists of per-timestep numpy arrays (not per-cell dicts -- at full-database
+    # scale, up to ~n_steps * n_slice_cells points per model, a Python dict-per-point would be
+    # far too slow/memory-heavy to build; np.concatenate at the end is vectorized and cheap).
+    scatter_arrays = {name: dict(e_T=[], e_Sigma=[], color_value=[]) for name, _ in models}
     last_slice = None
     load_fields = FIELDS + EXTRA_FIELDS
 
@@ -347,11 +359,10 @@ def main():
                     y_sum_pick += aligned[sp][mask][pick]
                 e_t = 100.0 * np.abs(t_model_pick - t_sage_pick) / t_sage_pick
                 e_sigma = np.abs(y_sum_pick - 1.0)
-                for e_t_i, e_sigma_i, c_i in zip(e_t, e_sigma, color_pick):
-                    scatter_records.append(
-                        dict(model=name, timestep=i + 1, time=t_s,
-                             e_T=float(e_t_i), e_Sigma=float(e_sigma_i), color_value=float(c_i))
-                    )
+                sa = scatter_arrays[name]
+                sa["e_T"].append(e_t.astype(np.float32))
+                sa["e_Sigma"].append(e_sigma.astype(np.float32))
+                sa["color_value"].append(color_pick.astype(np.float32))
 
         if i == n_steps - 1:
             last_slice = dict(
@@ -371,8 +382,26 @@ def main():
     df_flame = pd.DataFrame.from_records(flame_records)
     df_flame.to_csv(os.path.join(out_dir, flame_name), index=False)
 
+    # Concatenate each model's per-timestep arrays once (vectorized) rather than building a
+    # per-point DataFrame incrementally -- at full-database scale (default: every timestep,
+    # every slice cell) this is up to ~n_steps * n_slice_cells rows per model.
+    scatter_frames = []
+    for name, _ in models:
+        sa = scatter_arrays[name]
+        if not sa["e_T"]:
+            continue
+        scatter_frames.append(pd.DataFrame({
+            "model": name,
+            "e_T": np.concatenate(sa["e_T"]),
+            "e_Sigma": np.concatenate(sa["e_Sigma"]),
+            "color_value": np.concatenate(sa["color_value"]),
+        }))
+    df_scatter = pd.concat(scatter_frames, ignore_index=True) if scatter_frames else pd.DataFrame(
+        columns=["model", "e_T", "e_Sigma", "color_value"])
+    n_scatter_pts = len(df_scatter)
     scatter_name = f"mass_conservation_{axis}0_slice_by_{color_label}.csv"
-    df_scatter = pd.DataFrame.from_records(scatter_records)
+    print(f"Mass-conservation scatter: {n_scatter_pts} points total "
+          f"({n_scatter_pts // max(len(models), 1)} per model)", flush=True)
     df_scatter.to_csv(os.path.join(out_dir, scatter_name), index=False)
 
     agg = (
@@ -531,16 +560,24 @@ def main():
     fig, axes = plt.subplots(1, n_m, figsize=(5.5 * n_m, 5), squeeze=False)
     axes = axes[0]
     color_bar_label = "SAGE T [K]" if color_field == "TEMPERATURE" else f"SAGE Y_{color_label} [-]"
+    # Rendered as a hexbin, not a raw scatter: at the (default) full-database scale, a per-point
+    # scatter would both oversaturate visually (dense regions all look the same solid color
+    # regardless of whether they hold 10 or 10,000 points) and be slow to draw/save. Each hexagon
+    # is colored by the MEAN of color_field over the points that fall in it (reduce_C_function) --
+    # hex count/density is implicit in how populated the plot looks, not directly the color.
+    ex_floor = 1e-300  # avoid log(0) if any e_Sigma sample is an exact zero
     for ax, name in zip(axes, model_names_all):
         sub = df_scatter[df_scatter["model"] == name]
-        sc = ax.scatter(sub["e_T"], sub["e_Sigma"], c=sub["color_value"], cmap="inferno", s=4, alpha=0.5)
-        ax.set_yscale("log")
+        e_sigma = np.maximum(sub["e_Sigma"].to_numpy(), ex_floor)
+        hb = ax.hexbin(sub["e_T"], e_sigma, C=sub["color_value"].to_numpy(),
+                        reduce_C_function=np.mean, gridsize=60, cmap="inferno",
+                        xscale="linear", yscale="log", mincnt=1)
         ax.set_xlabel(r"$e_T$ [%]")
         ax.set_ylabel(r"$e_\Sigma = |\sum_k Y_k - 1|$")
-        ax.set_title(name)
-        plt.colorbar(sc, ax=ax, label=color_bar_label)
-    fig.suptitle(f"Mass-conservation error vs temperature error, {axis}=0 slice, colored by {color_label} "
-                 f"(every {args.scatter_stride}th timestep, {args.scatter_cells} cells/timestep)")
+        ax.set_title(f"{name}  (n={len(sub)})")
+        plt.colorbar(hb, ax=ax, label=f"mean {color_bar_label} per bin")
+    fig.suptitle(f"Mass-conservation error vs temperature error, {axis}=0 slice, colored by mean {color_label} "
+                 f"(hexbin, {n_scatter_pts} points total)")
     fig.tight_layout()
     scatter_fig_name = f"mass_conservation_scatter_by_{color_label}.png"
     fig.savefig(os.path.join(fig_dir, scatter_fig_name), dpi=150)
