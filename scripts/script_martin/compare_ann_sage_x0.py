@@ -565,7 +565,11 @@ def main():
     # regardless of whether they hold 10 or 10,000 points) and be slow to draw/save. Each hexagon
     # is colored by the MEAN of color_field over the points that fall in it (reduce_C_function) --
     # hex count/density is implicit in how populated the plot looks, not directly the color.
-    ex_floor = 1e-300  # avoid log(0) if any e_Sigma sample is an exact zero
+    # Avoid log(0) if any e_Sigma sample is an exact zero. Must stay well above float32's usable
+    # range (~1.18e-38 for normals) since the scatter arrays are stored as float32 -- a floor like
+    # 1e-300 silently underflows to exactly 0.0 there, defeating the guard. 1e-20 is still far
+    # below any real e_Sigma value seen in practice (~1e-8 to 1e-4).
+    ex_floor = 1e-20
     for ax, name in zip(axes, model_names_all):
         sub = df_scatter[df_scatter["model"] == name]
         e_sigma = np.maximum(sub["e_Sigma"].to_numpy(), ex_floor)
