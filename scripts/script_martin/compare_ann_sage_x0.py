@@ -87,13 +87,13 @@ EXTRA_FIELDS = ["DENSITY", "VOLUME"]
 
 # Which coordinate is held ~constant for each slice axis, and which two free
 # coordinates go on the plot's horizontal/vertical axes (index into the
-# [X, Y, Z] coords array, a +1/-1 sign, and the axis label). X-slice keeps
-# the plot's existing (Y, Z) orientation; Y-slice is rotated so the free
-# coordinates (X, Z) are plotted as (-Z horizontal, X vertical).
+# [X, Y, Z] coords array, a +1/-1 sign, and the axis label). Rotated 90
+# degrees counterclockwise from the "natural" (h, v) = (first free coord,
+# second free coord) orientation: new_h = -old_v, new_v = old_h.
 SLICE_AXES = {
-    "X": dict(idx=0, h=(1, 1, "Y [m]"), v=(2, 1, "Z [m]")),
-    "Y": dict(idx=1, h=(2, -1, "-Z [m]"), v=(0, 1, "X [m]")),
-    "Z": dict(idx=2, h=(0, 1, "X [m]"), v=(1, 1, "Y [m]")),
+    "X": dict(idx=0, h=(2, -1, "-Z [m]"), v=(1, 1, "Y [m]")),
+    "Y": dict(idx=1, h=(0, -1, "-X [m]"), v=(2, -1, "-Z [m]")),
+    "Z": dict(idx=2, h=(1, -1, "-Y [m]"), v=(0, 1, "X [m]")),
 }
 
 # Consistent color per model across figures; extra models beyond this list
