@@ -57,11 +57,16 @@ class NN_manager():
         database_params = dtb_processing_params["database_params"]
         dtb_type = database_params["database_type"]
         self.dt_var = database_params["dt_var"]
-        
+        # Multi-step rollout: dataset carries Y_train_multi/Y_val_multi +
+        # T_train_multi/T_val_multi (see LearningDatabase). Mutually exclusive
+        # with dt_var, same as on the database-processing side.
+        self.rollout = database_params.get("rollout", False)
+
         data_processing = dtb_processing_params["data_processing"]
         self.remove_N2 = not data_processing["with_N_chemistry"]
         self.log_transform_X = data_processing["log_transform_X"]
         self.log_transform_Y = data_processing["log_transform_Y"]
+        self.threshold = data_processing["threshold"]
         self.lambda_bct = data_processing.get("lambda_bct", 0.1)
         self.output_omegas = data_processing["output_omegas"]
         # General list of species for which input/output log/BCT should be
@@ -159,6 +164,8 @@ class NN_manager():
             grp0 = h5file_r["CLUSTER_0"]
             self.X_cols_all = grp0['X_train'].attrs['cols']
             self.Y_cols_all = grp0['Y_train'].attrs['cols']
+            if self.rollout:
+                self.nb_steps = int(grp0['Y_train_multi'].attrs['steps'][-1])
 
         print("CLUSTERING:")
         print(f">> Number of clusters is: {self.nb_clusters}")
@@ -341,14 +348,88 @@ class NN_manager():
                 y[:, j] = (y_t[:, j] * self.lambda_bct + 1.0) ** (1.0 / self.lambda_bct)
 
         return y
-    
 
-    def train_model(self, i_cluster, model, loss_fn, optimizer, scheduler, X_train, X_val, Y_train, Y_val, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std):
+
+    def _forward_scale_X_species(self, phys_species, mean, std, cols=None):
+        """Physical -> scaled species, the exact inverse of _inverse_scale's
+        clip/log/BCT + standardize, for reconstructing a rollout step's
+        prediction into the next step's model input. Mirrors
+        LearningDatabase.process_database's own forward transform of X's
+        species columns so the round-trip is consistent with how the
+        training data itself was built.
+        """
+        y = phys_species
+
+        if self.log_transform_X > 0 and cols is not None:
+            y = phys_species.clone()
+            for j, name in enumerate(cols):
+                base = str(name)
+                if base.endswith('_X') or base.endswith('_Y'):
+                    base = base[:-2]
+                if base in self.log_excluded_species:
+                    continue
+                # Read from the untouched source (phys_species), write to the
+                # clone (y) -- same safe pattern as _inverse_scale. Reading
+                # back from y itself here would break autograd: any in-place
+                # write to y (even at a different column, in a later loop
+                # iteration) bumps y's version counter and invalidates the
+                # view this column's clamp/log saved for its own backward.
+                clipped = torch.clamp(phys_species[:, j], min=self.threshold)
+                if self.log_transform_X == 1:
+                    y[:, j] = torch.log(clipped)
+                elif self.log_transform_X == 2:
+                    y[:, j] = (clipped ** self.lambda_bct - 1.0) / self.lambda_bct
+
+        return (y - mean) / (std + 1e-7)
+
+
+    def _reconstruct_yk_abs(self, X_species_scaled, y_pred_scaled, Xscaler_mean_sp, Xscaler_std_sp, Yscaler_mean, Yscaler_std):
+        """Physical (linear, absolute) species mass fractions from a scaled
+        input's species part and the model's scaled prediction. Same math as
+        the mass/element-conservation reconstruction in train_model's
+        validation block (kept separate rather than refactored, to leave
+        that already-tested code path untouched), reused here so a rollout
+        step's prediction can be fed back in as the next step's input.
+        """
+
+        yval_in = self._inverse_scale(X_species_scaled, Xscaler_mean_sp, Xscaler_std_sp, self.log_transform_X, cols=self.X_cols_all[1:])
+
+        if self.output_omegas and self.log_transform_Y > 0:
+            x_transformed = Xscaler_mean_sp + (Xscaler_std_sp + 1e-7) * X_species_scaled
+            omega_transformed = Yscaler_mean + (Yscaler_std + 1e-7) * y_pred_scaled
+            combined = x_transformed + omega_transformed
+
+            yk_abs = combined.clone()
+            for j, name in enumerate(self.Y_cols_all):
+                base = str(name)
+                if base.endswith('_Y'):
+                    base = base[:-2]
+                if base in self.log_excluded_species:
+                    continue
+                if self.log_transform_Y == 1:
+                    yk_abs[:, j] = torch.exp(combined[:, j])
+                elif self.log_transform_Y == 2:
+                    yk_abs[:, j] = (combined[:, j] * self.lambda_bct + 1.0) ** (1.0 / self.lambda_bct)
+        else:
+            yk = self._inverse_scale(y_pred_scaled, Yscaler_mean, Yscaler_std, self.log_transform_Y, cols=self.Y_cols_all)
+            if self.output_omegas:
+                yk_abs = yval_in + yk
+            else:
+                yk_abs = yk
+
+        return yk_abs
+
+
+    def train_model(self, i_cluster, model, loss_fn, optimizer, scheduler, X_train, X_val, Y_train, Y_val, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std, Ymulti_train=None, Tmulti_train=None):
 
         X_train = torch.tensor(X_train, dtype=torch.float64)
         Y_train = torch.tensor(Y_train, dtype=torch.float64)
         X_val = torch.tensor(X_val, dtype=torch.float64)
         Y_val = torch.tensor(Y_val, dtype=torch.float64)
+
+        if self.rollout:
+            Ymulti_train = torch.tensor(Ymulti_train, dtype=torch.float64).to(self.device)
+            Tmulti_train = torch.tensor(Tmulti_train, dtype=torch.float64).to(self.device)
         A_element = torch.tensor(self.A_element, dtype=torch.float64)
         Xscaler_mean = torch.from_numpy(Xscaler_mean).to(torch.float64)
         Xscaler_std = torch.from_numpy(Xscaler_std).to(torch.float64)
@@ -421,6 +502,8 @@ class NN_manager():
             # Shuffling training data before each epoch
             perm = torch.randperm(len(X_train), device=self.device)
             X_train, Y_train = X_train[perm], Y_train[perm]
+            if self.rollout:
+                Ymulti_train, Tmulti_train = Ymulti_train[perm], Tmulti_train[perm]
 
             # Training parameters
             epoch_loss = 0.0
@@ -430,9 +513,45 @@ class NN_manager():
             for i in range(0, len(X_train), self.batch_size):
 
                 Xbatch = X_train[i:i+self.batch_size]
-                y_pred = model(Xbatch)
                 ybatch = Y_train[i:i+self.batch_size]
-                loss = loss_fn(y_pred, ybatch)
+
+                if self.rollout:
+                    # Autoregressive unroll over nb_steps: predict, reconstruct
+                    # the absolute physical state, re-scale it as the next
+                    # step's X (species from the model's own prediction,
+                    # Temperature teacher-forced from Tmulti_batch since the
+                    # model never predicts it -- see LearningDatabase's
+                    # T_train_multi), predict again, and backprop through the
+                    # whole chain. Loss is the mean over steps; step 1's
+                    # prediction is what per-species tracking below uses, so
+                    # its semantics stay comparable to the non-rollout path.
+                    Ymulti_batch = Ymulti_train[i:i+self.batch_size]
+                    Tmulti_batch = Tmulti_train[i:i+self.batch_size]
+
+                    current_X = Xbatch
+                    loss = 0.0
+                    for k in range(self.nb_steps):
+                        y_pred_k = model(current_X)
+                        loss = loss + loss_fn(y_pred_k, Ymulti_batch[:, k, :])
+                        if k == 0:
+                            y_pred = y_pred_k
+                        if k < self.nb_steps - 1:
+                            X_species_scaled = current_X[:, 1:]
+                            yk_abs = self._reconstruct_yk_abs(
+                                X_species_scaled, y_pred_k,
+                                Xscaler_mean[1:], Xscaler_std[1:],
+                                Yscaler_mean, Yscaler_std,
+                            )
+                            species_scaled_next = self._forward_scale_X_species(
+                                yk_abs, Xscaler_mean[1:], Xscaler_std[1:], cols=self.X_cols_all[1:]
+                            )
+                            T_scaled_next = (Tmulti_batch[:, k] - Xscaler_mean[0]) / (Xscaler_std[0] + 1e-7)
+                            current_X = torch.cat([T_scaled_next.unsqueeze(1), species_scaled_next], dim=1)
+                    loss = loss / self.nb_steps
+                else:
+                    y_pred = model(Xbatch)
+                    loss = loss_fn(y_pred, ybatch)
+
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
@@ -592,7 +711,7 @@ class NN_manager():
         for i_cluster in range(self.nb_clusters):
 
             # Reading training and validation data
-            X_train, X_val, Y_train, Y_val = self.read_training_data(i_cluster)
+            X_train, X_val, Y_train, Y_val, Ymulti_train, Tmulti_train = self.read_training_data(i_cluster)
 
             # Read scalers
             Xscaler_mean, Xscaler_var, Yscaler_mean, Yscaler_var = self.get_scalers_stats(i_cluster)
@@ -637,7 +756,7 @@ class NN_manager():
                 raise ValueError("Only scheduler implemented yet is ExpLR, ReduceLROnPlateau or None")
             
             # Perform training
-            epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements, loss_per_species_list, val_loss_per_species_list = self.train_model(i_cluster, model, loss_fn, optimizer, scheduler, X_train, X_val, Y_train, Y_val, Xscaler_mean, np.sqrt(Xscaler_var), Yscaler_mean, np.sqrt(Yscaler_var))
+            epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements, loss_per_species_list, val_loss_per_species_list = self.train_model(i_cluster, model, loss_fn, optimizer, scheduler, X_train, X_val, Y_train, Y_val, Xscaler_mean, np.sqrt(Xscaler_var), Yscaler_mean, np.sqrt(Yscaler_var), Ymulti_train, Tmulti_train)
 
             # Plot training monitoring data (loss, conservation,etc...)
             self.plot_losses_conservation(i_cluster, epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements)
@@ -795,7 +914,10 @@ class NN_manager():
             X_val   = grp['X_val'][:]
             Y_val   = grp['Y_val'][:]
 
-        return X_train, X_val, Y_train, Y_val
+            Ymulti_train = grp['Y_train_multi'][:] if self.rollout else None
+            Tmulti_train = grp['T_train_multi'][:] if self.rollout else None
+
+        return X_train, X_val, Y_train, Y_val, Ymulti_train, Tmulti_train
     
     def get_scalers_stats(self, i_cluster):
 

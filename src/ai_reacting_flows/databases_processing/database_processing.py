@@ -1066,6 +1066,16 @@ class LearningDatabase(object):
             # Kept as a self-contained block (not folded into Y_p's own logic
             # above) so single-step processing is untouched either way.
             if self.rollout:
+                # True (physical, unscaled) Temperature at every step, kept
+                # aside from the species-only Ymulti_p below. The network
+                # never predicts Temperature (Y_cols excludes it, same as the
+                # single-step path), so a rollout loop that feeds its own
+                # prediction back in still needs the REAL next-step
+                # Temperature to build a valid next input -- exactly like
+                # real CFD deployment, where T comes from the flow solver's
+                # energy equation, never from the reaction-step network.
+                T_multi_p = Ymulti_p_raw[:, :, list(self.col_names_Y).index("Temperature")].astype(np.float64)
+
                 col_idx_Ymulti = [list(self.col_names_Y).index(c) for c in Y_cols]
                 Ymulti_p = Ymulti_p_raw[:, :, col_idx_Ymulti].astype(np.float64)
 
@@ -1111,11 +1121,12 @@ class LearningDatabase(object):
 
             # Train validation split
             if self.rollout:
-                # Ymulti_p is split with the SAME shuffle/indices as X_p/Y_p (single
-                # train_test_split call sharing random_state) so row k of
-                # Ymulti_train/Ymulti_val lines up exactly with row k of X_train/Y_train.
-                X_train, X_val, Y_train, Y_val, Ymulti_train, Ymulti_val = train_test_split(
-                    X_p, Y_p, Ymulti_p, train_size=self.train_set_size, random_state=seed
+                # Ymulti_p/T_multi_p are split with the SAME shuffle/indices as
+                # X_p/Y_p (single train_test_split call sharing random_state) so
+                # row k of Ymulti_train/Tmulti_train lines up exactly with row k
+                # of X_train/Y_train.
+                X_train, X_val, Y_train, Y_val, Ymulti_train, Ymulti_val, Tmulti_train, Tmulti_val = train_test_split(
+                    X_p, Y_p, Ymulti_p, T_multi_p, train_size=self.train_set_size, random_state=seed
                 )
             else:
                 X_train, X_val, Y_train, Y_val = train_test_split(X_p, Y_p, train_size=self.train_set_size, random_state=seed)
@@ -1189,6 +1200,11 @@ class LearningDatabase(object):
                 dset_Ymulti_val = grp.create_dataset('Y_val_multi', data = Ymulti_val)
                 dset_Ymulti_val.attrs['cols'] = np.array(Y_val.columns, dtype=object)
                 dset_Ymulti_val.attrs['steps'] = np.arange(1, self.nb_steps + 1)
+                #
+                # Physical, unscaled Temperature per step -- teacher-forcing
+                # signal for a rollout training loop (see note above).
+                grp.create_dataset('T_train_multi', data = Tmulti_train)
+                grp.create_dataset('T_val_multi', data = Tmulti_val)
             #
             dset_X_val = grp.create_dataset('X_val', data = X_val)
             dset_X_val.attrs['cols'] = np.array(X_val.columns, dtype=object)
