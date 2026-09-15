@@ -57,6 +57,12 @@ class LearningDatabase(object):
         self.database_name = database_params["database_name"]
         self.input_dtb_file = database_params["dtb_file"]
         self.dt_var = database_params['dt_var']
+        # Multi-step rollout database: raw h5 carries a Y_multi[N, nb_steps, n_var]
+        # dataset (chained t+dt, t+2dt, ... ground truth) alongside the usual X/Y.
+        # Mutually exclusive with dt_var (variable-dt databases have no rollout chain).
+        self.rollout = database_params.get("rollout", False)
+        if self.rollout and self.dt_var:
+            sys.exit("ERROR: 'rollout' and 'dt_var' cannot both be enabled.")
         self.detailed_mechanism  = database_params["mech_file"]
         self.fuel  = database_params["fuel"]
 
@@ -181,6 +187,32 @@ class LearningDatabase(object):
             self.Y = np.concatenate(list_Y_arrays, axis=0)
             self.dt_array = np.concatenate(list_dt_arrays, axis=0)
             print("End of concatenation ! \n")
+        elif self.rollout:
+            n_rows_per_group = [h5file_r[f"ITERATION_{i:05d}/X"].shape[0] for i in range(self.nb_solutions)]
+            total_rows = sum(n_rows_per_group)
+            n_cols_X = len(self.col_names_X)
+            n_cols_Y = len(self.col_names_Y)
+            self.nb_steps = h5file_r["ITERATION_00000/Y_multi"].shape[1]
+
+            X_arr = np.empty((total_rows, n_cols_X), dtype=np.float64)
+            Y_arr = np.empty((total_rows, n_cols_Y), dtype=np.float64)
+            Ymulti_arr = np.empty((total_rows, self.nb_steps, n_cols_Y), dtype=np.float64)
+
+            offset = 0
+            for i in range(self.nb_solutions):
+                if i % 100 == 0:
+                    print(f"Opening solution: {i} / {self.nb_solutions}")
+                n = n_rows_per_group[i]
+                X_arr[offset:offset + n] = h5file_r.get(f"ITERATION_{i:05d}/X")[()]
+                Y_arr[offset:offset + n] = h5file_r.get(f"ITERATION_{i:05d}/Y")[()]
+                Ymulti_arr[offset:offset + n] = h5file_r.get(f"ITERATION_{i:05d}/Y_multi")[()]
+                offset += n
+            h5file_r.close()
+
+            self.X = pd.DataFrame(data=X_arr, columns=self.col_names_X, copy=False)
+            self.Y = pd.DataFrame(data=Y_arr, columns=self.col_names_Y, copy=False)
+            self.Y_multi = Ymulti_arr
+            print("End of load ! \n")
         else:
             n_rows_per_group = [h5file_r[f"ITERATION_{i:05d}/X"].shape[0] for i in range(self.nb_solutions)]
             total_rows = sum(n_rows_per_group)
@@ -259,6 +291,9 @@ class LearningDatabase(object):
             self.dt_array = self.dt_array[is_above_temp.values]
         else:
             self.Y = self.Y[is_above_temp].reset_index(drop=True)
+
+        if self.rollout:
+            self.Y_multi = self.Y_multi[is_above_temp.values]
 
 
     def clusterize_dataset(self, c_bounds=None):
@@ -671,6 +706,8 @@ class LearningDatabase(object):
             self.Y = self.Y.iloc[choice]
             self.Y = self.Y.reset_index(drop=True)
 
+        if self.rollout:
+            self.Y_multi = self.Y_multi[choice]
 
         self.is_resampled = True
 
@@ -758,6 +795,9 @@ class LearningDatabase(object):
             self.dt_array = self.dt_array[selected]
         else:
             self.Y = self.Y.iloc[selected].reset_index(drop=True)
+
+        if self.rollout:
+            self.Y_multi = self.Y_multi[selected]
 
         self.is_resampled = True
 
@@ -858,6 +898,9 @@ class LearningDatabase(object):
         else:
             self.Y = self.Y.iloc[selected].reset_index(drop=True)
 
+        if self.rollout:
+            self.Y_multi = self.Y_multi[selected]
+
         self.is_resampled = True
 
         if plot_distrib:
@@ -922,6 +965,12 @@ class LearningDatabase(object):
                 Y_p = Y.loc[X["cluster"]==i_cluster, :]
             else:
                 Y_p = Y[X["cluster"]==i_cluster]
+
+            if self.rollout:
+                # self.Y_multi's row order matches X's (both derived from self.X/self.Y_multi
+                # in lockstep through every threshold/resampling step above), so the same
+                # boolean mask isolates the same rows before X_p's reset_index below.
+                Ymulti_p_raw = self.Y_multi[(X["cluster"]==i_cluster).values]
 
             # Reset indexes
             X_p = X_p.reset_index(drop=True)
@@ -1011,6 +1060,46 @@ class LearningDatabase(object):
                     else:
                         Y_p = Y_p.subtract(X_p.loc[:,X_cols[1:]].reset_index(drop=True))
 
+            # Multi-step rollout ground truth: same column selection / clip / log
+            # transform as Y_p above, applied independently to every step of
+            # Ymulti_p_raw (still in raw self.col_names_Y order at this point).
+            # Kept as a self-contained block (not folded into Y_p's own logic
+            # above) so single-step processing is untouched either way.
+            if self.rollout:
+                col_idx_Ymulti = [list(self.col_names_Y).index(c) for c in Y_cols]
+                Ymulti_p = Ymulti_p_raw[:, :, col_idx_Ymulti].astype(np.float64)
+
+                log_idx = [Y_cols.index(c) for c in cols_to_log_Y]
+                if self.log_transform_Y==1 and log_idx:
+                    Ymulti_p[:, :, log_idx] = np.clip(Ymulti_p[:, :, log_idx], self.threshold, None)
+                    Ymulti_p[:, :, log_idx] = np.log(Ymulti_p[:, :, log_idx])
+                elif self.log_transform_Y==2 and log_idx:
+                    Ymulti_p[:, :, log_idx] = (Ymulti_p[:, :, log_idx]**self.lambda_bct - 1.0)/self.lambda_bct
+
+                # Each step's target is the physical increment from the PREVIOUS
+                # step's true state (step 1's baseline is X, matching Y_p above;
+                # step k>1's baseline is step k-1's own absolute, transformed
+                # state) -- not a difference from X every time. This is what an
+                # autoregressive rollout needs: at unroll step k the model is fed
+                # (its own prediction approximating) step k-1's state and must
+                # predict the increment to step k, regardless of which step that is.
+                if self.output_omegas:
+                    if self.log_transform_X>0 and self.log_transform_Y==0:
+                        baseline0 = X_p_save[Y_cols].values
+                    else:
+                        baseline0 = X_p[Y_cols].values
+
+                    Ymulti_omega = np.empty_like(Ymulti_p)
+                    Ymulti_omega[:, 0, :] = Ymulti_p[:, 0, :] - baseline0
+                    for j in range(1, self.nb_steps):
+                        Ymulti_omega[:, j, :] = Ymulti_p[:, j, :] - Ymulti_p[:, j - 1, :]
+                    Ymulti_p = Ymulti_omega
+
+                if not self.with_N_chemistry:
+                    n2_pos = Y_cols.index("N2")
+                    keep_pos = [k for k in range(Ymulti_p.shape[2]) if k != n2_pos]
+                    Ymulti_p = Ymulti_p[:, :, keep_pos]
+
             # Renaming columns
             X_p.columns = [str(col) + '_X' for col in X_p.columns]
             Y_p.columns = [str(col) + '_Y' for col in Y_p.columns]
@@ -1021,7 +1110,15 @@ class LearningDatabase(object):
 
 
             # Train validation split
-            X_train, X_val, Y_train, Y_val = train_test_split(X_p, Y_p, train_size=self.train_set_size, random_state=seed)
+            if self.rollout:
+                # Ymulti_p is split with the SAME shuffle/indices as X_p/Y_p (single
+                # train_test_split call sharing random_state) so row k of
+                # Ymulti_train/Ymulti_val lines up exactly with row k of X_train/Y_train.
+                X_train, X_val, Y_train, Y_val, Ymulti_train, Ymulti_val = train_test_split(
+                    X_p, Y_p, Ymulti_p, train_size=self.train_set_size, random_state=seed
+                )
+            else:
+                X_train, X_val, Y_train, Y_val = train_test_split(X_p, Y_p, train_size=self.train_set_size, random_state=seed)
 
             # === SCALERS ===
             # NORMALIZING X
@@ -1031,7 +1128,7 @@ class LearningDatabase(object):
 
             X_train = pd.DataFrame(X_train_array, columns=X_train.columns, index=X_train.index)
             X_val = pd.DataFrame(X_val_array, columns=X_val.columns, index=X_val.index)
-            
+
             # NORMALIZING Y
             Yscaler = StandardScaler()
             Y_train_array = Yscaler.fit_transform(Y_train)
@@ -1039,7 +1136,16 @@ class LearningDatabase(object):
 
             Y_train = pd.DataFrame(Y_train_array, columns=Y_train.columns, index=Y_train.index)
             Y_val = pd.DataFrame(Y_val_array, columns=Y_val.columns, index=Y_val.index)
-        
+
+            # Rollout targets share Y's feature space (same species, same units
+            # at every step), so they're normalized with the SAME Yscaler fit
+            # on step 1 above -- not a separate scaler per step.
+            if self.rollout:
+                n_tr, n_st, n_ft = Ymulti_train.shape
+                n_va = Ymulti_val.shape[0]
+                Ymulti_train = Yscaler.transform(Ymulti_train.reshape(-1, n_ft)).reshape(n_tr, n_st, n_ft)
+                Ymulti_val = Yscaler.transform(Ymulti_val.reshape(-1, n_ft)).reshape(n_va, n_st, n_ft)
+
 
             # Forcing constant N2
             # n2_cte = not self.with_N_chemistry
@@ -1071,6 +1177,18 @@ class LearningDatabase(object):
             #
             dset_Y_train = grp.create_dataset('Y_train', data = Y_train)
             dset_Y_train.attrs['cols'] = np.array(Y_train.columns, dtype=object)
+            #
+            if self.rollout:
+                # Y_train/Y_val above stay step-1 only (unchanged, backward compatible
+                # with single-step NN_manager); Y_train_multi/Y_val_multi carry the
+                # full nb_steps chain for a rollout training loop to consume.
+                dset_Ymulti_train = grp.create_dataset('Y_train_multi', data = Ymulti_train)
+                dset_Ymulti_train.attrs['cols'] = np.array(Y_train.columns, dtype=object)
+                dset_Ymulti_train.attrs['steps'] = np.arange(1, self.nb_steps + 1)
+                #
+                dset_Ymulti_val = grp.create_dataset('Y_val_multi', data = Ymulti_val)
+                dset_Ymulti_val.attrs['cols'] = np.array(Y_val.columns, dtype=object)
+                dset_Ymulti_val.attrs['steps'] = np.arange(1, self.nb_steps + 1)
             #
             dset_X_val = grp.create_dataset('X_val', data = X_val)
             dset_X_val.attrs['cols'] = np.array(X_val.columns, dtype=object)
