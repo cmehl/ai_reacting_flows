@@ -171,10 +171,20 @@ def build_cache(args, models):
             sel = slice_indices(coords_s, axcfg, args.slice_halfwidth, args.slice_res)
             h_coord = h_sign * coords_s[sel, h_idx]
             v_coord = v_sign * coords_s[sel, v_idx]
+            if args.zoom is not None:
+                hmin, hmax, vmin, vmax = args.zoom
+                keep = (h_coord >= hmin) & (h_coord <= hmax) & (v_coord >= vmin) & (v_coord <= vmax)
+                assert keep.any(), (
+                    f"--zoom {args.zoom} selects no cells of the {axis}=0 slice "
+                    f"({axcfg['h'][2]} in [{h_coord.min():.3f}, {h_coord.max():.3f}], "
+                    f"{axcfg['v'][2]} in [{v_coord.min():.3f}, {v_coord.max():.3f}])"
+                )
+                sel, h_coord, v_coord = sel[keep], h_coord[keep], v_coord[keep]
             n_cells = sel.size
             print(f"  slice: {n_cells} cells, "
                   f"{axcfg['h'][2]} in [{h_coord.min():.3f}, {h_coord.max():.3f}], "
-                  f"{axcfg['v'][2]} in [{v_coord.min():.3f}, {v_coord.max():.3f}]", flush=True)
+                  f"{axcfg['v'][2]} in [{v_coord.min():.3f}, {v_coord.max():.3f}]"
+                  + (f"  (zoomed to {args.zoom})" if args.zoom is not None else ""), flush=True)
             sage = np.empty((len(FIELDS), n, n_cells), dtype=np.float32)
             model_arrays = [np.empty_like(sage) for _ in models]
         elif coords_s.shape[0] != sel_nmesh:
@@ -380,6 +390,13 @@ def main():
                         help="Override symmetric error color-scale half-range (+/- this)")
     parser.add_argument("--fields", nargs="+", default=None,
                         help="Subset of field labels to animate (e.g. Temperature NO OH); default: all")
+    parser.add_argument("--zoom", type=float, nargs=4, default=None,
+                        metavar=("H_MIN", "H_MAX", "V_MIN", "V_MAX"),
+                        help="Crop the slice to a bounding box in the plotted (h, v) coordinates "
+                             "-- the ones in --slice-axis's h/v axis labels, signs already applied "
+                             "-- before binning, e.g. a flame-region zoom. Applied at cache-build "
+                             "time, so a --cache built without --zoom cannot be reused with it "
+                             "(and vice versa): use a different --cache path per zoom setting.")
     args = parser.parse_args()
 
     out_dir = os.path.abspath(args.out_dir)
