@@ -463,24 +463,37 @@ def main():
     # --- RMSE / rel-RMSE vs time, one figure per field, all models overlaid ---
     # (also produced mass-weighted, in a separate subdir -- see below)
     def plot_error_vs_time(rmse_col, rel_col, out_subdir, title_suffix):
+        # max_abs_err (per-timestep worst single cell, not weighted -- there's
+        # no separate mass-weighted variant, "worst cell" is the same number
+        # either way) is plotted on its own log-scale axis, not stacked onto
+        # the RMSE axis: a rare blow-up's max|err| can be 2-3 orders of
+        # magnitude above the RMSE for the same timestep, which would squash
+        # RMSE to invisible near zero on a shared linear axis.
         os.makedirs(out_subdir, exist_ok=True)
         for field in FIELDS:
             label = field_label(field)
             sub_field = df[df["field"] == label]
-            fig, ax1 = plt.subplots(figsize=(7, 4.5))
+            fig, ax1 = plt.subplots(figsize=(7.5, 4.5))
             ax2 = ax1.twinx()
+            ax3 = ax1.twinx()
+            ax3.spines["right"].set_position(("outward", 55))
             for name, _ in models:
                 sub = sub_field[sub_field["model"] == name]
                 color = model_color(name)
                 ax1.plot(sub["time"], sub[rmse_col], "o-", color=color, label=f"{name} RMSE (abs)")
                 ax2.plot(sub["time"], sub[rel_col] * 100, "s--", color=color, alpha=0.6,
                           label=f"{name} relative RMSE (%)")
+                ax3.plot(sub["time"], sub["max_abs_err"], "^:", color=color, alpha=0.4,
+                          label=f"{name} max|err|")
             ax1.set_xlabel("time [s]")
             ax1.set_ylabel("RMSE (absolute)")
             ax2.set_ylabel("relative RMSE [%]")
+            ax3.set_ylabel("max|err| (absolute, log)")
+            ax3.set_yscale("log")
             lines1, labels1 = ax1.get_legend_handles_labels()
             lines2, labels2 = ax2.get_legend_handles_labels()
-            ax1.legend(lines1 + lines2, labels1 + labels2, fontsize=8, loc="best")
+            lines3, labels3 = ax3.get_legend_handles_labels()
+            ax1.legend(lines1 + lines2 + lines3, labels1 + labels2 + labels3, fontsize=8, loc="best")
             fig.suptitle(f"Error vs SAGE on {axis}=0 slice — {label}{title_suffix}")
             fig.tight_layout()
             fig.savefig(os.path.join(out_subdir, f"error_vs_time_{label}.png"), dpi=150)
