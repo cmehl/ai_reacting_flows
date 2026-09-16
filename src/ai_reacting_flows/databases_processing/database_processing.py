@@ -923,6 +923,77 @@ class LearningDatabase(object):
         print(f"    >> {100*self.X.shape[0]/n} % of the database is retained")
 
 
+    def oversample_upper_tail(self, species_list, quantile=0.95, factor=3, seed=1991, plot_distrib=False):
+        """Boost the weight of rare/extreme states of `species_list` by
+        duplicating (`factor`-1 extra copies) every row where at least one
+        of those species' mass fraction is above its own `quantile`-th
+        percentile in the current dataset.
+
+        This adds no new physical information (no extra Cantera reaction),
+        it only reweights states that are already correct but numerically
+        under-represented, so the network sees them more often during
+        training. Useful for trace radicals (H, O, OH, NO, NO2, ...) whose
+        upper tail is where the model tends to diverge from the reference
+        the most, even though the species itself is not literally absent
+        from the database.
+        """
+
+        print("--- UPPER-TAIL OVERSAMPLING ---")
+
+        n = self.X.shape[0]
+        print(f"Initial number of samples: {n}")
+
+        mask = np.zeros(n, dtype=bool)
+        for sp in species_list:
+            thresh = self.X[sp].quantile(quantile)
+            sp_mask = self.X[sp].values >= thresh
+            mask |= sp_mask
+            print(f"  {sp}: threshold(q={quantile})={thresh:.3e}, {sp_mask.sum()} samples selected")
+
+        tail_idx = np.where(mask)[0]
+        n_extra_copies = factor - 1
+
+        if len(tail_idx) == 0 or n_extra_copies <= 0:
+            print("Nothing to oversample.")
+            return
+
+        print(f"Duplicating {len(tail_idx)} upper-tail samples x{n_extra_copies} extra "
+              f"cop{'y' if n_extra_copies == 1 else 'ies'} each "
+              f"(union over {', '.join(species_list)})")
+
+        dup_idx = np.tile(tail_idx, n_extra_copies)
+
+        X_before = self.X
+
+        self.X = pd.concat([X_before, X_before.iloc[dup_idx]], ignore_index=True)
+
+        if self.dt_var:
+            self.Y = np.concatenate([self.Y, self.Y[dup_idx]], axis=0)
+            self.dt_array = np.concatenate([self.dt_array, self.dt_array[dup_idx]], axis=0)
+        else:
+            self.Y = pd.concat([self.Y, self.Y.iloc[dup_idx]], ignore_index=True)
+
+        if self.rollout:
+            self.Y_multi = np.concatenate([self.Y_multi, self.Y_multi[dup_idx]], axis=0)
+
+        self.is_resampled = True
+
+        print(f"\n Number of points after upper-tail oversampling: {self.X.shape[0]} "
+              f"(+{self.X.shape[0] - n}, +{100 * self.X.shape[0] / n - 100:.1f}%)\n")
+
+        if plot_distrib:
+            for sp in species_list:
+                plt.figure(figsize=(6, 4))
+                plt.hist(X_before[sp], bins=60, alpha=0.5, density=True, label="Before")
+                plt.hist(self.X[sp], bins=60, alpha=0.5, density=True, label="After")
+                plt.legend()
+                plt.xlabel(sp)
+                plt.ylabel("Density")
+                plt.tight_layout()
+                plt.savefig(f"oversample_tail_{sp}.png", dpi=120)
+                plt.close()
+
+
     # Database final processing
     def process_database(self, plot_distributions = False, distribution_species=[], seed = 42):
 
