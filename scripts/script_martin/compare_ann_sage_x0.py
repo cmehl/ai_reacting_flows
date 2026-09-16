@@ -87,13 +87,13 @@ EXTRA_FIELDS = ["DENSITY", "VOLUME"]
 
 # Which coordinate is held ~constant for each slice axis, and which two free
 # coordinates go on the plot's horizontal/vertical axes (index into the
-# [X, Y, Z] coords array, a +1/-1 sign, and the axis label). X-slice keeps
-# the plot's existing (Y, Z) orientation; Y-slice is rotated so the free
-# coordinates (X, Z) are plotted as (-Z horizontal, X vertical).
+# [X, Y, Z] coords array, a +1/-1 sign, and the axis label). Rotated 90
+# degrees counterclockwise from the "natural" (h, v) = (first free coord,
+# second free coord) orientation: new_h = -old_v, new_v = old_h.
 SLICE_AXES = {
-    "X": dict(idx=0, h=(1, 1, "Y [m]"), v=(2, 1, "Z [m]")),
-    "Y": dict(idx=1, h=(2, -1, "-Z [m]"), v=(0, 1, "X [m]")),
-    "Z": dict(idx=2, h=(0, 1, "X [m]"), v=(1, 1, "Y [m]")),
+    "X": dict(idx=0, h=(2, -1, "-Z [m]"), v=(1, 1, "Y [m]")),
+    "Y": dict(idx=1, h=(0, -1, "-X [m]"), v=(2, -1, "-Z [m]")),
+    "Z": dict(idx=2, h=(1, -1, "-Y [m]"), v=(0, 1, "X [m]")),
 }
 
 # Consistent color per model across figures; extra models beyond this list
@@ -134,6 +134,30 @@ def index_by_time(directory, name_re):
     return by_time
 
 
+def slice_indices(coords, axcfg, slab, res):
+    """Indices of the cells forming the <axis>=0 slice. The mesh is AMR: a fixed
+    |coord| < slab threshold either misses the coarse downstream region (too
+    thin) or stacks several refined layers upstream (too thick) -- the latter
+    also causes scatter-plot overdraw (a bad cell can be hidden behind
+    near-perfect cells drawn on top of it at the same screen pixel). Instead:
+    keep a generous slab, bucket its cells on the two in-plane coordinates at
+    resolution ``res``, and within each bucket keep the single cell closest to
+    the plane. That yields a clean one-cell-thick slice over the *whole*
+    domain at every refinement level -- identical method to
+    animate_ann_sage_hybrid.py's slice_indices, kept in sync so both tools
+    show the same geometric cut."""
+    c = coords[:, axcfg["idx"]]
+    cand = np.where(np.abs(c) < slab)[0]
+    h = coords[cand, axcfg["h"][0]]
+    v = coords[cand, axcfg["v"][0]]
+    hb = np.round(h / res).astype(np.int64)
+    vb = np.round(v / res).astype(np.int64)
+    key = hb * 4_000_003 + vb
+    order = np.argsort(np.abs(c[cand]), kind="stable")   # nearest-to-plane first
+    _, first = np.unique(key[order], return_index=True)
+    return np.sort(cand[order[first]])
+
+
 def main():
     default_base = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "..", "..",
@@ -160,8 +184,16 @@ def main():
                               "(default: comparison_<axis>0_slice next to the SAGE/ANN output/ dirs)")
     parser.add_argument("--slice-axis", choices=["X", "Y", "Z"], default="X",
                          help="Coordinate held ~constant to define the slice plane (default: X)")
-    parser.add_argument("--slice-halfwidth", type=float, default=0.001,
-                         help="Half-width [m] of the |coord| < value slab used as the <axis>=0 slice")
+    parser.add_argument("--slice-halfwidth", type=float, default=0.005,
+                         help="Half-width [m] of the |coord| < value slab pre-filter; within it only "
+                              "the cell closest to the plane is kept per --slice-res bucket, so this "
+                              "just needs to exceed the coarsest cell's half-size (it is NOT the final "
+                              "slice thickness). Matches animate_ann_sage_hybrid.py's default so both "
+                              "tools cut the same slice.")
+    parser.add_argument("--slice-res", type=float, default=0.0005,
+                         help="In-plane bucket size [m] for de-duplicating the slab down to one "
+                              "cell-thick; ~ the finest cell size (smaller keeps more upstream detail). "
+                              "Matches animate_ann_sage_hybrid.py's default.")
     parser.add_argument("--flame-axis", choices=["X", "Y", "Z"], default="Z",
                          help="Coordinate along which the flame-front centroid is tracked (default: Z, "
                               "the combustor's axial direction)")
@@ -265,16 +297,16 @@ def main():
         coords_s, data_s, t_s = load(sage_files[i], load_fields)
         tree = cKDTree(coords_s)
 
-        mask = np.abs(coords_s[:, axcfg["idx"]]) < args.slice_halfwidth
+        sel = slice_indices(coords_s, axcfg, args.slice_halfwidth, args.slice_res)
         h_idx, h_sign, _ = axcfg["h"]
         v_idx, v_sign, _ = axcfg["v"]
-        h_coord = h_sign * coords_s[mask, h_idx]
-        v_coord = v_sign * coords_s[mask, v_idx]
-        flame_coord = coords_s[mask, flame_idx]
-        cell_mass = data_s["DENSITY"][mask] * data_s["VOLUME"][mask]
-        print(f"  t={t_s:.3e}s ({i + 1}/{n_steps}): {mask.sum()} cells in {axis}=0 slice")
+        h_coord = h_sign * coords_s[sel, h_idx]
+        v_coord = v_sign * coords_s[sel, v_idx]
+        flame_coord = coords_s[sel, flame_idx]
+        cell_mass = data_s["DENSITY"][sel] * data_s["VOLUME"][sel]
+        print(f"  t={t_s:.3e}s ({i + 1}/{n_steps}): {sel.size} cells in {axis}=0 slice")
 
-        sv_by_field = {field: data_s[field][mask] for field in FIELDS}
+        sv_by_field = {field: data_s[field][sel] for field in FIELDS}
         for field in FIELDS:
             sv = sv_by_field[field]
             value_records.append(
@@ -294,8 +326,8 @@ def main():
 
         do_scatter = (i % args.scatter_stride) == 0
         if do_scatter:
-            n_pick = min(args.scatter_cells, mask.sum())
-            pick = rng.choice(mask.sum(), size=n_pick, replace=False)
+            n_pick = min(args.scatter_cells, sel.size)
+            pick = rng.choice(sel.size, size=n_pick, replace=False)
             t_sage_pick = sv_by_field["TEMPERATURE"][pick]
             color_pick = sv_by_field[color_field][pick]
 
@@ -318,7 +350,7 @@ def main():
 
             for field in FIELDS:
                 sv = sv_by_field[field]
-                mv = aligned[field][mask]
+                mv = aligned[field][sel]
                 diff = mv - sv
                 rmse = float(np.sqrt(np.mean(diff ** 2)))
                 mae = float(np.mean(np.abs(diff)))
@@ -336,7 +368,7 @@ def main():
                 rel_rmse_mw = rmse_mw / mean_ref_mw if mean_ref_mw > 0 else np.nan
                 records.append(
                     dict(
-                        timestep=i + 1, time=t_s, model=name, field=field_label(field), n_cells=int(mask.sum()),
+                        timestep=i + 1, time=t_s, model=name, field=field_label(field), n_cells=int(sel.size),
                         rmse=rmse, mae=mae, max_abs_err=maxerr, mean_sage=mean_ref, rel_rmse=rel_rmse,
                         rmse_mw=rmse_mw, mae_mw=mae_mw, mean_sage_mw=mean_ref_mw, rel_rmse_mw=rel_rmse_mw,
                     )
@@ -346,17 +378,17 @@ def main():
                          value_mean=float(mv.mean()), value_max=float(mv.max()), value_min=float(mv.min()))
                 )
 
-            z_model, n_model = flame_centroid(aligned["TEMPERATURE"][mask])
+            z_model, n_model = flame_centroid(aligned["TEMPERATURE"][sel])
             flame_records.append(
                 dict(timestep=i + 1, time=t_s, model=name, flame_pos=z_model, n_band_cells=n_model,
                      delta_pos=(z_model - z_sage) if np.isfinite(z_model) and np.isfinite(z_sage) else np.nan)
             )
 
             if do_scatter:
-                t_model_pick = aligned["TEMPERATURE"][mask][pick]
+                t_model_pick = aligned["TEMPERATURE"][sel][pick]
                 y_sum_pick = np.zeros(n_pick)
                 for sp in SPECIES:
-                    y_sum_pick += aligned[sp][mask][pick]
+                    y_sum_pick += aligned[sp][sel][pick]
                 e_t = 100.0 * np.abs(t_model_pick - t_sage_pick) / t_sage_pick
                 e_sigma = np.abs(y_sum_pick - 1.0)
                 sa = scatter_arrays[name]
@@ -367,8 +399,8 @@ def main():
         if i == n_steps - 1:
             last_slice = dict(
                 h=h_coord, v=v_coord, time=t_s,
-                sage={f: data_s[f][mask] for f in FIELDS},
-                models={name: {f: aligned_by_model[name][f][mask] for f in FIELDS} for name in aligned_by_model},
+                sage={f: data_s[f][sel] for f in FIELDS},
+                models={name: {f: aligned_by_model[name][f][sel] for f in FIELDS} for name in aligned_by_model},
             )
 
     df = pd.DataFrame.from_records(records)
@@ -431,24 +463,37 @@ def main():
     # --- RMSE / rel-RMSE vs time, one figure per field, all models overlaid ---
     # (also produced mass-weighted, in a separate subdir -- see below)
     def plot_error_vs_time(rmse_col, rel_col, out_subdir, title_suffix):
+        # max_abs_err (per-timestep worst single cell, not weighted -- there's
+        # no separate mass-weighted variant, "worst cell" is the same number
+        # either way) is plotted on its own log-scale axis, not stacked onto
+        # the RMSE axis: a rare blow-up's max|err| can be 2-3 orders of
+        # magnitude above the RMSE for the same timestep, which would squash
+        # RMSE to invisible near zero on a shared linear axis.
         os.makedirs(out_subdir, exist_ok=True)
         for field in FIELDS:
             label = field_label(field)
             sub_field = df[df["field"] == label]
-            fig, ax1 = plt.subplots(figsize=(7, 4.5))
+            fig, ax1 = plt.subplots(figsize=(7.5, 4.5))
             ax2 = ax1.twinx()
+            ax3 = ax1.twinx()
+            ax3.spines["right"].set_position(("outward", 55))
             for name, _ in models:
                 sub = sub_field[sub_field["model"] == name]
                 color = model_color(name)
                 ax1.plot(sub["time"], sub[rmse_col], "o-", color=color, label=f"{name} RMSE (abs)")
                 ax2.plot(sub["time"], sub[rel_col] * 100, "s--", color=color, alpha=0.6,
                           label=f"{name} relative RMSE (%)")
+                ax3.plot(sub["time"], sub["max_abs_err"], "^:", color=color, alpha=0.4,
+                          label=f"{name} max|err|")
             ax1.set_xlabel("time [s]")
             ax1.set_ylabel("RMSE (absolute)")
             ax2.set_ylabel("relative RMSE [%]")
+            ax3.set_ylabel("max|err| (absolute, log)")
+            ax3.set_yscale("log")
             lines1, labels1 = ax1.get_legend_handles_labels()
             lines2, labels2 = ax2.get_legend_handles_labels()
-            ax1.legend(lines1 + lines2, labels1 + labels2, fontsize=8, loc="best")
+            lines3, labels3 = ax3.get_legend_handles_labels()
+            ax1.legend(lines1 + lines2 + lines3, labels1 + labels2 + labels3, fontsize=8, loc="best")
             fig.suptitle(f"Error vs SAGE on {axis}=0 slice — {label}{title_suffix}")
             fig.tight_layout()
             fig.savefig(os.path.join(out_subdir, f"error_vs_time_{label}.png"), dpi=150)
