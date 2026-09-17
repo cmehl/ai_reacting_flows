@@ -151,6 +151,8 @@ def build_cache(args, models):
     common = sorted(common, key=float)
     assert common, f"No timestep is common to SAGE + {[n for n, _ in models]}"
     common = common[:: args.stride]
+    if args.max_frames is not None:
+        common = common[: args.max_frames]
     n = len(common)
     print(f"Common time range: t={float(common[0]):.3e}s to t={float(common[-1]):.3e}s "
           f"({n} frames after stride {args.stride})", flush=True)
@@ -375,6 +377,8 @@ def main():
                              "cell-thick; ~ the finest cell size (smaller keeps more upstream detail)")
     parser.add_argument("--stride", type=int, default=1,
                         help="Use every Nth shared timestep (default: 1 = all)")
+    parser.add_argument("--max-frames", type=int, default=None,
+                        help="Keep only the first N shared timesteps (after stride), e.g. for a quick look")
     parser.add_argument("--grid", type=int, default=320,
                         help="Horizontal pixel resolution the slice cells are binned onto")
     parser.add_argument("--fill-radius", type=float, default=0.006,
