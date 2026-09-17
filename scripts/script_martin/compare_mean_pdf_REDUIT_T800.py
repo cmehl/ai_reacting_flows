@@ -30,6 +30,8 @@ GRID = 320
 FILL_RADIUS = 0.006
 CLIP_PCT = 99.5
 OUT_PREFIX = "REDUIT_T800"
+SAGE_COLOR = "#111111"    # near-black, distinct from MODEL_COLOR even where curves overlap
+MODEL_COLOR = "#e0311f"   # vivid red -- high contrast vs black, still readable in both themes
 # -----------------
 
 spec = importlib.util.spec_from_file_location("animate_ann_sage_hybrid", ANIMATE_SCRIPT)
@@ -181,8 +183,12 @@ for b in range(N_T_BINS_PDF):
         lo_y = min(ys.min(), ym.min())
         hi_y = max(ys.max(), ym.max())
         bins = np.linspace(lo_y, hi_y, 40) if hi_y > lo_y else 40
-        ax.hist(ys, bins=bins, density=True, color="black", alpha=0.4, label="SAGE")
-        ax.hist(ym, bins=bins, density=True, color="tab:blue", alpha=0.4, label=model_label)
+        hs, edges = np.histogram(ys, bins=bins, density=True)
+        hm, _ = np.histogram(ym, bins=edges, density=True)
+        ax.stairs(hs, edges, fill=True, color=SAGE_COLOR, alpha=0.15)
+        ax.stairs(hs, edges, color=SAGE_COLOR, lw=2, label="SAGE")
+        ax.stairs(hm, edges, fill=True, color=MODEL_COLOR, alpha=0.15)
+        ax.stairs(hm, edges, color=MODEL_COLOR, lw=2, ls="--", label=model_label)
     ax.set_title(f"T in [{lo:.0f},{hi:.0f}]K\nn={ms.sum()}/{mm.sum()}", fontsize=9)
     ax.set_xlabel(f"Y_{PDF_FIELD}")
     if b == 0:

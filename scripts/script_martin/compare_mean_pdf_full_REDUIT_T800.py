@@ -38,6 +38,8 @@ T_LO, T_HI, N_T_BINS = 250.0, 2500.0, 60          # fine T grid for both the sta
 Y_LO, Y_HI, N_Y_BINS = 0.0, 0.08, 150             # generous Y_H2 range, checked against running min/max
 N_T_SUPERBINS_PDF = 6                             # coarse groups of the fine T bins for the small-multiples PDF
 OUT_PREFIX = "REDUIT_T800_full"
+SAGE_COLOR = "#111111"    # near-black, distinct from MODEL_COLOR even where curves overlap
+MODEL_COLOR = "#e0311f"   # vivid red -- high contrast vs black, still readable in both themes
 # -----------------
 
 spec = importlib.util.spec_from_file_location("animate_ann_sage_hybrid", ANIMATE_SCRIPT)
@@ -222,12 +224,15 @@ for b in range(N_T_SUPERBINS_PDF):
     hm = hist_model[lo_i:hi_i].sum(axis=0)
     ax = axes[b]
     ns, nm = hs.sum(), hm.sum()
+    bw = Y_edges[1] - Y_edges[0]
     if ns > 0:
-        ax.bar(Y_centers, hs / ns / (Y_edges[1] - Y_edges[0]), width=Y_edges[1] - Y_edges[0],
-               color="black", alpha=0.4, label="SAGE")
+        pdf_s = hs / ns / bw
+        ax.stairs(pdf_s, Y_edges, fill=True, color=SAGE_COLOR, alpha=0.15)
+        ax.stairs(pdf_s, Y_edges, color=SAGE_COLOR, lw=2, label="SAGE")
     if nm > 0:
-        ax.bar(Y_centers, hm / nm / (Y_edges[1] - Y_edges[0]), width=Y_edges[1] - Y_edges[0],
-               color="tab:blue", alpha=0.4, label="MODEL")
+        pdf_m = hm / nm / bw
+        ax.stairs(pdf_m, Y_edges, fill=True, color=MODEL_COLOR, alpha=0.15)
+        ax.stairs(pdf_m, Y_edges, color=MODEL_COLOR, lw=2, ls="--", label="MODEL")
     ax.set_title(f"T in [{lo_T:.0f},{hi_T:.0f}]K\nn={int(ns)}/{int(nm)}", fontsize=9)
     ax.set_xlabel(f"Y_{PDF_FIELD}")
     if b == 0:
