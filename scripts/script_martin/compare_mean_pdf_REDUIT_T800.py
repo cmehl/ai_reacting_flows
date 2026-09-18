@@ -23,8 +23,9 @@ import numpy as np
 CACHE = "/ifpengpfs/scratch/ifpen/kotlarcm/CONVERGE/CAS_AI/CAS_LEWIS_UNITAIRE/REDUIT_T800/slice_cache_X0_100steps.npz"
 ANIMATE_SCRIPT = "/ifpengpfs/scratch/ifpen/kotlarcm/AI/ai_reacting_flows-master_cedric/scripts/script_martin/animate_ann_sage_hybrid.py"
 MEAN_FIELDS = ["Temperature", "H2", "OH", "N", "N2H2"]  # time-averaged spatial maps
-PDF_FIELD = "H2"  # species for the T-binned mean/PDF analysis
-N_T_BINS_STATS = 40       # bins for the mean-Y_H2(T) curve
+PDF_FIELDS = ["H", "H2", "H2O", "HNO", "HO2", "N", "N2", "N2H2", "N2O", "NH",
+              "NH2", "NH3", "NNH", "NO", "NO2", "O", "O2", "OH"]  # all 18 species
+N_T_BINS_STATS = 40       # bins for the mean-Y(T) curve
 N_T_BINS_PDF = 6          # coarser bins for the small-multiples PDF-by-bin figure
 GRID = 320
 FILL_RADIUS = 0.006
@@ -104,22 +105,19 @@ for fname in MEAN_FIELDS:
           f"max|diff|={np.abs(diff).max():.4g}  -> {out}", flush=True)
 
 # ---------------------------------------------------------------------------
-# 2) Y_H2 statistics conditioned on Temperature, pooling all cells x all
-#    frames -- removes space/time structure entirely, isolates the
-#    state-space (Y_H2 | T) relationship itself.
+# 2) & 3) Per-species Y statistics conditioned on Temperature, pooling all
+#    cells x all frames -- removes space/time structure entirely, isolates
+#    the state-space (Y | T) relationship itself -- plus the full PDF within
+#    a handful of coarser T-bins for each species.
 # ---------------------------------------------------------------------------
 tj = labels.index("Temperature")
-pj = labels.index(PDF_FIELD)
-
 T_sage = sage[tj].ravel().astype(np.float64)
-Y_sage = sage[pj].ravel().astype(np.float64)
 T_model = model[tj].ravel().astype(np.float64)
-Y_model = model[pj].ravel().astype(np.float64)
-
 t_lo = min(T_sage.min(), T_model.min())
 t_hi = max(T_sage.max(), T_model.max())
 edges = np.linspace(t_lo, t_hi, N_T_BINS_STATS + 1)
 centers = 0.5 * (edges[:-1] + edges[1:])
+pdf_edges = np.linspace(t_lo, t_hi, N_T_BINS_PDF + 1)
 
 
 def binned_stats(T, Y, edges):
@@ -140,65 +138,64 @@ def binned_stats(T, Y, edges):
     return mean, p16, p84, count
 
 
-mean_s, p16_s, p84_s, cnt_s = binned_stats(T_sage, Y_sage, edges)
-mean_m, p16_m, p84_m, cnt_m = binned_stats(T_model, Y_model, edges)
+for PDF_FIELD in PDF_FIELDS:
+    pj = labels.index(PDF_FIELD)
+    Y_sage = sage[pj].ravel().astype(np.float64)
+    Y_model = model[pj].ravel().astype(np.float64)
 
-fig, ax = plt.subplots(figsize=(9, 5.5))
-ax.plot(centers, mean_s, color="black", lw=2, label="SAGE (mean)")
-ax.fill_between(centers, p16_s, p84_s, color="black", alpha=0.15, label="SAGE 16-84th pct")
-ax.plot(centers, mean_m, color="tab:blue", lw=1.6, label=f"{model_label} (mean)")
-ax.fill_between(centers, p16_m, p84_m, color="tab:blue", alpha=0.15, label=f"{model_label} 16-84th pct")
-ax.set_xlabel("Temperature [K]")
-ax.set_ylabel(f"Y_{PDF_FIELD}")
-ax.set_title(f"Y_{PDF_FIELD} conditioned on T -- pooled over {n_frames} frames x {n_cells} cells "
-             f"(REDUIT_T800)")
-ax.grid(True, alpha=0.3)
-ax.legend(fontsize=9)
-fig.tight_layout()
-out_stats = f"Y{PDF_FIELD}_vs_T_stats_{OUT_PREFIX}.png"
-fig.savefig(out_stats, dpi=140)
-plt.close(fig)
-print(f"-> {out_stats}", flush=True)
+    mean_s, p16_s, p84_s, cnt_s = binned_stats(T_sage, Y_sage, edges)
+    mean_m, p16_m, p84_m, cnt_m = binned_stats(T_model, Y_model, edges)
 
-np.savetxt(
-    f"Y{PDF_FIELD}_vs_T_stats_{OUT_PREFIX}.csv",
-    np.column_stack([centers, mean_s, p16_s, p84_s, cnt_s, mean_m, p16_m, p84_m, cnt_m]),
-    header="T_center,mean_SAGE,p16_SAGE,p84_SAGE,count_SAGE,mean_MODEL,p16_MODEL,p84_MODEL,count_MODEL",
-    delimiter=",", comments="",
-)
+    fig, ax = plt.subplots(figsize=(9, 5.5))
+    ax.plot(centers, mean_s, color=SAGE_COLOR, lw=2, label="SAGE (mean)")
+    ax.fill_between(centers, p16_s, p84_s, color=SAGE_COLOR, alpha=0.15, label="SAGE 16-84th pct")
+    ax.plot(centers, mean_m, color=MODEL_COLOR, lw=1.8, ls="--", label=f"{model_label} (mean)")
+    ax.fill_between(centers, p16_m, p84_m, color=MODEL_COLOR, alpha=0.15, label=f"{model_label} 16-84th pct")
+    ax.set_xlabel("Temperature [K]")
+    ax.set_ylabel(f"Y_{PDF_FIELD}")
+    ax.set_title(f"Y_{PDF_FIELD} conditioned on T -- pooled over {n_frames} frames x {n_cells} cells "
+                 f"(REDUIT_T800)")
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=9)
+    fig.tight_layout()
+    out_stats = f"Y{PDF_FIELD}_vs_T_stats_{OUT_PREFIX}.png"
+    fig.savefig(out_stats, dpi=140)
+    plt.close(fig)
 
-# ---------------------------------------------------------------------------
-# 3) Full PDF of Y_H2 within a handful of coarser T-bins -- the literal
-#    "PDF par tranche de temperature" request, not just the first moment.
-# ---------------------------------------------------------------------------
-pdf_edges = np.linspace(t_lo, t_hi, N_T_BINS_PDF + 1)
-fig, axes = plt.subplots(1, N_T_BINS_PDF, figsize=(3.1 * N_T_BINS_PDF, 4.2), sharey=False)
-for b in range(N_T_BINS_PDF):
-    lo, hi = pdf_edges[b], pdf_edges[b + 1]
-    ax = axes[b]
-    ms = (T_sage >= lo) & (T_sage < hi)
-    mm = (T_model >= lo) & (T_model < hi)
-    ys, ym = Y_sage[ms], Y_model[mm]
-    if ys.size > 10 and ym.size > 10:
-        lo_y = min(ys.min(), ym.min())
-        hi_y = max(ys.max(), ym.max())
-        bins = np.linspace(lo_y, hi_y, 40) if hi_y > lo_y else 40
-        hs, edges = np.histogram(ys, bins=bins, density=True)
-        hm, _ = np.histogram(ym, bins=edges, density=True)
-        ax.stairs(hs, edges, fill=True, color=SAGE_COLOR, alpha=0.15)
-        ax.stairs(hs, edges, color=SAGE_COLOR, lw=2, label="SAGE")
-        ax.stairs(hm, edges, fill=True, color=MODEL_COLOR, alpha=0.15)
-        ax.stairs(hm, edges, color=MODEL_COLOR, lw=2, ls="--", label=model_label)
-    ax.set_title(f"T in [{lo:.0f},{hi:.0f}]K\nn={ms.sum()}/{mm.sum()}", fontsize=9)
-    ax.set_xlabel(f"Y_{PDF_FIELD}")
-    if b == 0:
-        ax.set_ylabel("PDF")
-        ax.legend(fontsize=8)
-fig.suptitle(f"Y_{PDF_FIELD} PDF by temperature bin -- SAGE vs {model_label} (REDUIT_T800)")
-fig.tight_layout()
-out_pdf = f"Y{PDF_FIELD}_pdf_by_Tbin_{OUT_PREFIX}.png"
-fig.savefig(out_pdf, dpi=130)
-plt.close(fig)
-print(f"-> {out_pdf}", flush=True)
+    np.savetxt(
+        f"Y{PDF_FIELD}_vs_T_stats_{OUT_PREFIX}.csv",
+        np.column_stack([centers, mean_s, p16_s, p84_s, cnt_s, mean_m, p16_m, p84_m, cnt_m]),
+        header="T_center,mean_SAGE,p16_SAGE,p84_SAGE,count_SAGE,mean_MODEL,p16_MODEL,p84_MODEL,count_MODEL",
+        delimiter=",", comments="",
+    )
+
+    fig, axes = plt.subplots(1, N_T_BINS_PDF, figsize=(3.1 * N_T_BINS_PDF, 4.2), sharey=False)
+    for b in range(N_T_BINS_PDF):
+        lo, hi = pdf_edges[b], pdf_edges[b + 1]
+        ax = axes[b]
+        ms = (T_sage >= lo) & (T_sage < hi)
+        mm = (T_model >= lo) & (T_model < hi)
+        ys, ym = Y_sage[ms], Y_model[mm]
+        if ys.size > 10 and ym.size > 10:
+            lo_y = min(ys.min(), ym.min())
+            hi_y = max(ys.max(), ym.max())
+            bins = np.linspace(lo_y, hi_y, 40) if hi_y > lo_y else 40
+            hs, hedges = np.histogram(ys, bins=bins, density=True)
+            hm, _ = np.histogram(ym, bins=hedges, density=True)
+            ax.stairs(hs, hedges, fill=True, color=SAGE_COLOR, alpha=0.15)
+            ax.stairs(hs, hedges, color=SAGE_COLOR, lw=2, label="SAGE")
+            ax.stairs(hm, hedges, fill=True, color=MODEL_COLOR, alpha=0.15)
+            ax.stairs(hm, hedges, color=MODEL_COLOR, lw=2, ls="--", label=model_label)
+        ax.set_title(f"T in [{lo:.0f},{hi:.0f}]K\nn={ms.sum()}/{mm.sum()}", fontsize=9)
+        ax.set_xlabel(f"Y_{PDF_FIELD}")
+        if b == 0:
+            ax.set_ylabel("PDF")
+            ax.legend(fontsize=8)
+    fig.suptitle(f"Y_{PDF_FIELD} PDF by temperature bin -- SAGE vs {model_label} (REDUIT_T800)")
+    fig.tight_layout()
+    out_pdf = f"Y{PDF_FIELD}_pdf_by_Tbin_{OUT_PREFIX}.png"
+    fig.savefig(out_pdf, dpi=130)
+    plt.close(fig)
+    print(f"{PDF_FIELD}: -> {out_stats}, {out_pdf}", flush=True)
 
 print("done", flush=True)
