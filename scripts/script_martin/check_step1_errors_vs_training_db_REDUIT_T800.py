@@ -18,12 +18,13 @@ same transform is applied here to the CONVERGE cells before a nearest-
 neighbor distance check against X_train (cKDTree, Euclidean, standardized
 19-D space: Temperature + 18 species in the ARF/Cantera mechanism order).
 
-Caveat made explicit: X_train/X here is the state the network reacts FROM,
-not the reacted state being compared. This snapshot only has the reacted
-state (t=5e-7s) on all three sides, not the t=0 input CONVERGE actually fed
-the network -- but with dt=5e-7s the two are extremely close, so the SAGE
-state at this snapshot is used as a proxy for "the kind of state the network
-had to handle here". Treat the OOD verdict as approximate, not exact.
+Uses the true t=0 input state (post000001_+0.00000e+00.h5, now exported
+alongside post000002 for all three of SAGE/ANN/ANN_corrected) as X -- this
+is the actual state CONVERGE fed the network for this step, not a same-
+timestep proxy. Confirmed identical across all three sides (common CFD
+initial condition before any reaction) and identical cell ordering against
+post000002 (same run, verified by direct coordinate comparison), so no
+KDTree re-indexing is needed for it.
 
 Config is top-of-file UPPERCASE vars (no argparse).
 """
@@ -39,6 +40,9 @@ ANIMATE_SCRIPT = "/ifpengpfs/scratch/ifpen/kotlarcm/AI/ai_reacting_flows-master_
 BASE = "/ifpengpfs/scratch/ifpen/kotlarcm/CONVERGE/CAS_AI/CAS_LEWIS_UNITAIRE/REDUIT_T800/paraview/step_1"
 SAGE_FILE = f"{BASE}/SAGE/post000002_+5.00000e-07.h5"
 ANN_FILE = f"{BASE}/ANN/post000002_+5.00000e-07.h5"
+INPUT_FILE = f"{BASE}/SAGE/post000001_+0.00000e+00.h5"  # t=0, the actual state the network reacted FROM
+                                                          # (identical across SAGE/ANN/ANN_corrected -- common
+                                                          # CFD initial condition, confirmed by direct comparison)
 TRAINING_DB = ("/ifpengpfs/scratch/ifpen/kotlarcm/AI/ai_reacting_flows-master_cedric/.idea/"
                "CFD_REDUCED_MECH_A/CFD_DTB_REDUCED_MECH_A_dt5e7_rollout/"
                "dtb_rollout_thresh1e14_noclust_T800/training_data.h5")
@@ -66,11 +70,14 @@ FIELDS = anim.FIELDS  # ["TEMPERATURE", "MASSFRAC_<name>", ...]
 labels = [anim.field_label(f) for f in FIELDS]
 name_to_field = dict(zip(labels, FIELDS))
 
-print(f"SAGE: {SAGE_FILE}\nANN:  {ANN_FILE}")
+print(f"SAGE:  {SAGE_FILE}\nANN:   {ANN_FILE}\nINPUT: {INPUT_FILE}")
 coords_s, data_s, t_s = anim.load(SAGE_FILE, FIELDS)
 coords_a, data_a, t_a = anim.load(ANN_FILE, FIELDS)
+coords_in, data_in, t_in = anim.load(INPUT_FILE, FIELDS)
 n_cells = coords_s.shape[0]
 assert abs(t_s - t_a) < 1e-9
+assert t_in == 0.0, f"expected the t=0 input snapshot, got t={t_in}"
+assert np.array_equal(coords_in, coords_s), "post000001/post000002 cell order differs -- re-check indexing"
 
 tree_mesh = cKDTree(coords_s)
 dist, idx = tree_mesh.query(coords_a, k=1, workers=-1)
@@ -107,14 +114,16 @@ if flagged_idx.size > MAX_ROWS_CSV:
 
 # ---------------------------------------------------------------------------
 # 2) Full physical state (Temperature + 18 species, ARF order) for the
-#    flagged cells, from the SAGE snapshot.
+#    flagged cells, from the true t=0 INPUT snapshot -- the actual state the
+#    network reacted from, not a same-timestep proxy (post000001 is now
+#    available, and identical across SAGE/ANN/ANN_corrected, confirmed above).
 # ---------------------------------------------------------------------------
 T_field = name_to_field["Temperature"]
-T_s = data_s[T_field].astype(np.float64)
-species_arrays = {sp: data_s[name_to_field[sp]].astype(np.float64) for sp in ARF_SPECIES_ORDER}
+T_in = data_in[T_field].astype(np.float64)
+species_arrays = {sp: data_in[name_to_field[sp]].astype(np.float64) for sp in ARF_SPECIES_ORDER}
 
-X_phys = np.column_stack([T_s[flagged_idx]] + [species_arrays[sp][flagged_idx] for sp in ARF_SPECIES_ORDER])
-print(f"Extracted physical state for {X_phys.shape[0]} flagged cells, {X_phys.shape[1]} dims "
+X_phys = np.column_stack([T_in[flagged_idx]] + [species_arrays[sp][flagged_idx] for sp in ARF_SPECIES_ORDER])
+print(f"Extracted t=0 input state for {X_phys.shape[0]} flagged cells, {X_phys.shape[1]} dims "
       f"(Temperature + {len(ARF_SPECIES_ORDER)} species)")
 
 # ---------------------------------------------------------------------------
