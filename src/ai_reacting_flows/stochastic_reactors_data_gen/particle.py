@@ -138,6 +138,41 @@ class Particle(object):
         self.Hs = self.mass * self.hs
 
     
+    # Multi-step chemistry-only chain (rollout ground truth)
+    def react_chain(self, dt, nb_steps, parent : 'ParticlesCloud'):
+        """Chemistry-only trajectory of the current state over nb_steps steps of size dt.
+
+        The particle itself is NOT modified. Returns an array of shape
+        (nb_steps, 2 + nb_species) with columns [T, P, Y_1..Y_n] at t+dt, ..., t+nb_steps*dt,
+        obtained by cumulative advances of one constant-pressure reactor (no mixing in between,
+        matching how a CFD code chains chemistry sub-steps). Below T_threshold the state
+        is frozen (identity), like in react().
+        """
+
+        chain = np.empty((nb_steps, 2 + self.nb_species))
+
+        if self.T <= parent.T_threshold:
+            chain[:, 0] = self.T
+            chain[:, 1] = self.P
+            chain[:, 2:] = self.Y
+            return chain
+
+        parent.gas.HPY = self.hs, self.P, self.Y
+        r = ct.IdealGasConstPressureReactor(parent.gas)
+        sim = ct.ReactorNet([r])
+
+        for k in range(nb_steps):
+            try:
+                sim.advance((k + 1) * dt)
+            except ct.CanteraError as e:
+                raise RuntimeError(f"Cantera integration failed in rollout chain: {e}") from e
+            chain[k, 0] = parent.gas.T
+            chain[k, 1] = parent.gas.P
+            chain[k, 2:] = parent.gas.Y
+
+        return chain
+
+
 # =============================================================================
 #     FUNCTIONS TO COMPUTE COMPOSITION-DERIVED QUANTITIES
 # =============================================================================
