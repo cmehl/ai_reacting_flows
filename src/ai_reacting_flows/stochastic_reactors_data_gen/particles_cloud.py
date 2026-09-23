@@ -83,6 +83,21 @@ class ParticlesCloud(object):
         self.pv_species = data_gen_parameters["pv_species"]
         self.pv_ind = [self.gas.species_index(spec) for spec in self.pv_species]
 
+        # Multi-step rollout database: for every particle and iteration, the chemistry-only chain
+        # of nb_steps sub-steps of size rollout_dt is stored (Y_multi) next to X/Y. rollout_dt is
+        # decoupled from the marching time step, so the marching dt can vary (time windows) while the
+        # database samples keep the fixed dt the network is trained (and used in the CFD) with.
+        self.rollout_steps = int(data_gen_parameters.get("rollout_steps", 0))
+        rollout_dt = data_gen_parameters.get("rollout_dt", None)
+        self.rollout_dt = None if rollout_dt is None else float(rollout_dt)
+        if self.rollout_steps > 0:
+            if not self.build_ml_dtb:
+                raise ValueError("rollout_steps > 0 requires build_ml_dtb: true")
+            if self.rollout_dt is None:
+                if isinstance(self.dt_input, dict):
+                    raise ValueError("rollout_dt must be set when time_step is a dict (variable marching dt)")
+                self.rollout_dt = float(self.dt_input)
+
         # Setting the time-step array (it is an array to account for possible different values of dt in user-presribed time windows)
         # This is useful in cases where slow chemistry takes places first and more reactive particles are added later
         self._set_time_step_array()
@@ -506,6 +521,10 @@ class ParticlesCloud(object):
 
         # We perform chemical reactions -> each processor computes on its chunks
         for part in lists_particles:
+            # Rollout ground truth, computed from the pre-reaction state (particle untouched)
+            if self.rollout_steps > 0:
+                part.chain = part.react_chain(self.rollout_dt, self.rollout_steps, self)
+
             # if self.ML_inference_flag:
             #     part.react_NN_wrapper(self)
             # else:
@@ -1144,6 +1163,20 @@ class ParticlesCloud(object):
         grp = f.get(f"ITERATION_{self._current_write_idx:05d}")
         dset = grp.create_dataset(which_state,data=arr)
         dset.attrs["cols"] = cols
+
+        # Rollout: Y is the first chain step (chemistry-only, at rollout_dt), Y_multi the whole chain.
+        # Prog_var and HRR are not tracked along the chain (zeros); they are not used by the pipeline.
+        if which_state == "Y" and self.rollout_steps > 0:
+            arr_multi = np.zeros((nb_active, self.rollout_steps, len(cols)))
+            for i, part in enumerate(active_particles):
+                arr_multi[i, :, 0:2 + part.nb_species] = part.chain
+            arr[:, 0:2 + self.nb_species] = arr_multi[:, 0, 0:2 + self.nb_species]
+            del grp["Y"]
+            dset = grp.create_dataset("Y", data=arr)
+            dset.attrs["cols"] = cols
+            dset_m = grp.create_dataset("Y_multi", data=arr_multi)
+            dset_m.attrs["cols"] = cols
+            dset_m.attrs["dt"] = self.rollout_dt
         f.close()
 
 # =============================================================================

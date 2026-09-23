@@ -1,0 +1,15 @@
+models_folder: MODEL_NH3_H2_N2_REDUCED_ROLLOUT_perspecies_2x64_noclust_thr1e14
+time_step: 5.0e-06
+T_threshold: 800.0
+output_file: testing_results_NH3_H2_N2_REDUCED_ROLLOUT_perspecies_2x64_noclust_thr1e14_maskedCVODE800_csv.h5
+mask_cvode_below_threshold: true
+csv_slices:
+  - {file: /work/kotlarcm/WORK/AI/clean/ai_reacting_flows/.idea/CFD_REDUCED_high_resolution/DATA/testing/Slice_Z_0.3_3.0s.csv, axis: Z, center: -0.30}
+  - {file: /work/kotlarcm/WORK/AI/clean/ai_reacting_flows/.idea/CFD_REDUCED_high_resolution/DATA/testing/Slice_Z_0.15_3.0s.csv, axis: Z, center: -0.15}
+  - {file: /work/kotlarcm/WORK/AI/clean/ai_reacting_flows/.idea/CFD_REDUCED_high_resolution/DATA/testing/Slice_Z_0.11_3.0s.csv, axis: Z, center: -0.11}
+  - {file: /work/kotlarcm/WORK/AI/clean/ai_reacting_flows/.idea/CFD_REDUCED_high_resolution/DATA/testing/Slice_Z_0.10_3.0s.csv, axis: Z, center: -0.10}
+  - {file: /work/kotlarcm/WORK/AI/clean/ai_reacting_flows/.idea/CFD_REDUCED_high_resolution/DATA/testing/Slice_Z_0.09_3.0s.csv, axis: Z, center: -0.09}
+  - {file: /work/kotlarcm/WORK/AI/clean/ai_reacting_flows/.idea/CFD_REDUCED_high_resolution/DATA/testing/Slice_Z_0.08_3.0s.csv, axis: Z, center: -0.08}
+  - {file: /work/kotlarcm/WORK/AI/clean/ai_reacting_flows/.idea/CFD_REDUCED_high_resolution/DATA/testing/Slice_Z_0.065_3.0s.csv, axis: Z, center: -0.065}
+  - {file: /work/kotlarcm/WORK/AI/clean/ai_reacting_flows/.idea/CFD_REDUCED_high_resolution/DATA/testing/Slice_Z_0.05_3.0s.csv, axis: Z, center: -0.05}
+  - {file: /work/kotlarcm/WORK/AI/clean/ai_reacting_flows/.idea/CFD_REDUCED_high_resolution/DATA/testing/Slice_X_3.0s.csv, axis: X, center: 0.0}
