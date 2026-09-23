@@ -75,11 +75,13 @@ FIELDS = ["TEMPERATURE"] + SPECIES
 # Which coordinate is held ~constant for each slice axis, and which two free
 # coordinates go on the plot's horizontal/vertical axes (index into the
 # [X, Y, Z] coords array, a +1/-1 sign, and the axis label). Mirrors
-# compare_ann_sage_x0.py so the two tools show the same orientation.
+# compare_ann_sage_x0.py so the two tools show the same orientation. Rotated
+# 90 degrees counterclockwise from the "natural" (h, v) = (first free coord,
+# second free coord) orientation: new_h = -old_v, new_v = old_h.
 SLICE_AXES = {
-    "X": dict(idx=0, h=(1, 1, "Y [m]"), v=(2, 1, "Z [m]")),
-    "Y": dict(idx=1, h=(2, -1, "-Z [m]"), v=(0, 1, "X [m]")),
-    "Z": dict(idx=2, h=(0, 1, "X [m]"), v=(1, 1, "Y [m]")),
+    "X": dict(idx=0, h=(2, -1, "-Z [m]"), v=(1, 1, "Y [m]")),
+    "Y": dict(idx=1, h=(0, -1, "-X [m]"), v=(2, -1, "-Z [m]")),
+    "Z": dict(idx=2, h=(1, -1, "-Y [m]"), v=(0, 1, "X [m]")),
 }
 
 
@@ -149,6 +151,8 @@ def build_cache(args, models):
     common = sorted(common, key=float)
     assert common, f"No timestep is common to SAGE + {[n for n, _ in models]}"
     common = common[:: args.stride]
+    if args.max_frames is not None:
+        common = common[: args.max_frames]
     n = len(common)
     print(f"Common time range: t={float(common[0]):.3e}s to t={float(common[-1]):.3e}s "
           f"({n} frames after stride {args.stride})", flush=True)
@@ -171,10 +175,20 @@ def build_cache(args, models):
             sel = slice_indices(coords_s, axcfg, args.slice_halfwidth, args.slice_res)
             h_coord = h_sign * coords_s[sel, h_idx]
             v_coord = v_sign * coords_s[sel, v_idx]
+            if args.zoom is not None:
+                hmin, hmax, vmin, vmax = args.zoom
+                keep = (h_coord >= hmin) & (h_coord <= hmax) & (v_coord >= vmin) & (v_coord <= vmax)
+                assert keep.any(), (
+                    f"--zoom {args.zoom} selects no cells of the {axis}=0 slice "
+                    f"({axcfg['h'][2]} in [{h_coord.min():.3f}, {h_coord.max():.3f}], "
+                    f"{axcfg['v'][2]} in [{v_coord.min():.3f}, {v_coord.max():.3f}])"
+                )
+                sel, h_coord, v_coord = sel[keep], h_coord[keep], v_coord[keep]
             n_cells = sel.size
             print(f"  slice: {n_cells} cells, "
                   f"{axcfg['h'][2]} in [{h_coord.min():.3f}, {h_coord.max():.3f}], "
-                  f"{axcfg['v'][2]} in [{v_coord.min():.3f}, {v_coord.max():.3f}]", flush=True)
+                  f"{axcfg['v'][2]} in [{v_coord.min():.3f}, {v_coord.max():.3f}]"
+                  + (f"  (zoomed to {args.zoom})" if args.zoom is not None else ""), flush=True)
             sage = np.empty((len(FIELDS), n, n_cells), dtype=np.float32)
             model_arrays = [np.empty_like(sage) for _ in models]
         elif coords_s.shape[0] != sel_nmesh:
@@ -363,6 +377,8 @@ def main():
                              "cell-thick; ~ the finest cell size (smaller keeps more upstream detail)")
     parser.add_argument("--stride", type=int, default=1,
                         help="Use every Nth shared timestep (default: 1 = all)")
+    parser.add_argument("--max-frames", type=int, default=None,
+                        help="Keep only the first N shared timesteps (after stride), e.g. for a quick look")
     parser.add_argument("--grid", type=int, default=320,
                         help="Horizontal pixel resolution the slice cells are binned onto")
     parser.add_argument("--fill-radius", type=float, default=0.006,
@@ -380,6 +396,13 @@ def main():
                         help="Override symmetric error color-scale half-range (+/- this)")
     parser.add_argument("--fields", nargs="+", default=None,
                         help="Subset of field labels to animate (e.g. Temperature NO OH); default: all")
+    parser.add_argument("--zoom", type=float, nargs=4, default=None,
+                        metavar=("H_MIN", "H_MAX", "V_MIN", "V_MAX"),
+                        help="Crop the slice to a bounding box in the plotted (h, v) coordinates "
+                             "-- the ones in --slice-axis's h/v axis labels, signs already applied "
+                             "-- before binning, e.g. a flame-region zoom. Applied at cache-build "
+                             "time, so a --cache built without --zoom cannot be reused with it "
+                             "(and vice versa): use a different --cache path per zoom setting.")
     args = parser.parse_args()
 
     out_dir = os.path.abspath(args.out_dir)
