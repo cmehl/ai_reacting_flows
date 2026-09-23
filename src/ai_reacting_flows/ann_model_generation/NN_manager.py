@@ -17,12 +17,12 @@ import torch.nn as nn
 import torch.optim as optim
 
 import ai_reacting_flows.tools.utilities as utils
-from ai_reacting_flows.ann_model_generation.NN_models import MLPModel, DeepONet, DeepONet_shift, PerSpeciesMLP, PerSpeciesMLPSized
+from ai_reacting_flows.ann_model_generation.NN_models import MLPModel, DeepONet, DeepONet_shift, PerSpeciesMLP, PerSpeciesMLPSized, ReactionGraphGNN
 
 torch.set_default_dtype(torch.float64)
 
 activation_functions = {"relu": nn.ReLU, "gelu" : nn.GELU, "tanh" : nn.Tanh, "id" : nn.Identity}
-model_type = {"MLP": MLPModel, "DeepONet": DeepONet, "DeepONetShift": DeepONet_shift, "PerSpeciesMLP": PerSpeciesMLP, "PerSpeciesMLPSized": PerSpeciesMLPSized}
+model_type = {"MLP": MLPModel, "DeepONet": DeepONet, "DeepONetShift": DeepONet_shift, "PerSpeciesMLP": PerSpeciesMLP, "PerSpeciesMLPSized": PerSpeciesMLPSized, "GNN": ReactionGraphGNN}
 
 class NN_manager():
     def __init__(self, run_folder: str | None = None):
@@ -173,6 +173,21 @@ class NN_manager():
         gas = ct.Solution(self.mechanism)
         self.A_element = utils.get_molar_mass_atomic_matrix(gas.species_names, self.fuel, not self.remove_N2)
 
+        # Reaction-graph adjacency for ReactionGraphGNN (built lazily, only
+        # if a cluster actually uses it -- adjacency row/column order must
+        # match Y_cols_all, and the GNN forward pass assumes X_cols_all is
+        # [Temperature, <species in the same order as Y_cols_all>].
+        self.reaction_adjacency = None
+        if "GNN" in self.networks_types:
+            y_species = [str(c)[:-2] if str(c).endswith("_Y") else str(c) for c in self.Y_cols_all]
+            x_species = [str(c)[:-2] if str(c).endswith("_X") else str(c) for c in self.X_cols_all[1:]]
+            if x_species != y_species:
+                raise ValueError(
+                    "GNN network type requires X_cols_all species (after Temperature) to be "
+                    f"in the same order as Y_cols_all; got X species={x_species}, Y species={y_species}"
+                )
+            self.reaction_adjacency = utils.build_reaction_adjacency(ct.Solution(self.mechanism), y_species)
+
         # Training stats
         if self.new_model_folder:
             os.mkdir(self.directory + "/training")
@@ -293,7 +308,16 @@ class NN_manager():
                 nb_units_in_layers_list["shift"].insert(0,n_in)
                 nb_units_in_layers_list["shift"].append(1)
                 model = model_type[network_type](self.device, nb_units_in_layers_list, layers_type, layers_activation_list, n_out, n_neurons)
-        
+            elif (network_type == "GNN"):
+                assert self.reaction_adjacency is not None
+                assert self.reaction_adjacency.shape[0] == n_out, (
+                    f"GNN: adjacency size ({self.reaction_adjacency.shape[0]}) does not match n_out ({n_out})"
+                )
+                hidden_layers = copy.deepcopy(network_parameters["nb_units_in_layers_list"])
+                layers_activation_list = [activation_functions[str(act).lower()] for act in network_parameters["layers_activation_list"]]
+
+                model = model_type[network_type](self.device, hidden_layers, layers_activation_list, self.reaction_adjacency)
+
         return model
     
 
@@ -824,6 +848,18 @@ class NN_manager():
         expected dense layer formats.
         """
         model.eval()
+
+        if isinstance(model, ReactionGraphGNN):
+            # Graph-conv layers don't fit the flat dense-layer 'kernel:0'/
+            # 'bias:0' layout this export targets (that layout is consumed
+            # by the C++/CONVERGE ANN chemistry inference, which has no
+            # graph-conv support yet). The .pth checkpoint (saved separately
+            # right before this call) is still the source of truth for
+            # offline testing (NN_testing.py, cfd_snapshot_testing.py both
+            # load it directly via torch.load), so skip rather than write a
+            # misleading/broken .h5.
+            self._log(f"SKIP h5 export for GNN model (not yet supported by the CFD inference format): {h5_path}")
+            return
 
         def save_module(group, module, module_name, parent_activation_map):
             """

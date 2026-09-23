@@ -1141,7 +1141,7 @@ class ParticlesCloud(object):
 
         # Store initial solution in h5 file
         f = h5py.File(f"{self.results_folder}/{self.solution_file}","a")
-        grp = f.get(f"ITERATION_{self.iteration:05d}")
+        grp = f.get(f"ITERATION_{self._current_write_idx:05d}")
         dset = grp.create_dataset(which_state,data=arr)
         dset.attrs["cols"] = cols
         f.close()

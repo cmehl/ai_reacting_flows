@@ -81,8 +81,87 @@ class PerSpeciesMLPSized(nn.Module):
     def forward(self, x):
         return torch.cat([m(x) for m in self.species_models], dim=1)
 
+class PerNodeLinear(nn.Module):
+    """Linear layer with independent weights per graph node (species):
+    (batch, n_nodes, in_features) -> (batch, n_nodes, out_features).
+    """
+    def __init__(self, n_nodes, in_features, out_features):
+        super().__init__()
+        self.weight = nn.Parameter(torch.empty(n_nodes, in_features, out_features, dtype=torch.float64))
+        self.bias = nn.Parameter(torch.zeros(n_nodes, out_features, dtype=torch.float64))
+        nn.init.xavier_uniform_(self.weight)
+
+    def forward(self, x):
+        return torch.einsum("bni,nio->bno", x, self.weight) + self.bias
+
+class GraphConvLayer(nn.Module):
+    """One species-graph message-passing step: each species' hidden state
+    is updated from its own state (self term) and from a fixed-weight
+    aggregation of its neighbors' states (a_norm, the normalized reaction
+    adjacency), similarly to a GCN layer.
+    """
+    def __init__(self, in_features, out_features, activation):
+        super().__init__()
+        self.lin_neigh = nn.Linear(in_features, out_features, dtype=torch.float64)
+        self.lin_self = nn.Linear(in_features, out_features, dtype=torch.float64)
+        self.activation = activation()
+
+    def forward(self, h, a_norm):
+        # h: (batch, n_nodes, in_features); a_norm: (n_nodes, n_nodes)
+        neigh = torch.einsum("nm,bmi->bni", a_norm, h)
+        return self.activation(self.lin_neigh(neigh) + self.lin_self(h))
+
+class ReactionGraphGNN(nn.Module):
+    """Species-graph message-passing network: each species is a graph node,
+    edges come from a fixed adjacency built from the Cantera mechanism (two
+    species connected if they co-occur in a reaction -- see
+    utilities.build_reaction_adjacency). Lets species exchange information
+    through the reaction graph over several conv layers, instead of being
+    predicted fully independently (PerSpeciesMLP) or through a single dense
+    MLP that ignores species identity.
+
+    Input x is (batch, 1 + n_species): [T, Yk_1, ..., Yk_n] (matching
+    X_cols_all convention). Output is (batch, n_species), one value per
+    species in the same order as the adjacency (matching Y_cols_all).
+
+    hidden_layers: list of hidden channel widths for the conv layers (does
+    NOT include the fixed per-node input dim of 2, nor the output dim of 1
+    -- both handled internally). activations: list of activation classes,
+    same length as hidden_layers (one after the input projection, one after
+    each subsequent conv layer). The final per-species readout is always a
+    plain linear layer (no activation), like other models' output layer.
+    """
+    def __init__(self, device, hidden_layers: list[int], activations: list, adjacency):
+        super().__init__()
+        n_species = adjacency.shape[0]
+        self.n_species = n_species
+        self.register_buffer("a_norm", torch.as_tensor(adjacency, dtype=torch.float64))
+
+        self.input_proj = PerNodeLinear(n_species, 2, hidden_layers[0])
+        self.input_activation = activations[0]()
+
+        self.conv_layers = nn.ModuleList([
+            GraphConvLayer(hidden_layers[i], hidden_layers[i + 1], activations[i + 1])
+            for i in range(len(hidden_layers) - 1)
+        ])
+
+        self.readout = PerNodeLinear(n_species, hidden_layers[-1], 1)
+
+        self.to(device).to(torch.float64)
+
+    def forward(self, x):
+        T = x[:, :1]
+        Yk = x[:, 1:]
+        node_in = torch.stack([Yk, T.expand(-1, self.n_species)], dim=-1)  # (batch, n_species, 2)
+
+        h = self.input_activation(self.input_proj(node_in))
+        for conv in self.conv_layers:
+            h = conv(h, self.a_norm)
+
+        return self.readout(h).squeeze(-1)
+
 class DeepONet(nn.Module):
-    
+
     def __init__(self, device, hidden_layers : dict[str,list[int]], layers_type : dict[str,list[str]], activations : dict[str,list], n_out, n_neuron):
         super(MLPModel, self).__init__()
 

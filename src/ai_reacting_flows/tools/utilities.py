@@ -297,6 +297,50 @@ def compute_X_element(species, Yk):
 
     return X_el
 
+
+def build_reaction_adjacency(gas, species_order):
+    """Build a symmetric-normalized species adjacency matrix from a Cantera
+    mechanism's reaction network, for use as the fixed graph structure of a
+    ReactionGraphGNN (NN_models.ReactionGraphGNN).
+
+    Two species are connected if they co-occur (as reactant and/or product)
+    in at least one reaction of `gas`. This is a coarse but physically
+    motivated proxy for "these species directly influence each other" --
+    finer choices (signed/weighted by stoichiometry or rate sensitivity)
+    are possible later if this proves too coarse.
+
+    species_order: list of species names giving the row/column order of the
+    returned matrix (must match the model's output column order, e.g.
+    Y_cols_all with the trailing "_Y" stripped). Every name must be a
+    species of `gas`.
+    """
+    idx = {name: i for i, name in enumerate(species_order)}
+    n = len(species_order)
+
+    missing = [name for name in species_order if name not in gas.species_names]
+    if missing:
+        raise ValueError(f"build_reaction_adjacency: species not found in mechanism: {missing}")
+
+    A = np.zeros((n, n))
+    for reaction in gas.reactions():
+        participants = [s for s in set(reaction.reactants) | set(reaction.products) if s in idx]
+        for a in participants:
+            for b in participants:
+                if a != b:
+                    A[idx[a], idx[b]] += 1.0
+
+    # Binarize (edge presence, not reaction count), add self-loops, then
+    # symmetric-normalize: A_norm = D^-1/2 (A + I) D^-1/2 (standard GCN
+    # normalization, keeps message magnitudes bounded across nodes of very
+    # different degree).
+    A = (A > 0).astype(np.float64)
+    A += np.eye(n)
+    deg = A.sum(axis=1)
+    d_inv_sqrt = 1.0 / np.sqrt(deg)
+    A_norm = A * d_inv_sqrt[:, None] * d_inv_sqrt[None, :]
+
+    return A_norm
+
 #==============================================================================
 # CANONICAL FLAMES COMPUTATION
 # =============================================================================
