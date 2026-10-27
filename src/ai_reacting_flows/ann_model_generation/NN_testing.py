@@ -331,7 +331,7 @@ class NNTesting():
             sumYs = np.append(sumYs, np.sum(Y_new,axis=0))
 
             # atomic composition of species
-            atomic_cons_current = np.dot(atomic_array,Y_new.reshape(self.nb_species_ANN)/molecular_weights)
+            atomic_cons_current = np.dot(atomic_array,Y_new.reshape(self.nb_species_ref)/molecular_weights)
             atomic_cons_current = np.multiply(self.W_atoms, atomic_cons_current)
             atomic_cons = np.vstack([atomic_cons,atomic_cons_current])
 
