@@ -256,6 +256,14 @@ class NN_manager():
         """
         y_t = mean + (std + 1e-7) * scaled_tensor
 
+        return self._inverse_transform(y_t, log_transform, cols)
+
+
+    def _inverse_transform(self, y_t, log_transform: int, cols=None):
+        """Inverse log/BCT transform with per-column control (see _inverse_scale).
+
+        y_t: tensor in transformed (log/BCT) space, not scaled
+        """
         # Normalize bool -> int for backward compatibility with old call sites.
         if isinstance(log_transform, bool):
             log_transform = 1 if log_transform else 0
@@ -284,7 +292,32 @@ class NN_manager():
                 y[:, j] = (y_t[:, j] * self.lambda_bct + 1.0) ** (1.0 / self.lambda_bct)
 
         return y
-    
+
+
+    def _physical_Yk(self, X, Y, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std):
+        """Mass fractions [-] at t and t+dt from scaled network inputs X and outputs Y.
+
+        Species part of X only (temperature and dt removed). With output_omegas and log/BCT
+        outputs, Y is a difference in transformed space: Y(t+dt) = f^-1( f(Y(t)) + Y ).
+        """
+        # Species columns of X (time step excluded when dt_var is used)
+        sl = slice(1, -1) if self.dt_var else slice(1, None)
+        cols_x = self.X_cols_all[sl]
+
+        Yk_in = self._inverse_scale(X[:, sl], Xscaler_mean[sl], Xscaler_std[sl], self.log_transform_X, cols=cols_x)
+
+        if self.output_omegas and self.log_transform_Y > 0:
+            # Unscale only (log_transform=0): input and output are added in log/BCT space
+            x_t = self._inverse_scale(X[:, sl], Xscaler_mean[sl], Xscaler_std[sl], log_transform=0)
+            y_t = self._inverse_scale(Y, Yscaler_mean, Yscaler_std, log_transform=0)
+            Yk_out = self._inverse_transform(x_t + y_t, self.log_transform_Y, cols=self.Y_cols_all)
+        else:
+            Yk_out = self._inverse_scale(Y, Yscaler_mean, Yscaler_std, self.log_transform_Y, cols=self.Y_cols_all)
+            if self.output_omegas:
+                Yk_out = Yk_in + Yk_out
+
+        return Yk_in, Yk_out
+
 
     def train_model(self, i_cluster, model, loss_fn, optimizer, scheduler, X_train, X_val, Y_train, Y_val, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std):
 
@@ -385,27 +418,10 @@ class NN_manager():
                     y_val_pred = model(X_val)
                     val_loss = loss_fn(y_val_pred, Y_val)
 
-                    # Inverse-scale the model's input state (species part of X),
-                    # excluding the time-step column when dt_var is used. We apply
-                    # per-species log/BCT inverse in accordance with
-                    # database_processing.log_excluded_species.
-                    if self.dt_var:  # Time needs to be removed from X here
-                        cols_x_slice = self.X_cols_all[1:-1]
-                        yval_in = self._inverse_scale(X_val[:,1:-1], Xscaler_mean[1:-1], Xscaler_std[1:-1], self.log_transform_X, cols=cols_x_slice)
-                    else:
-                        cols_x_slice = self.X_cols_all[1:]
-                        yval_in = self._inverse_scale(X_val[:,1:], Xscaler_mean[1:], Xscaler_std[1:], self.log_transform_X, cols=cols_x_slice)
+                    # Physical mass fractions at t (input) and t+dt (prediction)
+                    yval_in, yk_abs = self._physical_Yk(X_val, y_val_pred, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std)
 
                     # SUM OF MASS FRACTION
-                    # Inverse scale done per species to stay consistent with
-                    # database_processing (some species may be kept linear).
-                    yk = self._inverse_scale(y_val_pred, Yscaler_mean, Yscaler_std, self.log_transform_Y, cols=self.Y_cols_all)
-
-                    if self.output_omegas:
-                        yk_abs = yval_in + yk
-                    else:
-                        yk_abs = yk
-
                     sum_yk = yk_abs.sum(axis=1)
                     sum_yk = sum_yk.detach().cpu().numpy()
                     idx = epoch // val_every
