@@ -101,6 +101,7 @@ class NNTesting():
         if self.remove_N2:
             # We drop N2 from the ANN input/output space when with_N_chemistry
             # is disabled in dtb_processing.
+            self.spec_list_ANN = [spec for spec in self.spec_list_ref if spec != "N2"]
             self.nb_species_ANN -= 1
 
         # ANN input vector size
@@ -220,7 +221,7 @@ class NNTesting():
         Y_ini = states.Y
 
         # Matrix with number of each atom in species (order of rows: C, H, O, N)
-        atomic_array = utils.parse_species_names(self.spec_list_ANN)
+        atomic_array = utils.parse_species_names(self.spec_list_ref)
 
         #-------------------- CVODE COMPUTATION---------------------------
         for _ in range(nb_ite):
@@ -559,8 +560,8 @@ class NNTesting():
 
         for spec in self.spec_to_plot:
             fig, ax = plt.subplots(1, 1)
-            ax.plot(time_vect, states_cvode[:,self.spec_list_ANN.index(spec)+1], ls="--", color = "k", lw=2, label="CVODE")
-            ax.plot(time_vect, states_ann[:,self.spec_list_ANN.index(spec)+1], ls="-", color = "b", lw=2, marker='x', label="NN")
+            ax.plot(time_vect, states_cvode[:,self.spec_list_ref.index(spec)+1], ls="--", color = "k", lw=2, label="CVODE")
+            ax.plot(time_vect, states_ann[:,self.spec_list_ref.index(spec)+1], ls="-", color = "b", lw=2, marker='x', label="NN")
             ax.set_xlabel('$t$ $[ms]$', fontsize=ftsize)
             ax.set_ylabel(f'{spec} mass fraction $[-]$', fontsize=ftsize)
             if spec=="N2" and self.remove_N2: #because N2 is often constant
@@ -667,8 +668,8 @@ class NNTesting():
 
         for spec in self.spec_to_plot:
             fig, ax = plt.subplots(1, 1)
-            ax.plot(time_vect, states_cvode[:, self.spec_list_ANN.index(spec) + 1], ls="--", color="k", lw=2, label="CVODE")
-            ax.plot(time_vect, states_ann[:, self.spec_list_ANN.index(spec) + 1], ls="-", color="b", lw=2, marker='x', label="NN")
+            ax.plot(time_vect, states_cvode[:, self.spec_list_ref.index(spec) + 1], ls="--", color="k", lw=2, label="CVODE")
+            ax.plot(time_vect, states_ann[:, self.spec_list_ref.index(spec) + 1], ls="-", color="b", lw=2, marker='x', label="NN")
             ax.set_xlabel('$t$ $[ms]$', fontsize=ftsize)
             ax.set_ylabel(f'{spec} mass fraction $[-]$', fontsize=ftsize)
             if spec == "N2" and self.remove_N2:
@@ -1086,7 +1087,7 @@ class NNTesting():
 
             # We remove N2 from the physical-state part if necessary
             if self.remove_N2:
-                n2_index = self.spec_list_ANN.index("N2")
+                n2_index = self.spec_list_ref.index("N2")
                 log_state = np.delete(log_state, n2_index+1)
 
             # --------------------------------------------------------------
@@ -1244,7 +1245,7 @@ class NNTesting():
 
         # If N2 is not considered, it needs to be removed from the state_vector
         if self.remove_N2:
-            n2_index = self.spec_list_ANN.index("N2")
+            n2_index = self.spec_list_ref.index("N2")
             n2_value = state_vector[n2_index+1]
             state_vector = np.delete(state_vector, n2_index+1)
         
@@ -1425,7 +1426,7 @@ class NNTesting():
 
         # If N2 is not considered, it needs to be removed
         if self.remove_N2:
-            n2_index = self.spec_list_ANN.index("N2")
+            n2_index = self.spec_list_ref.index("N2")
             #
             Y_old = np.delete(Y_old, n2_index+1)
             Y_cvode = np.delete(Y_cvode, n2_index+1)
@@ -1657,7 +1658,7 @@ class NNTesting():
         Y_new_corr = Y_new.copy()
 
         # Matrix with number of each atom in species (order of rows: C, H, O, N)
-        atomic_array = utils.parse_species_names(self.spec_list_ANN)
+        atomic_array = utils.parse_species_names(self.spec_list_ref)
 
         # Species molecular weights
         molecular_weights = utils.get_molecular_weights(gas.species_names)
