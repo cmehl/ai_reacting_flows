@@ -1,4 +1,3 @@
-import sys
 import os
 from time import perf_counter
 import itertools
@@ -326,15 +325,6 @@ class ParticlesCloud(object):
         # Start of simulation printing
         if self.rank == 0:
             self.print_initial()
-
-
-        # =====================================================================
-        #     CHECKING INPUTS   
-        # =====================================================================
-
-        # Compatibility between inlet file and mech file species names
-        if self.rank == 0:
-            self.check_species()
 
 
 
@@ -1171,24 +1161,3 @@ class ParticlesCloud(object):
         if temp_converged: # and prog_var_converged:
             self.stats_converged = True
             print("-----------LOW TEMPERATURE VARIANCE AND HIGH PROGRESS VARIABLE: END OF COMPUTATION-----------")
-        
-
-# =============================================================================
-#   INPUT CHECKING
-# =============================================================================
-
-    def check_species(self):
-
-        # Inlet file species names
-        species_inlet = self.species_names
-        
-        # CANTERA mechanism species
-        mech_file = self.mech_file
-        gas = ct.Solution(mech_file)
-        species_mech = gas.species_names
-
-        try:
-            sorted(species_inlet)==sorted(species_mech)
-        except:
-            print("Species list in mech file and inlet file are not the same !")
-            sys.exit(1)
