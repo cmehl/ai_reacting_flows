@@ -306,7 +306,7 @@ class LearningDatabase(object):
                 #     data_kmeans_phys = self.X[spec_list].values.copy()
                 #     data_kmeans_time = self.dt_array.copy()
             else:
-                data_kmeans = self.X.values.copy()
+                data_kmeans = self.X[spec_list].values.copy()
 
             # ------------------------------------------------------------------
             # Apply log / Box-Cox transform
