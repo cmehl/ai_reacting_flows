@@ -519,7 +519,8 @@ class NN_manager():
             if self.scheduler_option == "ExpLR":
                 scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=self.LR_decay_rate)
             elif self.scheduler_option == "ReduceLROnPlateau":
-                # Plateau scheduler is driven by validation loss in train_model.
+                # Plateau scheduler is driven by validation loss in train_model, so it is only stepped
+                # every val_every epochs: patience is a number of validations (patience * val_every epochs).
                 scheduler = optim.lr_scheduler.ReduceLROnPlateau(
                     optimizer,
                     factor=0.5,
