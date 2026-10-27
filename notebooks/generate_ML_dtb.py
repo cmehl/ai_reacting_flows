@@ -15,7 +15,7 @@
 # %% [markdown]
 # # Generation of learning database from a stochastic reactors simulation
 #
-# This notebook builds a database to be used as a training database for the ML algorithm. In order for this script to be used, a stochastic reactors simulation with *build_ML_dtb=True* must have neen run beforehand. This simulation produces files *X.csv* and *Y.csv* with raw states $T$, $Y_k$ and necessary information to clusterize or re-sample the data (e.g. progress variable, heat release rate,...). 
+# This notebook builds a database to be used as a training database for the ML algorithm. In order for this script to be used, a stochastic reactors simulation with *build_ML_dtb=True* must have neen run beforehand. This simulation produces the file *solutions.h5* with raw states $T$, $Y_k$ and necessary information to clusterize or re-sample the data (e.g. progress variable, heat release rate,...). 
 #
 # The current script generate the final database and enables to choose several options:
 #
@@ -29,12 +29,13 @@
 #
 # + Re-sampling of the database: if the database is too imbalanced, a strategy based on heat release rate (HRR) may be used to focus the data on the regions of interest.
 #
-# Files *X_train*, *Y_train*, *X_val* and *Y_val* are created for each cluster. Note that if no clustering is applied, the default single cluster is cluster 0.
+# Datasets *X_train*, *Y_train*, *X_val* and *Y_val* are created for each cluster in *training_data.h5*. Note that if no clustering is applied, the default single cluster is cluster 0.
 
 # %% [markdown]
 # ## Data reading
 
 # %%
+import os
 from ai_reacting_flows.databases_processing.database_processing import LearningDatabase
 
 # %%
@@ -42,27 +43,17 @@ from ai_reacting_flows.databases_processing.database_processing import LearningD
 # %autoreload 2
 
 # %% [markdown]
-# The parameters of the database processing are first set:
+# The parameters of the database processing are read from the file *dtb_processing.yaml* of the case folder (see the README for all keys), and the stochastic reactors database is read from *STOCH_DTB_<dtb_folder_suffix>* in this folder. We therefore move to the case folder:
 
 # %%
-# Dictionary to store data processing parameters
-dtb_processing_parameters = {}
-
-dtb_processing_parameters["dtb_folder"] = "../scripts/STOCH_DTB_HOTSPOT_H2_HRR"       # Stochastic reactors simulation folder
-dtb_processing_parameters["database_name"] = "test" # "database_log_log_resampled_kmeans_3clusters"                   # Resulting database name
-dtb_processing_parameters["log_transform_X"] = 1              # 0: no transform, 1: Logarithm transform, 2: Box-Cox transform
-dtb_processing_parameters["log_transform_Y"] = 1              # 0: no transform, 1: Logarithm transform, 2: Box-Cox transform
-dtb_processing_parameters["threshold"] = 1.0e-10            # Threshold to be applied in case of logarithm transform
-dtb_processing_parameters["output_omegas"] = True          # True: output differences, False: output mass fractions
-dtb_processing_parameters["detailed_mechanism"] = "../data/chemical_mechanisms/mech_H2.yaml"        # Mechanism used for the database generation (/!\ YAML format)
-dtb_processing_parameters["fuel"] = "H2"           # Fuel name
-dtb_processing_parameters["with_N_chemistry"] = False        # Considering Nitrogen chemistry or not (if not, N not considered in atom balance for reduction). In MLP, it will change treatment of N2.
+os.chdir("../scripts/H2_IGN_KERNEL")
+print(open("dtb_processing.yaml").read())
 
 # %% [markdown]
 # The database is then created as a *LearningDatabase* object:
 
 # %%
-database = LearningDatabase(dtb_processing_parameters)
+database = LearningDatabase()
 
 # %% [markdown]
 # ## Data simple filtering
@@ -70,36 +61,10 @@ database = LearningDatabase(dtb_processing_parameters)
 # %% [markdown]
 # We can apply in a first step some simple filters to reduce the size of the dataset. Reducing the number of data points at this early stage leads to faster database treatment and may be recommended. 
 #
-# We can for instance apply a temperature threshold, here $600$ K for instance:
+# We can for instance apply a temperature threshold (*T_threshold* in *dtb_processing.yaml*, here $600$ K):
 
 # %%
-database.apply_temperature_threshold(600.0)
-
-# %% [markdown]
-# ## Reduction of the species space
-
-# %% [markdown]
-# We have the possibility to apply ANN only to a reduced subset of species. In order to preserve atomic masses and enthalpy, a set of fictive species is added to the database. Their mass fractions are computed so that conservation of quantities is ensured. In order for the problem to have a solution, the following rules must be obeyed when selecting the fictive species:
-#
-# + The number of fictive species must be *number of atoms + 1* (for the enthalpy). At the moment, the number of atoms is 4 ($C$, $H$, $O$, $N$), except for $H_2$, where carbon is not considered. Another possibility is to discard $N$, this is done by setting the *with_N_chemistry* parameter above to *False*.
-#
-# + Each atom must be represented at least once.
-#
-# The reduction operation can be done with the following lines:
-
-# %%
-fictive_species = ["O2", "H2O", "CO2", "CH4"]
-subset_species = ["N2", "O2", "H2O", "CO2", "CH4", "CO"]
-database.reduce_species_set(subset_species, fictive_species)
-
-# %% [markdown]
-# We can for instance check that the sum of species mass fractions is 1:
-
-# %%
-print(database.X[subset_species + [spec+"_F" for spec in fictive_species]].sum(axis=1))
-
-# %% [markdown]
-# Note that the check for the sum being 1 is here just illustrative, as an advanced verification on the individual atomic mass fractions and the enthalpy is made in the *reduce_species_set* routine.
+database.apply_temperature_threshold()
 
 # %% [markdown]
 # ## Data re-sampling
@@ -158,16 +123,13 @@ database.print_data_size()
 # ## Dataset clustering
 
 # %% [markdown]
-# We can clusterize the dataset based on a progress variable if needed:
+# We can clusterize the dataset with the method and number of clusters of *dtb_processing.yaml* (here k-means with 2 clusters):
 
 # %%
-database.clusterize_dataset("progvar", 2, c_bounds=[0,0.95,1.0])
+database.clusterize_dataset()
 
 # %% [markdown]
-# Alternatively, we could have used k-means: (commented because double clustering is banned)
-
-# %%
-database.clusterize_dataset("kmeans", 6)
+# Alternatively, clusters can be based on the progress variable (*clustering_method: progvar* in *dtb_processing.yaml*), with bounds given from 0 to 1, e.g. for 2 clusters: `database.clusterize_dataset(c_bounds=[0.0, 0.95, 1.0])`
 
 # %% [markdown]
 # We can visualize the cluster:
