@@ -69,6 +69,9 @@ class ParticlesCloud(object):
         self.mech_file  = data_gen_parameters["mech_file"]
         self.gas = ct.Solution(self.mech_file)
 
+        # Only species made of C, H, O and N are handled (error if e.g. Ar or He)
+        utils.check_elements(self.gas)
+
         # Dabatase building
         self.build_ml_dtb = data_gen_parameters["build_ml_dtb"]
 
@@ -278,23 +281,8 @@ class ParticlesCloud(object):
         #     ATOMIC CONSERVATION ANALYSIS
         # =====================================================================
         
-        # Analysis of atomic content
-        # Atom molecular weights (Order: C, H, O, N)
-        # Matrix with number of each atom in species (order of rows: C, H, O, N)
-        atomic_array = utils.parse_species_names(self.species_names)
-        
-        # Atomic mass per elements (dictionary)
-        mass_per_atom_array = np.array([12.011, 1.008, 15.999, 14.007])  # Having the array is also convenient
-        
-        # Atomic mass per species (numpy array)
-        mol_weights = utils.get_molecular_weights(self.species_names)
-        
-        # Matrix for computing atomic conservation
-        self.A_atomic = np.copy(atomic_array)
-        for j in range(4):
-            self.A_atomic[j,:] *=  mass_per_atom_array[j]
-        for k in range(len(self.species_names)):
-            self.A_atomic[:,k] /=  mol_weights[k]
+        # Matrix for computing elements mass fractions (order of rows: C, H, O, N), from Cantera
+        self.A_atomic = utils.get_elements_matrix(self.gas)
         
         
         # =====================================================================
@@ -440,7 +428,8 @@ class ParticlesCloud(object):
             self._update_dtb_states("Y")
         
         # Advance molecular diffusion
-        # Diffusion is applied by rank 0 and then redistributed to make sure every processor has the same states
+        # Diffusion is applied by rank 0, the mixed states are then given to every processor by _update_vars
+        # (scatter from rank 0 and allgather)
         if self.rank==0:
             self._apply_diffusion()
 

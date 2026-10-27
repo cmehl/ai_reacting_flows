@@ -162,7 +162,7 @@ class NN_manager():
         shutil.copy(os.path.join(self.run_folder, "networks_params.yaml"), self.directory)
 
         gas = ct.Solution(self.mechanism)
-        self.A_element, self.elements = utils.get_molar_mass_atomic_matrix(gas.species_names, not self.remove_N2)
+        self.A_element, self.elements = utils.get_molar_mass_atomic_matrix(gas, not self.remove_N2)
 
         # Training stats
         if self.new_model_folder:

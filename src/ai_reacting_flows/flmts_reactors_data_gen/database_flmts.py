@@ -12,7 +12,7 @@ sns.set_style("darkgrid")
 
 from sklearn.model_selection import train_test_split
 
-from ai_reacting_flows.tools.utilities import compute_X_element
+from ai_reacting_flows.tools.utilities import compute_X_element, check_elements
 
 class DatabaseFlamelets(object):
 
@@ -59,6 +59,7 @@ class DatabaseFlamelets(object):
 
         # Initialize solution array
         gas = ct.Solution(self.mech_file)
+        check_elements(gas)   # Only species made of C, H, O and N are handled
         self.species_names = gas.species_names
         self.nb_spec = len(self.species_names)
         cols = (
@@ -817,7 +818,7 @@ class DatabaseFlamelets(object):
                     continue
 
                 # Elements (C, H, O, N)
-                X_el = compute_X_element(gas.species_names, Yknew)
+                X_el = compute_X_element(gas, Yknew)
                 O_N_ratio = X_el[2]/X_el[3]
                 # if O_N_ratio<0.25 or O_N_ratio > 0.28:
                 #     accepted = False

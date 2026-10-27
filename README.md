@@ -177,7 +177,7 @@ Examples of all files can be found in `scripts/<CASE>/`. Units are SI.
 
 | Key | Description |
 |-----|-------------|
-| `mech_file` | Path to the Cantera mechanism (`.yaml`) |
+| `mech_file` | Path to the Cantera mechanism (`.yaml`). Species must contain only C, H, O and N atoms: an error is raised for inert species such as Ar or He (use e.g. `mech_nh3_noArHe.yaml`) |
 | `inlets` | Dict of inlets (see below) |
 | `results_folder_suffix` | Results are written in `STOCH_DTB_<suffix>/` |
 | `dtb_file` | Name of the output h5 file (e.g. `solutions.h5`) |

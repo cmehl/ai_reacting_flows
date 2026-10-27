@@ -96,6 +96,7 @@ class NNTesting():
 
         # CANTERA solution object needed to access species indices
         self.gas = ct.Solution(self.mech)
+        utils.check_elements(self.gas)   # Only species made of C, H, O and N are handled
         self.spec_list_ref = self.gas.species_names
         self.nb_species_ref = len(self.spec_list_ref)
 
@@ -150,7 +151,7 @@ class NNTesting():
             self.pv_ind.append(self.gas.species_index(self.pv_species[i]))
 
         # Some constants used in the code
-        self.W_atoms = np.array([12.011, 1.008, 15.999, 14.007]) # Order: C, H, O, N
+        self.W_atoms = utils.get_atomic_weights() # Order: C, H, O, N
 
         # Cached validation data (optional, used by evaluate_on_validation_set)
         self._val_data_loaded = False
@@ -228,7 +229,7 @@ class NNTesting():
         Yc_u = Y_ini[0, self.pv_ind].sum()
 
         # Matrix with number of each atom in species (order of rows: C, H, O, N)
-        atomic_array = utils.parse_species_names(self.spec_list_ref)
+        atomic_array = utils.get_atomic_array(self.gas)
 
         #-------------------- CVODE COMPUTATION---------------------------
         for _ in range(nb_ite):
@@ -267,7 +268,7 @@ class NNTesting():
             model.eval()
 
         # atomic composition of species
-        molecular_weights = utils.get_molecular_weights(self.gas.species_names)
+        molecular_weights = self.gas.molecular_weights
         atomic_cons = np.dot(atomic_array,np.reshape(Y_k_ann,-1)/molecular_weights)
         atomic_cons = np.multiply(self.W_atoms, atomic_cons)
 
@@ -1676,10 +1677,10 @@ class NNTesting():
         Y_new_corr = Y_new.copy()
 
         # Matrix with number of each atom in species (order of rows: C, H, O, N)
-        atomic_array = utils.parse_species_names(self.spec_list_ref)
+        atomic_array = utils.get_atomic_array(gas)
 
         # Species molecular weights
-        molecular_weights = utils.get_molecular_weights(gas.species_names)
+        molecular_weights = gas.molecular_weights
 
         # Initial elements mass fractions
         Y_a_in = np.dot(atomic_array,np.reshape(Y_old,-1)/molecular_weights)

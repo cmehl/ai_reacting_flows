@@ -82,26 +82,21 @@ def Phi_from_Yk_HC(n, m, Y_HC, Y_O2, Y_N2):
     return Phi
 
 # Function to compute composition from equivalence ratio
-def Yk_from_phi_HC(fuel, phi):
+def Yk_from_phi_HC(fuel, phi, gas):
     """Mass fractions [-] of a fuel/air mixture at equivalence ratio phi [-].
 
     The fuel CxHyOzNw may contain C, H, O and N. Mixture: phi CxHyOzNw + s (O2 + 3.76 N2),
     with stoichiometric coefficient s = x + y/4 - z/2 (products CO2, H2O and N2).
+    Atoms and molar masses [kg/kmol] are taken from the Cantera Solution gas.
     """
 
-    # Parse fuel species (Remark: might include oxygen and nitrogen)
-    x, y, z, w = parse_species(fuel)
-        
-    # Molar mass of elements (in g/mol)
-    W_C = 12.0107
-    W_H = 1.0079
-    W_O = 15.9994
-    W_N = 14.0067
+    # Atoms of fuel species (Remark: might include oxygen and nitrogen)
+    x, y, z, w = get_atomic_array(gas)[:, gas.species_index(fuel)]
 
     # Molar mass of species
-    W_fuel = x*W_C + y*W_H + z*W_O + w*W_N
-    W_O2 = 2*W_O
-    W_N2 = 2*W_N
+    W_fuel = gas.molecular_weights[gas.species_index(fuel)]
+    W_O2 = gas.molecular_weights[gas.species_index("O2")]
+    W_N2 = gas.molecular_weights[gas.species_index("N2")]
     
     
     # Total number of moles
@@ -136,172 +131,75 @@ def Yk_from_phi_HC(fuel, phi):
 
     return compo
 
-#TODO: update this function which is false for two-digits atom numbers (cf cvg_generator)
-# Function to parse a species name in order to get its atomic composition
-def parse_species(species):
+# Elements handled by the code (order of rows of atomic arrays)
+ELEMENTS = ["C", "H", "O", "N"]
 
-    # Checking if species is a fictive species, in which case we remove the "_F" suffix
-    if species.endswith("_F"):
-        species = species[:-2]
-    
-    i_char = 0
-    n_C = 0
-    n_H = 0
-    n_O = 0
-    n_N = 0
-    for i_char in range(len(species)):
-        
-        if species[i_char] in ["C","c"]:
-            try:
-                n_C += float(species[i_char+1])
-            except ValueError:
-                n_C += 1
-            except IndexError:
-                n_C += 1
-                
-        elif species[i_char] in ["H","h"]:
-            try:
-                n_H += float(species[i_char+1])
-            except ValueError:
-                n_H += 1
-            except IndexError:
-                n_H += 1
-                    
-        elif species[i_char] in ["O","o"]:
-            try:
-                n_O += float(species[i_char+1])
-            except ValueError:
-                n_O += 1
-            except IndexError:
-                n_O += 1
-            
-        elif species[i_char] in ["N","n"]:
-            try:
-                n_N += float(species[i_char+1])
-            except ValueError:
-                n_N += 1
-            except IndexError:
-                n_N += 1
+def check_elements(gas):
+    """Raise an error if a species of the Cantera Solution gas contains atoms other than C, H, O and N.
 
+    Inert species such as Ar and He are not handled: use a mechanism without them (e.g. mech_nh3_noArHe.yaml).
+    """
 
-    return n_C, n_H, n_O, n_N
+    other_elements = [el for el in gas.element_names if el not in ELEMENTS]
+    species = [spec for k, spec in enumerate(gas.species_names) if any(gas.n_atoms(k, el) > 0 for el in other_elements)]
 
-def get_molecular_weights(spec_names):
-    
-    # Atomic masses (order same as atomic_array: C, H, O, N )
-    mass_per_atom = np.array([12.011, 1.008, 15.999, 14.007])
-    mass_per_atom = mass_per_atom.reshape((4,1))
-    
-    # Compute atomic array using the above function
-    atomic_array = parse_species_names(spec_names)
+    if species:
+        raise ValueError(f"Species {species} contain atoms other than C, H, O and N, which are not handled: use a mechanism without them")
 
-    # Multiply array composition by masses
-    mass_array = np.multiply(mass_per_atom, atomic_array)
-    
-    # Molecular weights obtained by squashing the array
-    mol_weights = np.sum(mass_array, axis=0)
-    
-    return mol_weights
+def get_atomic_array(gas):
+    """Number of atoms [-] of C, H, O, N (rows) in each species (columns) of the Cantera Solution gas."""
 
-def parse_species_names(species_list):
-    
-    nb_species = len(species_list)
-    atomic_array = np.empty((4,nb_species))   # 4 comes from the fact that we are dealing with 4 elements: C, H, O and N
-    i_spec = 0
-    for i_spec in range(nb_species):
-        species = species_list[i_spec]
+    check_elements(gas)
 
-        # Checking if species is a fictive species, in which case we remove the "_F" suffix
-        if species.endswith("_F"):
-            species = species[:-2]
+    atomic_array = np.zeros((len(ELEMENTS), gas.n_species))
+    for j, el in enumerate(ELEMENTS):
+        if el in gas.element_names:
+            atomic_array[j,:] = [gas.n_atoms(k, el) for k in range(gas.n_species)]
 
-        i_char = 0
-        n_C = 0
-        n_H = 0
-        n_O = 0
-        n_N = 0
-        for i_char in range(len(species)):
-            
-            if species[i_char] in ["C","c"]:
-                try:
-                    n_C += float(species[i_char+1])
-                except ValueError:
-                    n_C += 1
-                except IndexError:
-                    n_C += 1
-                    
-            elif species[i_char] in ["H","h"]:
-                try:
-                    n_H += float(species[i_char+1])
-                except ValueError:
-                    n_H += 1
-                except IndexError:
-                    n_H += 1
-                        
-            elif species[i_char] in ["O","o"]:
-                try:
-                    n_O += float(species[i_char+1])
-                except ValueError:
-                    n_O += 1
-                except IndexError:
-                    n_O += 1
-                
-            elif species[i_char] in ["N","n"]:
-                try:
-                    n_N += float(species[i_char+1])
-                except ValueError:
-                    n_N += 1
-                except IndexError:
-                    n_N += 1
-      
-        atomic_array[:,i_spec] = np.array([n_C,n_H,n_O,n_N])
-        i_spec+=1
-        
     return atomic_array
 
+def get_atomic_weights():
+    """Atomic weights [kg/kmol] of C, H, O, N (from Cantera)."""
+
+    return np.array([ct.Element(el).weight for el in ELEMENTS])
+
+def get_elements_matrix(gas):
+    """Matrix A [-] such that A @ Y gives the mass fractions of C, H, O, N: A_jk = n_jk W_j / W_k."""
+
+    return get_atomic_weights()[:, None] * get_atomic_array(gas) / gas.molecular_weights
+
 # Function to get matrix (Wj/Wk)*n_k^j   (Remark: order of atoms is C, H, O, N)
-def get_molar_mass_atomic_matrix(species, with_N2_chemistry):
+def get_molar_mass_atomic_matrix(gas, with_N2_chemistry):
     """Matrix A [-] such that A @ Y gives the elements mass fractions, and the elements names.
 
-    Rows: elements present in species (order C, H, O, N), N removed if with_N2_chemistry is False.
+    Rows: elements present in the species of the Cantera Solution gas (order C, H, O, N),
+    N removed if with_N2_chemistry is False.
     Columns: species (N2 removed if with_N2_chemistry is False).
     """
 
+    A_element = get_elements_matrix(gas)
+
+    # N2 removed from species without N chemistry
     if not with_N2_chemistry:
-        species = [spec for spec in species if spec != "N2"]
-
-    nb_species = len(species)
-
-    atomic_array = parse_species_names(species)
-    #
-    mol_weights = get_molecular_weights(species)
-    #
-    mass_per_atom = np.array([12.011, 1.008, 15.999, 14.007])
-    #
-    A_element = np.copy(atomic_array)
-    for j in range(4):
-        A_element[j,:] *=  mass_per_atom[j]
-    for k in range(nb_species):
-        A_element[:,k] /=  mol_weights[k]
+        A_element = np.delete(A_element, gas.species_index("N2"), axis=1)
 
     # Keep only elements present in species (N not considered without N chemistry)
-    elements = ["C", "H", "O", "N"]
-    kept = [j for j in range(4) if atomic_array[j,:].any()]
+    kept = [j for j in range(len(ELEMENTS)) if A_element[j,:].any()]
     if not with_N2_chemistry and 3 in kept:
         kept.remove(3)
 
-    return A_element[kept,:], [elements[j] for j in kept]
+    return A_element[kept,:], [ELEMENTS[j] for j in kept]
 
 
-def compute_X_element(species, Yk):
+def compute_X_element(gas, Yk):
+    """Elements mole fractions [-] (C, H, O, N) for mass fractions Yk of the species of the Cantera Solution gas."""
 
     # Xk
-    Wk = get_molecular_weights(species)
+    Wk = gas.molecular_weights
     W = 1.0 / np.sum(Yk/Wk)
     Xk = (W/Wk)*Yk
 
-
-    atomic_array = parse_species_names(species)
+    atomic_array = get_atomic_array(gas)
     X_el = np.dot(atomic_array, Xk)
 
     return X_el
@@ -358,16 +256,6 @@ def compute_adiabatic(fuel, mech_file, phi, T0, p, diffusion_model="Mix"):
     
     # f.set_refine_criteria(ratio=3, slope=0.05, curve=0.1, prune=0.03)
     # #f.transport_model = 'Multi'
-# Standard deviation used for scaling, from the variance saved by database processing
-def scaler_std(var):
-    """Standard deviations sqrt(var) with zeros replaced by 1, as in sklearn StandardScaler,
-    which was used to scale the training data (LearningDatabase.process_database)."""
-
-    std = np.sqrt(var)
-    std[std == 0.0] = 1.0
-
-    return std
-
     # f.solve(loglevel=loglevel, refine_grid=True)
 
     f.set_refine_criteria(ratio=2, slope=0.06, curve=0.12, prune=0.04)
@@ -469,6 +357,16 @@ def compute_pdf(x, samples):
     pdf = pdf_kde(x)
 
     return pdf
+
+# Standard deviation used for scaling, from the variance saved by database processing
+def scaler_std(var):
+    """Standard deviations sqrt(var) with zeros replaced by 1, as in sklearn StandardScaler,
+    which was used to scale the training data (LearningDatabase.process_database)."""
+
+    std = np.sqrt(var)
+    std[std == 0.0] = 1.0
+
+    return std
 
 #==============================================================================
 # MISC
