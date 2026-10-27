@@ -1331,7 +1331,11 @@ class NNTesting():
                 state_updated = Y_ini + Y_new
                 #
                 for i, spec in enumerate(self.spec_list_ANN):
-                    if spec not in self.log_excluded_species:
+                    if spec in self.log_excluded_species:
+                        # Kept on linear scale: state_updated is already Y(t+dt)
+                        Y_new[0,i] = state_updated[0,i]
+                    else:
+                        # Inverse of the log / Box-Cox transform
                         if self.log_transform_Y==1:
                             Y_new[0,i] = np.exp(state_updated[0,i])
                         elif self.log_transform_Y==2:
