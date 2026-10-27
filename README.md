@@ -182,7 +182,7 @@ Examples of all files can be found in `scripts/<CASE>/`. Units are SI.
 | `results_folder_suffix` | Results are written in `STOCH_DTB_<suffix>/` |
 | `dtb_file` | Name of the output h5 file (e.g. `solutions.h5`) |
 | `build_ml_dtb` | If `true`, store `X`/`Y` pairs for ML |
-| `time_step` | Constant $dt$ [s], or dict `{t_start: dt}` to change $dt$ over time (first key must be 0) |
+| `time_step` | Constant $dt$ [s], or dict `{t_start: dt}` to change $dt$ over time (first key must be 0). Write `1.0e-5`, not `1e-5` (read as a string by YAML) |
 | `time_max` | End time [s] |
 | `automatic_termination` | Stop when temperature variance is low (optional, default `true`) |
 | `mixing_model` | `CURL`, `CURL_MODIFIED`, `CURL_MODIFIED_DD` (work in progress) or `EMST` |

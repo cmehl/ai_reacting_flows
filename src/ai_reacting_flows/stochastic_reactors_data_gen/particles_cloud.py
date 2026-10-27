@@ -348,12 +348,13 @@ class ParticlesCloud(object):
         """
 
         # Constant dt case
-        if isinstance(self.dt_input, float):
+        if isinstance(self.dt_input, (int, float)):
             dt_cte = float(self.dt_input)
             if dt_cte <= 0:
                 raise ValueError(f"[Error in dt array] dt must be positive, got {dt_cte}")
             
-            self.n_ite = int(self.time_max / dt_cte) + 1
+            # One extra iteration: the summed time may stay slightly below time_max after ceil(time_max/dt) steps
+            self.n_ite = math.ceil(self.time_max / dt_cte) + 1
             self.dt = np.ones(self.n_ite) * dt_cte
 
         # dt changing over time in user-prescribed time intervals
@@ -397,6 +398,10 @@ class ParticlesCloud(object):
             self.dt = np.append(self.dt, self.dt[-1])
             self.n_ite = len(self.dt)
 
+
+        # Wrong type (e.g. 1e-5 is read as a string by YAML, 1.0e-5 is a float)
+        else:
+            raise TypeError(f"[Error in dt array] time_step must be a number or a dict, got {self.dt_input!r} (write 1.0e-5, not 1e-5)")
 
 # =============================================================================
 #   TIME MARCHING FUNCTIONS
