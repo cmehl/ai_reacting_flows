@@ -261,8 +261,9 @@ class ParticlesCloud(object):
                     real_pairs = active_idx[local_pairs]   # Going back to particles indices
                     self.pairs_list.append(real_pairs)
 
+                    # One random mixing extent per pair (Janicka et al. 1979, Pope 1982)
                     if do_CURL_rate:
-                        self.CURL_rate_list.append(np.random.random())
+                        self.CURL_rate_list.append(np.random.random(len(real_pairs)))
                 
 
                 with open(self.results_folder + "/pairs_list.pkl", 'wb') as f:
@@ -547,7 +548,7 @@ class ParticlesCloud(object):
         pairs = self.pairs_list[self.iteration]
         
         # Carrying out diffusion
-        for pair in pairs:
+        for k, pair in enumerate(pairs):
             
             # Finding particles
             part_1 = self.particles_list[pair[0]]
@@ -580,8 +581,8 @@ class ParticlesCloud(object):
                 
             elif self.mixing_model=="CURL_MODIFIED":
                     
-                # Random value between 0 and 1
-                a = self.CURL_rate_list[self.iteration]
+                # Random value between 0 and 1, drawn for each pair
+                a = self.CURL_rate_list[self.iteration][k]
                         
                 # Update particles states
                 part_1.Y += 0.5 * a * (Y2_ini - Y1_ini)

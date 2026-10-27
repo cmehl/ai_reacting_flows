@@ -68,7 +68,8 @@ STOCH_DTB_<suffix>/                 (FLAMELETS_DTB_<suffix>/ for canonical flame
 ├── solutions.h5                    one group ITERATION_<n> per time step
 ├── <new_file_name>.h5              multi-dt database (optional)
 ├── dtb_params.yaml, <mechanism>    copies of the inputs
-├── pairs_list.pkl                  mixing pairs (+ CURL_rate_list.pkl for CURL_MODIFIED*);
+├── pairs_list.pkl                  mixing pairs, one array per time step (+ CURL_rate_list.pkl for
+│                                   CURL_MODIFIED: one random mixing extent per pair);
 │                                   reused with read_mixing: true if copied to the case folder
 └── statistics/                     temperature statistics plots
 ```
