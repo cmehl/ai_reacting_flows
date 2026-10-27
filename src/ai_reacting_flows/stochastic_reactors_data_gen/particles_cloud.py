@@ -1011,8 +1011,6 @@ class ParticlesCloud(object):
         # Set current iteration results in a dataframe
         arr = np.empty((nb_active, len(self.cols_all_states)))
         for i, part in enumerate(active_particles):
-            # i-th particle
-            part = self.particles_list[i]
             arr[i,0] = part.T
             arr[i,1] = part.P
             arr[i,2:part.nb_state_vars] = part.Y
