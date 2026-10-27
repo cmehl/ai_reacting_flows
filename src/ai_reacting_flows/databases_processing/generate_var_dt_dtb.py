@@ -27,9 +27,7 @@ def _validate_params(params: dict) -> None:
         "results_folder_suffix",
         "dtb_file",
         "mech_file",
-        "T_threshold",
         "time_step_type",
-        "time_step",
         "time_step_range",
         "new_file_name",
     ]
