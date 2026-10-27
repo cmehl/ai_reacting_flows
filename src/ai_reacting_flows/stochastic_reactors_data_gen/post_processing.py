@@ -48,7 +48,8 @@ class StochDatabase(object):
                 nb_inlets += 1
             #
             # Getting number of states variable
-            self.nb_state_vars = self.inlets_data_list[1].shape[1] - 3  # all except Z, phi and time
+            # Columns of trajectories: time, T, P, Yk, Z, phi, progress variable
+            self.nb_state_vars = self.inlets_data_list[1].shape[1] - 4  # T, P and Yk (all except time, Z, phi and progress variable)
             # 
             f.close()
 
@@ -436,7 +437,7 @@ class StochDatabase(object):
         fig.tight_layout()
 
         # Save
-        fig.savefig(self.save_folder + "traj_TZ_plot.png", dpi=300)
+        fig.savefig(self.save_folder + "/traj_TZ_plot.png", dpi=300)
 
     def plot_traj_T_time(self):
 
@@ -479,7 +480,7 @@ class StochDatabase(object):
             fig.tight_layout()
             
             # Save
-            fig.savefig(self.save_folder + f"traj_{spec}_time_plot.png", dpi=300)
+            fig.savefig(self.save_folder + f"/traj_{spec}_time_plot.png", dpi=300)
 
     #--------------------------------------------------------
     # INDIVIDUAL PARTICLES TRACKING
