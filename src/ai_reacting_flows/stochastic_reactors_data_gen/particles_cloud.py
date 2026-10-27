@@ -196,6 +196,7 @@ class ParticlesCloud(object):
         if self.mixing_model in ["CURL","CURL_MODIFIED","CURL_MODIFIED_DD"]:
 
             N_pairs = np.zeros_like(self.dt)
+            max_attained = []
             time = 0.0
             for i in range(self.n_ite):
 
@@ -208,7 +209,6 @@ class ParticlesCloud(object):
 
                     # Case where we select all pairs (pairs where i==j and (i,j)=(j,i) are not considered)
                     N_pairs_max = n_parts_active * (n_parts_active - 1) // 2
-                    max_attained = []
                     if N_pairs[i] > N_pairs_max:
                         max_attained.append(i)
                         N_pairs[i] = N_pairs_max
