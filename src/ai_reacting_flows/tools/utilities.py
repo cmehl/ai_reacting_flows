@@ -83,9 +83,14 @@ def Phi_from_Yk_HC(n, m, Y_HC, Y_O2, Y_N2):
 
 # Function to compute composition from equivalence ratio
 def Yk_from_phi_HC(fuel, phi):
-        
-    # Parse fuel species (Remark: might include oxygen)
-    x, y, z, _= parse_species(fuel)
+    """Mass fractions [-] of a fuel/air mixture at equivalence ratio phi [-].
+
+    The fuel CxHyOzNw may contain C, H, O and N. Mixture: phi CxHyOzNw + s (O2 + 3.76 N2),
+    with stoichiometric coefficient s = x + y/4 - z/2 (products CO2, H2O and N2).
+    """
+
+    # Parse fuel species (Remark: might include oxygen and nitrogen)
+    x, y, z, w = parse_species(fuel)
         
     # Molar mass of elements (in g/mol)
     W_C = 12.0107
@@ -94,7 +99,7 @@ def Yk_from_phi_HC(fuel, phi):
     W_N = 14.0067
 
     # Molar mass of species
-    W_fuel = x*W_C + y*W_H + z*W_O
+    W_fuel = x*W_C + y*W_H + z*W_O + w*W_N
     W_O2 = 2*W_O
     W_N2 = 2*W_N
     
