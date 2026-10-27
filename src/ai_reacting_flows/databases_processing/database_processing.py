@@ -270,9 +270,10 @@ class LearningDatabase(object):
             with open(self.dtb_folder + "/" + self.database_name + "/c_bounds.pkl", 'wb') as f:
                 pickle.dump(c_bounds, f)
 
-            # Assigning cluster can be made using pd.cut. CM: to check...
+            # Assigning cluster can be made using pd.cut. Progress variable clipped to [0, 1] as in
+            # NNTesting.compute_progvar (otherwise points outside c_bounds get no cluster and are lost)
             self.X["cluster"] = pd.cut(
-                                    self.X["Prog_var"],
+                                    self.X["Prog_var"].clip(0.0, 1.0),
                                     bins=c_bounds,
                                     labels=False,
                                     include_lowest=True,

@@ -108,7 +108,7 @@ Data manipulation:
 | `undersample_HRR(var1, var2, hrr_func, keep_low_c, n_samples, n_bins=100)` | Draw `n_samples` points, with a probability favouring bins of the (`var1`, `var2`) space with high HRR. `hrr_func` is applied to the normalized HRR in [0, 1] (e.g. `1 + 5x`). If `keep_low_c`, points with `Prog_var < 0.2` and `T > 1000 K` are kept (needed for ignition) |
 | `undersample_1D(var, min_count=1)` | Bin `var` and keep the same number of points in each bin (the size of the smallest bin with at least `min_count` points). Bins with fewer than `min_count` points are kept entirely |
 | `undersample_2D(var1, var2, min_count=1)` | Same in 2D |
-| `clusterize_dataset(c_bounds=None)` | Split the data in `nb_clusters` clusters. `kmeans`: k-means on the transformed and standardized states. `progvar`: clusters bounded by the progress variable values `c_bounds` (list of `nb_clusters + 1` values) |
+| `clusterize_dataset(c_bounds=None)` | Split the data in `nb_clusters` clusters. `kmeans`: k-means on the transformed and standardized states. `progvar`: clusters bounded by the progress variable values `c_bounds` (list of `nb_clusters + 1` values from 0 to 1; the progress variable is clipped to [0, 1]) |
 | `process_database(plot_distributions=False, distribution_species=[])` | Transform, split and standardize each cluster, write `training_data.h5` and statistics. Optionally plot train/validation distributions of `distribution_species` |
 
 Visualization:
