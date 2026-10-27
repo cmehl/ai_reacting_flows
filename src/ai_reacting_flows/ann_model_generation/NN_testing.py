@@ -395,7 +395,7 @@ class NNTesting():
             + 0.25 * self.gas.n_atoms(self.fuel, 'H')
             - 0.5 * self.gas.n_atoms(self.fuel, 'O')
         )
-        compo = f"{self.fuel}:{phi:3.2f}, O2:{fuel_ox_ratio:3.2f}, N2:{fuel_ox_ratio * 0.79 / 0.21:3.2f}"
+        compo = f"{self.fuel}:{phi}, O2:{fuel_ox_ratio}, N2:{fuel_ox_ratio * 0.79 / 0.21}"
 
         return self._run_0D_case(T0, pressure, dt, nb_ite, compo, reactor_type="ignition")
 
@@ -763,7 +763,7 @@ class NNTesting():
 
         # Determining initial composition using phi
         fuel_ox_ratio = self.gas.n_atoms(self.fuel,'C') + 0.25*self.gas.n_atoms(self.fuel,'H') - 0.5*self.gas.n_atoms(self.fuel,'O')
-        compo = f'{self.fuel}:{phi:3.2f}, O2:{fuel_ox_ratio:3.2f}, N2:{fuel_ox_ratio * 0.79 / 0.21:3.2f}'
+        compo = f'{self.fuel}:{phi}, O2:{fuel_ox_ratio}, N2:{fuel_ox_ratio * 0.79 / 0.21}'
 
         self.gas.TPX = T0, pressure, compo
 

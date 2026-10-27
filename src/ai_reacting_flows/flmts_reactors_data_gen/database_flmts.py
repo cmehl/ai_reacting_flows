@@ -156,7 +156,7 @@ class DatabaseFlamelets(object):
             fuel_ox_ratio = gas.n_atoms(species=self.fuel, element='C') \
                             + 0.25 * gas.n_atoms(species=self.fuel, element='H') \
                             - 0.5 * gas.n_atoms(species=self.fuel, element='O')
-            compo_ini = f'{self.fuel}:{phi_ini:3.2f}, O2:{fuel_ox_ratio:3.2f}, N2:{fuel_ox_ratio * 0.79 / 0.21:3.2f}'
+            compo_ini = f'{self.fuel}:{phi_ini}, O2:{fuel_ox_ratio}, N2:{fuel_ox_ratio * 0.79 / 0.21}'
             gas.TPX = temperature_ini, self.p, compo_ini
 
             nb_spec = len(gas.X)   # Number of species
@@ -379,7 +379,7 @@ class DatabaseFlamelets(object):
             fuel_ox_ratio = gas.n_atoms(species=self.fuel, element='C') \
                             + 0.25 * gas.n_atoms(species=self.fuel, element='H') \
                             - 0.5 * gas.n_atoms(species=self.fuel, element='O')
-            compo_ini = f'{self.fuel}:{phi_ini:3.2f}, O2:{fuel_ox_ratio:3.2f}, N2:{fuel_ox_ratio * 0.79 / 0.21:3.2f}'
+            compo_ini = f'{self.fuel}:{phi_ini}, O2:{fuel_ox_ratio}, N2:{fuel_ox_ratio * 0.79 / 0.21}'
             gas.TPX = temperature_ini, self.p, compo_ini
 
             nb_spec = len(gas.X)   # Number of species
