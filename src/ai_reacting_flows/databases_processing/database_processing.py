@@ -1355,7 +1355,7 @@ class LearningDatabase(object):
 
         fig.tight_layout()
         if self.is_resampled:
-            fig.savefig(self.dtb_folder + f'_distribution_{var}_resampled.png', dpi=400)
+            fig.savefig(os.path.join(self.dtb_folder, f"distribution_{var}_resampled.png"), dpi=400)
         else:
             fig.savefig(self.dtb_folder + f'_distribution_{var}.png', dpi=400)
 
