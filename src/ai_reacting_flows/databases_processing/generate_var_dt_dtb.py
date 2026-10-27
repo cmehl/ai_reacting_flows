@@ -274,10 +274,10 @@ def read_database_flmts(file_h5: str):
 
     h5file_r = h5py.File(file_h5, "r")
 
-    col_names_X = h5file_r["FLAMELETS/X"].attrs["cols"]
-    col_names_Y = h5file_r["FLAMELETS/Y"].attrs["cols"]
+    col_names_X = h5file_r["ITERATION_00000/X"].attrs["cols"]
+    col_names_Y = h5file_r["ITERATION_00000/Y"].attrs["cols"]
 
-    data_X = h5file_r.get("FLAMELETS/X")[()]
+    data_X = h5file_r.get("ITERATION_00000/X")[()]
     X = pd.DataFrame(data=data_X, columns=col_names_X).to_numpy().copy()
 
     h5file_r.close()
