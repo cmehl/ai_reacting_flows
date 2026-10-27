@@ -241,7 +241,8 @@ class ParticlesCloud(object):
                 if do_CURL_rate:
                     with open(f"{self.run_folder:s}/CURL_rate_list.pkl", "rb") as f:
                         self.CURL_rate_list = pickle.load(f)
-            else:
+            elif self.rank==0:
+                # Pairs drawn and saved by rank 0 only, as mixing is only performed by rank 0
 
                 self.pairs_list = []
                 self.CURL_rate_list = []
