@@ -76,8 +76,12 @@ class NNTesting():
         # k-means input vector here.
         self.clusterize_on = data_clustering.get("clusterize_on", "phys")
 
-        # Getting parameters from ANN model
-        with open(os.path.join(self.run_folder, f"STOCH_DTB_{database_params['dtb_folder_suffix']}","dtb_params.yaml"), "r") as file:
+        # Getting parameters from database generation
+        if database_params["database_type"] == "stoch":
+            dtb_params_file = os.path.join(f"STOCH_DTB_{database_params['dtb_folder_suffix']}", "dtb_params.yaml")
+        elif database_params["database_type"] == "flamelets":
+            dtb_params_file = os.path.join(f"FLAMELETS_DTB_{database_params['dtb_folder_suffix']}", "dtb_params_flmts.yaml")
+        with open(os.path.join(self.run_folder, dtb_params_file), "r") as file:
             dtb_parameters = yaml.safe_load(file)
 
         # Chemistry (maybe an information to get from model folder ?)
