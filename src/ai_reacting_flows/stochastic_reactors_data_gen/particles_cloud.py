@@ -203,10 +203,10 @@ class ParticlesCloud(object):
             time = 0.0
             for i in range(self.n_ite):
 
-                    # Number of active particles
-                    time += self.dt[i]
+                    # Number of active particles (time at the start of iteration i, as in advance_time)
                     active_idx = np.where(activation_times <= time)[0]   # true particle indices, active at this time
                     n_parts_active = active_idx.size
+                    time += self.dt[i]
             
                     N_pairs[i] = 1.5 * n_parts_active * self.dt[i]/self.tau_min # 1.5 factor used in Ren et al. paper
 
@@ -253,8 +253,9 @@ class ParticlesCloud(object):
                 time = 0.0
                 for i in range(self.n_ite): # DAK: vectorize pair generation ?
 
-                    time += self.dt[i]
+                    # Particles active at the start of iteration i (as in advance_time)
                     active_idx = np.where(activation_times <= time)[0]   # true particle indices, active at this time
+                    time += self.dt[i]
 
                     # local_pairs = utils.sample_comb2((active_idx.size, active_idx.size), self.Npairs_curl[i]) # Pairs using active particles indices
                     local_pairs = utils.sample_pairs(active_idx.size, self.Npairs_curl[i])
@@ -398,10 +399,10 @@ class ParticlesCloud(object):
             self.dt = np.append(self.dt, self.dt[-1])
             self.n_ite = len(self.dt)
 
-
         # Wrong type (e.g. 1e-5 is read as a string by YAML, 1.0e-5 is a float)
         else:
             raise TypeError(f"[Error in dt array] time_step must be a number or a dict, got {self.dt_input!r} (write 1.0e-5, not 1e-5)")
+
 
 # =============================================================================
 #   TIME MARCHING FUNCTIONS

@@ -3,8 +3,8 @@ Test 10: stochastic reactors output when some particles are not yet active.
 
 Runs a very small H2 stochastic reactors simulation (CURL_MODIFIED) where the first inlet is
 activated after the end of the simulation, so only particles of the second inlet are active.
-Check: all_states in solutions.h5 only contains particles of the second inlet, and an error
-is raised if no inlet is active at t = 0.
+Check: all_states in solutions.h5 only contains particles of the second inlet, an error
+is raised if no inlet is active at t = 0, and particles are not mixed before their activation.
 
 Independent of the other tests.
 """
@@ -70,3 +70,17 @@ def test_no_inlet_active_at_start(tmp_path):
 
     with pytest.raises(ValueError, match="activation_time = 0"):
         ParticlesCloud(params, dc.DummyComm())
+
+
+def test_no_mixing_before_activation(tmp_path):
+    os.chdir(tmp_path)
+    os.mkdir("STOCH_DTB_INACTIVE_TEST")   # Created by generate_stochastic_database in normal runs
+
+    # Inlet 1 (particles 0 to 9) activated at the start of the second iteration
+    params = copy.deepcopy(data_gen_parameters)
+    params["inlets"]["inlet_1"]["activation_time"] = 1.0e-5
+
+    cloud = ParticlesCloud(params, dc.DummyComm())
+
+    assert np.all(cloud.pairs_list[0] >= 10)
+    assert np.any(cloud.pairs_list[1] < 10)
