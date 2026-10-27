@@ -454,9 +454,12 @@ class StochDatabase(object):
         ax.set_xlabel(r"$t$ $[s]$")
         ax.set_ylabel(r"$T$ $[K]$")
 
+        ax.legend()
+
         fig.tight_layout()
 
-        ax.legend()
+        # Save
+        fig.savefig(self.save_folder + "/traj_T_time_plot.png", dpi=300)
 
     def plot_traj_Yk_time(self, species_to_plot, mech_file):
 
