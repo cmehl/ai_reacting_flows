@@ -294,9 +294,6 @@ class ParticlesCloud(object):
             self.A_atomic[j,:] *=  mass_per_atom_array[j]
         for k in range(len(self.species_names)):
             self.A_atomic[:,k] /=  mol_weights[k]
-            
-        for part in self.particles_list:
-            part.atomic_mass_fractions = np.dot(self.A_atomic, part.Y)
         
         
         # =====================================================================
@@ -1018,7 +1015,7 @@ class ParticlesCloud(object):
             arr[i,part.nb_state_vars+4] = self.time
             arr[i,part.nb_state_vars+5] = part.num_part
             arr[i,part.nb_state_vars+6] = part.num_inlet
-            arr[i,part.nb_state_vars+7:part.nb_state_vars+11] = part.atomic_mass_fractions
+            arr[i,part.nb_state_vars+7:part.nb_state_vars+11] = np.dot(self.A_atomic, part.Y)   # Elements mass fractions (C, H, O, N)
             arr[i,part.nb_state_vars+11] = part.mass
 
         # Store initial solution in h5 file
