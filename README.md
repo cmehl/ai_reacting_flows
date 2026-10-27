@@ -261,7 +261,7 @@ Cases are sampled in the given bounds with Latin hypercube sampling.
 | `learning.decay_rate` | Decay factor per epoch for `ExpLR` |
 | `learning.batch_size` | Default 2048 |
 | `learning.epochs_list` | Number of epochs, one per cluster |
-| `learning.val_every` | Validation is computed every `val_every` epochs |
+| `learning.val_every` | Validation is computed every `val_every` epochs (default 10) |
 
 An MLP definition contains:
 
