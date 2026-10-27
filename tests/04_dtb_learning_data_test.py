@@ -1,3 +1,12 @@
+"""
+Test 04: learning database processing.
+
+Processes STOCH_DTB_TEST/solutions.h5 (from test 01) with log transform and one cluster, and
+writes STOCH_DTB_TEST/dtb_resampled/training_data.h5.
+Check: histograms of the train/validation data are close to the references in H2_TEST_training_data/.
+
+Requires test 01.
+"""
 import os
 import oyaml as yaml
 import numpy as np

@@ -1,3 +1,13 @@
+"""
+Test 01: stochastic reactors database generation.
+
+Runs a small H2 stochastic reactors simulation (500 particles, CURL_MODIFIED mixing,
+mixing pairs read from pairs_list.pkl / CURL_rate_list.pkl for reproducibility) and writes
+STOCH_DTB_TEST/solutions.h5.
+Check: histograms of the generated states are close to the references in H2_TEST_histograms/.
+
+Must run first: tests 02 to 04 reuse STOCH_DTB_TEST/.
+"""
 from ai_reacting_flows.stochastic_reactors_data_gen.main import generate_stochastic_database
 from misc import extract_h2_dtb_histograms
 

@@ -1,3 +1,12 @@
+"""
+Test 03: multi-dt database generation.
+
+Re-integrates the states of STOCH_DTB_TEST/solutions_resamp200K.h5 (from test 02) with 5 random
+time steps in [1e-7, 1e-6] s, and writes STOCH_DTB_TEST/mech_h2_5dt.h5.
+Check: histograms of the outputs are close to the references in H2_dtvar_TEST_histograms/.
+
+Requires tests 01 and 02.
+"""
 from ai_reacting_flows.databases_processing.generate_var_dt_dtb import GenerateVariable_dt
 from misc import extract_h2_dtvar_dtb_histograms
 
