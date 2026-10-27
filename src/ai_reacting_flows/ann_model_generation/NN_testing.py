@@ -1067,8 +1067,8 @@ class NNTesting():
                 Yscaler_mean = Yscaler_array[:, 0]
                 Yscaler_var = Yscaler_array[:, 1]
 
-                Xscaler_std = np.sqrt(Xscaler_var)
-                Yscaler_std = np.sqrt(Yscaler_var)
+                Xscaler_std = utils.scaler_std(Xscaler_var)
+                Yscaler_std = utils.scaler_std(Yscaler_var)
 
                 # shape (n_features, 2): column 0 = mean, column 1 = std
                 Xscaler_mean_std = np.column_stack((Xscaler_mean, Xscaler_std))
@@ -1203,7 +1203,7 @@ class NNTesting():
         scaled_y: array in scaled space
         mean, std: scaling statistics (numpy arrays)
         """
-        y = mean + (std + 1e-7) * scaled_y
+        y = mean + std * scaled_y
 
         return y
 
@@ -1214,7 +1214,7 @@ class NNTesting():
         mean, std: scaling statistics (numpy arrays)
         """
 
-        scaled_array = (x - mean) / (std + 1e-7)
+        scaled_array = (x - mean) / std
 
         return scaled_array
 

@@ -358,6 +358,16 @@ def compute_adiabatic(fuel, mech_file, phi, T0, p, diffusion_model="Mix"):
     
     # f.set_refine_criteria(ratio=3, slope=0.05, curve=0.1, prune=0.03)
     # #f.transport_model = 'Multi'
+# Standard deviation used for scaling, from the variance saved by database processing
+def scaler_std(var):
+    """Standard deviations sqrt(var) with zeros replaced by 1, as in sklearn StandardScaler,
+    which was used to scale the training data (LearningDatabase.process_database)."""
+
+    std = np.sqrt(var)
+    std[std == 0.0] = 1.0
+
+    return std
+
     # f.solve(loglevel=loglevel, refine_grid=True)
 
     f.set_refine_criteria(ratio=2, slope=0.06, curve=0.12, prune=0.04)

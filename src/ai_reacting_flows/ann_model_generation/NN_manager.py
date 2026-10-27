@@ -253,7 +253,7 @@ class NN_manager():
             listed in self.log_excluded_species are kept on their original
             (linear) scale even when log_transform > 0.
         """
-        y_t = mean + (std + 1e-7) * scaled_tensor
+        y_t = mean + std * scaled_tensor
 
         return self._inverse_transform(y_t, log_transform, cols)
 
@@ -533,7 +533,7 @@ class NN_manager():
                 raise ValueError("Only scheduler implemented yet is ExpLR, ReduceLROnPlateau or None")
             
             # Perform training
-            epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements = self.train_model(i_cluster, model, loss_fn, optimizer, scheduler, X_train, X_val, Y_train, Y_val, Xscaler_mean, np.sqrt(Xscaler_var), Yscaler_mean, np.sqrt(Yscaler_var))
+            epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements = self.train_model(i_cluster, model, loss_fn, optimizer, scheduler, X_train, X_val, Y_train, Y_val, Xscaler_mean, utils.scaler_std(Xscaler_var), Yscaler_mean, utils.scaler_std(Yscaler_var))
 
             # Plot training monitoring data (loss, conservation,etc...)
             self.plot_losses_conservation(i_cluster, epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements)
