@@ -314,8 +314,8 @@ class LearningDatabase(object):
             # Applying log transform
             if self.log_transform_X>0:
 
-                if self.dt_var and self.clusterize_on=="dt":
                 # dt always has a plain log transform (as in process_database and NNTesting.attribute_cluster)
+                if self.dt_var and self.clusterize_on=="dt":
                     data_kmeans = np.log(np.clip(data_kmeans, 1e-300, None))
                 # elif self.dt_var and self.clusterize_on=="double":
                 #     data_kmeans_phys[:, 1:] = self._compute_log(data_kmeans_phys[:, 1:])
@@ -440,10 +440,14 @@ class LearningDatabase(object):
 
         data_log = data.copy()
 
-        data_log[data_log < self.threshold] = self.threshold
+        # Log: clipped to threshold to avoid log(0)
         if self.log_transform_X==1:
+            data_log[data_log < self.threshold] = self.threshold
             data_log = np.log(data_log)
+
+        # Box-Cox: defined at 0, only negative values are clipped
         elif self.log_transform_X==2:
+            data_log[data_log < 0.0] = 0.0
             data_log = (data_log**self.lambda_bct - 1.0)/self.lambda_bct
 
         return data_log
@@ -942,12 +946,17 @@ class LearningDatabase(object):
             cols_to_log_X = [c for c in clip_cols[1:] if c not in self.log_excluded_species]
             cols_to_log_Y = [c for c in Y_cols if c not in self.log_excluded_species]
 
-            # Clip if logarithm transformation (species/Temperature only).
-            # log_excluded_species are kept on their original scales (no log/BCT applied later),
+            # Clip if logarithm transformation (species/Temperature only): threshold for log, 0 for Box-Cox
+            # (negative mass fractions would give NaN). log_excluded_species are kept on their original scales.
             if self.log_transform_X==1:
                 X_p[cols_to_log_X] = X_p[cols_to_log_X].clip(lower=self.threshold)
+            elif self.log_transform_X==2:
+                X_p[cols_to_log_X] = X_p[cols_to_log_X].clip(lower=0.0)
+
             if self.log_transform_Y==1:
                 Y_p[cols_to_log_Y] = Y_p[cols_to_log_Y].clip(lower=self.threshold)
+            elif self.log_transform_Y==2:
+                Y_p[cols_to_log_Y] = Y_p[cols_to_log_Y].clip(lower=0.0)
 
             # If log transform at input and not at output and output_omega, we need to save un-transformed data
             if self.log_transform_X>0 and self.log_transform_Y==0 and self.output_omegas:

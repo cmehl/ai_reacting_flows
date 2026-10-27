@@ -235,7 +235,7 @@ Cases are sampled in the given bounds with Latin hypercube sampling.
 | `database_params.dt_var` | `true` for a multi-dt database ($dt$ is an input) |
 | `database_params.fuel`, `database_params.mech_file` | Fuel and mechanism |
 | `data_processing.log_transform_X`, `log_transform_Y` | 0: none, 1: log, 2: Box-Cox (with `lambda_bct`, optional, default 0.1) |
-| `data_processing.threshold` | Mass fractions are clipped to this value before log transform |
+| `data_processing.threshold` | Mass fractions are clipped to this value before log transform (to 0 before Box-Cox) |
 | `data_processing.T_threshold` | States below this temperature [K] are removed |
 | `data_processing.output_omegas` | If `true`, outputs are $Y_k(t+dt)-Y_k(t)$ instead of $Y_k(t+dt)$ |
 | `data_processing.with_N_chemistry` | If `false`, N2 is removed from inputs and outputs |
