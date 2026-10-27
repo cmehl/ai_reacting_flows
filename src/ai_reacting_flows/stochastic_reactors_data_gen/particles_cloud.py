@@ -1,4 +1,3 @@
-import sys
 import os
 from time import perf_counter
 import itertools
@@ -69,6 +68,9 @@ class ParticlesCloud(object):
         # Mechanism file
         self.mech_file  = data_gen_parameters["mech_file"]
         self.gas = ct.Solution(self.mech_file)
+
+        # Only species made of C, H, O and N are handled (error if e.g. Ar or He)
+        utils.check_elements(self.gas)
 
         # Dabatase building
         self.build_ml_dtb = data_gen_parameters["build_ml_dtb"]
@@ -157,6 +159,10 @@ class ParticlesCloud(object):
 
         # Activation times for each particle
         activation_times = np.array([p.activation_time for p in self.particles_list])
+
+        # At least one inlet must be active from the start of the simulation
+        if activation_times.min() > 0.0:
+            raise ValueError("At least one inlet must have activation_time = 0")
         
         # =====================================================================
         #     MIXING MODEL INITIALIZATION 
@@ -196,19 +202,19 @@ class ParticlesCloud(object):
         if self.mixing_model in ["CURL","CURL_MODIFIED","CURL_MODIFIED_DD"]:
 
             N_pairs = np.zeros_like(self.dt)
+            max_attained = []
             time = 0.0
             for i in range(self.n_ite):
 
-                    # Number of active particles
-                    time += self.dt[i]
+                    # Number of active particles (time at the start of iteration i, as in advance_time)
                     active_idx = np.where(activation_times <= time)[0]   # true particle indices, active at this time
                     n_parts_active = active_idx.size
+                    time += self.dt[i]
             
                     N_pairs[i] = 1.5 * n_parts_active * self.dt[i]/self.tau_min # 1.5 factor used in Ren et al. paper
 
                     # Case where we select all pairs (pairs where i==j and (i,j)=(j,i) are not considered)
                     N_pairs_max = n_parts_active * (n_parts_active - 1) // 2
-                    max_attained = []
                     if N_pairs[i] > N_pairs_max:
                         max_attained.append(i)
                         N_pairs[i] = N_pairs_max
@@ -241,7 +247,8 @@ class ParticlesCloud(object):
                 if do_CURL_rate:
                     with open(f"{self.run_folder:s}/CURL_rate_list.pkl", "rb") as f:
                         self.CURL_rate_list = pickle.load(f)
-            else:
+            elif self.rank==0:
+                # Pairs drawn and saved by rank 0 only, as mixing is only performed by rank 0
 
                 self.pairs_list = []
                 self.CURL_rate_list = []
@@ -249,16 +256,18 @@ class ParticlesCloud(object):
                 time = 0.0
                 for i in range(self.n_ite): # DAK: vectorize pair generation ?
 
-                    time += self.dt[i]
+                    # Particles active at the start of iteration i (as in advance_time)
                     active_idx = np.where(activation_times <= time)[0]   # true particle indices, active at this time
+                    time += self.dt[i]
 
                     # local_pairs = utils.sample_comb2((active_idx.size, active_idx.size), self.Npairs_curl[i]) # Pairs using active particles indices
                     local_pairs = utils.sample_pairs(active_idx.size, self.Npairs_curl[i])
                     real_pairs = active_idx[local_pairs]   # Going back to particles indices
                     self.pairs_list.append(real_pairs)
 
+                    # One random mixing extent per pair (Janicka et al. 1979, Pope 1982)
                     if do_CURL_rate:
-                        self.CURL_rate_list.append(np.random.random())
+                        self.CURL_rate_list.append(np.random.random(len(real_pairs)))
                 
 
                 with open(self.results_folder + "/pairs_list.pkl", 'wb') as f:
@@ -272,26 +281,8 @@ class ParticlesCloud(object):
         #     ATOMIC CONSERVATION ANALYSIS
         # =====================================================================
         
-        # Analysis of atomic content
-        # Atom molecular weights (Order: C, H, O, N)
-        # Matrix with number of each atom in species (order of rows: C, H, O, N)
-        atomic_array = utils.parse_species_names(self.species_names)
-        
-        # Atomic mass per elements (dictionary)
-        mass_per_atom_array = np.array([12.011, 1.008, 15.999, 14.007])  # Having the array is also convenient
-        
-        # Atomic mass per species (numpy array)
-        mol_weights = utils.get_molecular_weights(self.species_names)
-        
-        # Matrix for computing atomic conservation
-        self.A_atomic = np.copy(atomic_array)
-        for j in range(4):
-            self.A_atomic[j,:] *=  mass_per_atom_array[j]
-        for k in range(len(self.species_names)):
-            self.A_atomic[:,k] /=  mol_weights[k]
-            
-        for part in self.particles_list:
-            part.atomic_mass_fractions = np.dot(self.A_atomic, part.Y)
+        # Matrix for computing elements mass fractions (order of rows: C, H, O, N), from Cantera
+        self.A_atomic = utils.get_elements_matrix(self.gas)
         
         
         # =====================================================================
@@ -311,6 +302,7 @@ class ParticlesCloud(object):
         
         
         # Initialize vector for tracking mean/std of temperature 
+        self.time_stats_vect = []
         self.mean_T_vect = []
         self.stdev_T_vect= []
         
@@ -320,15 +312,6 @@ class ParticlesCloud(object):
         # Start of simulation printing
         if self.rank == 0:
             self.print_initial()
-
-
-        # =====================================================================
-        #     CHECKING INPUTS   
-        # =====================================================================
-
-        # Compatibility between inlet file and mech file species names
-        if self.rank == 0:
-            self.check_species()
 
 
 
@@ -354,12 +337,13 @@ class ParticlesCloud(object):
         """
 
         # Constant dt case
-        if isinstance(self.dt_input, float):
+        if isinstance(self.dt_input, (int, float)):
             dt_cte = float(self.dt_input)
             if dt_cte <= 0:
                 raise ValueError(f"[Error in dt array] dt must be positive, got {dt_cte}")
             
-            self.n_ite = int(self.time_max / dt_cte) + 1
+            # One extra iteration: the summed time may stay slightly below time_max after ceil(time_max/dt) steps
+            self.n_ite = math.ceil(self.time_max / dt_cte) + 1
             self.dt = np.ones(self.n_ite) * dt_cte
 
         # dt changing over time in user-prescribed time intervals
@@ -403,6 +387,10 @@ class ParticlesCloud(object):
             self.dt = np.append(self.dt, self.dt[-1])
             self.n_ite = len(self.dt)
 
+        # Wrong type (e.g. 1e-5 is read as a string by YAML, 1.0e-5 is a float)
+        else:
+            raise TypeError(f"[Error in dt array] time_step must be a number or a dict, got {self.dt_input!r} (write 1.0e-5, not 1e-5)")
+
 
 # =============================================================================
 #   TIME MARCHING FUNCTIONS
@@ -440,12 +428,11 @@ class ParticlesCloud(object):
             self._update_dtb_states("Y")
         
         # Advance molecular diffusion
-        # Diffusion is applied by rank 0 and then redistributed to make sure every processor has the same states
+        # Diffusion is applied by rank 0, the mixed states are then given to every processor by _update_vars
+        # (scatter from rank 0 and allgather)
         if self.rank==0:
             self._apply_diffusion()
 
-        self.comm.bcast(self.particles_list, root=0)
-        
         t3 = perf_counter()
         
         # Updating particle associated post-processing variables
@@ -551,7 +538,7 @@ class ParticlesCloud(object):
         pairs = self.pairs_list[self.iteration]
         
         # Carrying out diffusion
-        for pair in pairs:
+        for k, pair in enumerate(pairs):
             
             # Finding particles
             part_1 = self.particles_list[pair[0]]
@@ -584,8 +571,8 @@ class ParticlesCloud(object):
                 
             elif self.mixing_model=="CURL_MODIFIED":
                     
-                # Random value between 0 and 1
-                a = self.CURL_rate_list[self.iteration]
+                # Random value between 0 and 1, drawn for each pair
+                a = self.CURL_rate_list[self.iteration][k]
                         
                 # Update particles states
                 part_1.Y += 0.5 * a * (Y2_ini - Y1_ini)
@@ -619,7 +606,7 @@ class ParticlesCloud(object):
         prob_of_pairs = masses_of_pairs / masses_of_pairs.sum()
 
         # Randomly select mixing pairs
-        pairs_index = np.random.choice(len(self.particle_pairs), size=self.Npairs_curl, p=prob_of_pairs,replace=False)
+        pairs_index = np.random.choice(len(self.particle_pairs), size=self.Npairs_curl[self.iteration], p=prob_of_pairs,replace=False)
         
         # Carrying out diffusion
         for i in pairs_index:
@@ -1011,8 +998,6 @@ class ParticlesCloud(object):
         # Set current iteration results in a dataframe
         arr = np.empty((nb_active, len(self.cols_all_states)))
         for i, part in enumerate(active_particles):
-            # i-th particle
-            part = self.particles_list[i]
             arr[i,0] = part.T
             arr[i,1] = part.P
             arr[i,2:part.nb_state_vars] = part.Y
@@ -1023,7 +1008,7 @@ class ParticlesCloud(object):
             arr[i,part.nb_state_vars+4] = self.time
             arr[i,part.nb_state_vars+5] = part.num_part
             arr[i,part.nb_state_vars+6] = part.num_inlet
-            arr[i,part.nb_state_vars+7:part.nb_state_vars+11] = part.atomic_mass_fractions
+            arr[i,part.nb_state_vars+7:part.nb_state_vars+11] = np.dot(self.A_atomic, part.Y)   # Elements mass fractions (C, H, O, N)
             arr[i,part.nb_state_vars+11] = part.mass
 
         # Store initial solution in h5 file
@@ -1068,6 +1053,7 @@ class ParticlesCloud(object):
         # Mean and standard deviation of temperature
         self.mean_T = Temp_vect.mean()
         self.stdev_T = Temp_vect.std()
+        self.time_stats_vect.append(self.time)
         self.mean_T_vect.append(self.mean_T)
         self.stdev_T_vect.append(self.stdev_T)
         self.ratio_T_stdev = self.stdev_T / self.mean_T
@@ -1077,9 +1063,8 @@ class ParticlesCloud(object):
         if not os.path.isdir(self.results_folder + "/statistics"):
             os.mkdir(self.results_folder + "/statistics")
             
-        # Creating the time vector
-        N = len(self.mean_T_vect)
-        time_vect = np.linspace(0, self.time_max, N)
+        # Time of each statistics [s]
+        time_vect = np.array(self.time_stats_vect)
         
         # List -> array conversions
         self.mean_T_vect = np.array(self.mean_T_vect)
@@ -1167,24 +1152,3 @@ class ParticlesCloud(object):
         if temp_converged: # and prog_var_converged:
             self.stats_converged = True
             print("-----------LOW TEMPERATURE VARIANCE AND HIGH PROGRESS VARIABLE: END OF COMPUTATION-----------")
-        
-
-# =============================================================================
-#   INPUT CHECKING
-# =============================================================================
-
-    def check_species(self):
-
-        # Inlet file species names
-        species_inlet = self.species_names
-        
-        # CANTERA mechanism species
-        mech_file = self.mech_file
-        gas = ct.Solution(mech_file)
-        species_mech = gas.species_names
-
-        try:
-            sorted(species_inlet)==sorted(species_mech)
-        except:
-            print("Species list in mech file and inlet file are not the same !")
-            sys.exit(1)

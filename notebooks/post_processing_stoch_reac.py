@@ -27,17 +27,18 @@ from ai_reacting_flows.stochastic_reactors_data_gen.post_processing import Stoch
 # %autoreload 2
 
 # %% [markdown]
-# We first define the database to be processed and the folder where the plots will be stored:
+# We first define the database to be processed and the folder where the plots will be stored. Mean trajectories of inlets (*with_traj*) are only available if the database was generated with *calc_mean_traj: true*:
 
 # %%
-stoch_dtb_folder = "../scripts/STOCH_DTB_H2_DD_TEST_2"
+stoch_dtb_folder = "../scripts/H2_IGN_KERNEL/STOCH_DTB_H2_POF_2023"
 save_folder = "./postpro_dtb"
+with_traj = False
 
 # %% [markdown]
 # The database is then read in a *StochDatabase* object which contains the methods to perform the post-processing:
 
 # %%
-stoch_dtb = StochDatabase(stoch_dtb_folder, save_folder)
+stoch_dtb = StochDatabase(stoch_dtb_folder, save_folder, with_traj=with_traj)
 
 # %% [markdown]
 # Function to scatter plot $Y_k=f(T)$ for all time steps on a list on specified species: (here $H_2$ and $H$)
@@ -64,10 +65,11 @@ stoch_dtb.plot_generic(var_x, var_y, var_c)
 stoch_dtb.plot_T_Yk_indiv(["H2", "H"], iteration=3)
 
 # %% [markdown]
-# Function to plot $T_{mean}=f(t)$ for each inlet:
+# Function to plot $T_{mean}=f(t)$ for each inlet (needs mean trajectories):
 
 # %%
-stoch_dtb.plot_traj_T_time()
+if with_traj:
+    stoch_dtb.plot_traj_T_time()
 
 # %% [markdown]
 # Function to plot the evolution of some particle variables (here $H_2$) over time for a given inlet:
@@ -89,10 +91,10 @@ stoch_dtb.plot_pdf_inst("Temperature", iteration=3)
 stoch_dtb.plot_pdf_all("Temperature")
 
 # %% [markdown]
-# Plotting the PDF of heat release rate:
+# Plotting the PDF of heat release rate (or of its logarithm, *log_abs_HRR*):
 
 # %%
-stoch_dtb.plot_pdf_HRR_all()
+stoch_dtb.plot_pdf_all("HRR")
 
 # %% [markdown]
 # A function to plot the density of points is also available:

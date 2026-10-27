@@ -67,6 +67,7 @@ class LearningDatabase(object):
         self.T_threshold  = data_processing["T_threshold"]
         self.output_omegas  = data_processing["output_omegas"]
         self.with_N_chemistry = data_processing["with_N_chemistry"]
+        self.lambda_bct = data_processing.get("lambda_bct", 0.1)   # Box-Cox parameter (same default in NN_manager and NNTesting)
 
         # Optional list of species to keep on the original (linear) scale
         # even when log/Box–Cox transforms are active. This generalizes the
@@ -124,9 +125,6 @@ class LearningDatabase(object):
 
         # Flag to check if database has already been processed
         self.is_processed = False
-
-        # Default BCT parameter
-        self.lambda_bct = 0.1
 
         # Saving detailed mechanism in database folder
         shutil.copy(self.detailed_mechanism, self.dtb_folder + "/" + self.database_name + "/mech_detailed.yaml")
@@ -272,9 +270,10 @@ class LearningDatabase(object):
             with open(self.dtb_folder + "/" + self.database_name + "/c_bounds.pkl", 'wb') as f:
                 pickle.dump(c_bounds, f)
 
-            # Assigning cluster can be made using pd.cut. CM: to check...
+            # Assigning cluster can be made using pd.cut. Progress variable clipped to [0, 1] as in
+            # NNTesting.compute_progvar (otherwise points outside c_bounds get no cluster and are lost)
             self.X["cluster"] = pd.cut(
-                                    self.X["Prog_var"],
+                                    self.X["Prog_var"].clip(0.0, 1.0),
                                     bins=c_bounds,
                                     labels=False,
                                     include_lowest=True,
@@ -306,7 +305,7 @@ class LearningDatabase(object):
                 #     data_kmeans_phys = self.X[spec_list].values.copy()
                 #     data_kmeans_time = self.dt_array.copy()
             else:
-                data_kmeans = self.X.values.copy()
+                data_kmeans = self.X[spec_list].values.copy()
 
             # ------------------------------------------------------------------
             # Apply log / Box-Cox transform
@@ -315,8 +314,9 @@ class LearningDatabase(object):
             # Applying log transform
             if self.log_transform_X>0:
 
+                # dt always has a plain log transform (as in process_database and NNTesting.attribute_cluster)
                 if self.dt_var and self.clusterize_on=="dt":
-                    data_kmeans = self._compute_log(data_kmeans)
+                    data_kmeans = np.log(np.clip(data_kmeans, 1e-300, None))
                 # elif self.dt_var and self.clusterize_on=="double":
                 #     data_kmeans_phys[:, 1:] = self._compute_log(data_kmeans_phys[:, 1:])
                 #     data_kmeans_time = self._compute_log(data_kmeans_time)
@@ -440,10 +440,14 @@ class LearningDatabase(object):
 
         data_log = data.copy()
 
-        data_log[data_log < self.threshold] = self.threshold
+        # Log: clipped to threshold to avoid log(0)
         if self.log_transform_X==1:
+            data_log[data_log < self.threshold] = self.threshold
             data_log = np.log(data_log)
+
+        # Box-Cox: defined at 0, only negative values are clipped
         elif self.log_transform_X==2:
+            data_log[data_log < 0.0] = 0.0
             data_log = (data_log**self.lambda_bct - 1.0)/self.lambda_bct
 
         return data_log
@@ -475,7 +479,7 @@ class LearningDatabase(object):
 
 
     # Re-sampling based on heat release rate
-    def undersample_HRR(self, jpdf_var_1, jpdf_var_2, hrr_func, keep_low_c, n_samples=None, n_bins=100, seed=1991, plot_distrib=False):
+    def undersample_HRR(self, jpdf_var_1, jpdf_var_2, hrr_func, keep_low_c, n_samples, n_bins=100, seed=1991, plot_distrib=False):
 
         if self.clusterized_dataset and self.dt_var and self.clusterize_on in ("dt", "all"):
             raise NotImplementedError(
@@ -942,12 +946,17 @@ class LearningDatabase(object):
             cols_to_log_X = [c for c in clip_cols[1:] if c not in self.log_excluded_species]
             cols_to_log_Y = [c for c in Y_cols if c not in self.log_excluded_species]
 
-            # Clip if logarithm transformation (species/Temperature only).
-            # log_excluded_species are kept on their original scales (no log/BCT applied later),
+            # Clip if logarithm transformation (species/Temperature only): threshold for log, 0 for Box-Cox
+            # (negative mass fractions would give NaN). log_excluded_species are kept on their original scales.
             if self.log_transform_X==1:
                 X_p[cols_to_log_X] = X_p[cols_to_log_X].clip(lower=self.threshold)
+            elif self.log_transform_X==2:
+                X_p[cols_to_log_X] = X_p[cols_to_log_X].clip(lower=0.0)
+
             if self.log_transform_Y==1:
                 Y_p[cols_to_log_Y] = Y_p[cols_to_log_Y].clip(lower=self.threshold)
+            elif self.log_transform_Y==2:
+                Y_p[cols_to_log_Y] = Y_p[cols_to_log_Y].clip(lower=0.0)
 
             # If log transform at input and not at output and output_omega, we need to save un-transformed data
             if self.log_transform_X>0 and self.log_transform_Y==0 and self.output_omegas:
@@ -1192,33 +1201,26 @@ class LearningDatabase(object):
 
     def print_data_size(self):
 
+        # Cluster of each point: physical states (constant dt, clustering on "phys" or no clustering)
+        labels = self.X["cluster"].values
+
+        # Multi-dt clustering on "dt" or "all": one cluster per flattened (state, dt) point
+        if self.clusterized_dataset and self.dt_var:
+            if self.clusterize_on == "dt":
+                labels = self.time_clusters
+            elif self.clusterize_on == "all":
+                labels = self.all_clusters
+
         # Printing number of elements for each class
         size_total = 0
+        for i in range(self.nb_clusters):
 
-        if self.dt_var and self.clusterize_on == "dt":
-            for i in range(self.nb_clusters):
+            size_cluster_i = np.sum(labels==i)
+            size_total += size_cluster_i
 
-                size_cluster_i = self.time_clusters[self.time_clusters==i].shape[0]
-                size_total += size_cluster_i
+            print(f">> There are {size_cluster_i} points in cluster{i}")
 
-                print(f">> There are {size_cluster_i} points in cluster{i}")
-
-        # elif self.dt_var and self.clusterize_on in ["all", "double"]:
-        #     for i in range(self.nb_clusters_tot):
-        #         size_cluster_i = self.all_clusters[self.all_clusters==i].shape[0]
-        #         size_total += size_cluster_i
-
-        #         print(f">> There are {size_cluster_i} points in cluster{i}")
-
-        else:
-            for i in range(self.nb_clusters):
-
-                size_cluster_i = self.X[self.X["cluster"]==i].shape[0]
-                size_total += size_cluster_i
-
-                print(f">> There are {size_cluster_i} points in cluster{i}")
-
-            print(f"\n => There are {size_total} points overall")
+        print(f"\n => There are {size_total} points overall")
 
     
     # Distribution plotting function
@@ -1346,9 +1348,9 @@ class LearningDatabase(object):
 
         fig.tight_layout()
         if self.is_resampled:
-            fig.savefig(self.dtb_folder + f'_distribution_{var}_resampled.png', dpi=400)
+            fig.savefig(os.path.join(self.dtb_folder, f"distribution_{var}_resampled.png"), dpi=400)
         else:
-            fig.savefig(self.dtb_folder + f'_distribution_{var}.png', dpi=400)
+            fig.savefig(os.path.join(self.dtb_folder, f"distribution_{var}.png"), dpi=400)
 
 
 

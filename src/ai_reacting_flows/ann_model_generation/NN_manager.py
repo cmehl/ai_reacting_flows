@@ -82,7 +82,6 @@ class NN_manager():
         with open(os.path.join(self.run_folder, f"{prefix}_DTB_{database_params['dtb_folder_suffix']}",params_file), "r") as file:
             dtb_parameters = yaml.safe_load(file)
 
-        self.fuel = dtb_parameters["fuel"][0]   # Only single fuel for the moment
         self.mechanism = dtb_parameters["mech_file"]
 
         # Model folder name
@@ -101,7 +100,7 @@ class NN_manager():
         self.LR_decay_rate = learning_data.get("decay_rate", 1.0)
         self.batch_size = learning_data.get("batch_size", 2048)
         self.epochs_list = learning_data["epochs_list"]
-        self.val_every = learning_data["val_every"]
+        self.val_every = learning_data.get("val_every", 10)
 
 
         # Log high-level dataset and processing configuration.
@@ -163,7 +162,7 @@ class NN_manager():
         shutil.copy(os.path.join(self.run_folder, "networks_params.yaml"), self.directory)
 
         gas = ct.Solution(self.mechanism)
-        self.A_element = utils.get_molar_mass_atomic_matrix(gas.species_names, self.fuel, not self.remove_N2)
+        self.A_element, self.elements = utils.get_molar_mass_atomic_matrix(gas, not self.remove_N2)
 
         # Training stats
         if self.new_model_folder:
@@ -254,8 +253,16 @@ class NN_manager():
             listed in self.log_excluded_species are kept on their original
             (linear) scale even when log_transform > 0.
         """
-        y_t = mean + (std + 1e-7) * scaled_tensor
+        y_t = mean + std * scaled_tensor
 
+        return self._inverse_transform(y_t, log_transform, cols)
+
+
+    def _inverse_transform(self, y_t, log_transform: int, cols=None):
+        """Inverse log/BCT transform with per-column control (see _inverse_scale).
+
+        y_t: tensor in transformed (log/BCT) space, not scaled
+        """
         # Normalize bool -> int for backward compatibility with old call sites.
         if isinstance(log_transform, bool):
             log_transform = 1 if log_transform else 0
@@ -284,7 +291,32 @@ class NN_manager():
                 y[:, j] = (y_t[:, j] * self.lambda_bct + 1.0) ** (1.0 / self.lambda_bct)
 
         return y
-    
+
+
+    def _physical_Yk(self, X, Y, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std):
+        """Mass fractions [-] at t and t+dt from scaled network inputs X and outputs Y.
+
+        Species part of X only (temperature and dt removed). With output_omegas and log/BCT
+        outputs, Y is a difference in transformed space: Y(t+dt) = f^-1( f(Y(t)) + Y ).
+        """
+        # Species columns of X (time step excluded when dt_var is used)
+        sl = slice(1, -1) if self.dt_var else slice(1, None)
+        cols_x = self.X_cols_all[sl]
+
+        Yk_in = self._inverse_scale(X[:, sl], Xscaler_mean[sl], Xscaler_std[sl], self.log_transform_X, cols=cols_x)
+
+        if self.output_omegas and self.log_transform_Y > 0:
+            # Unscale only (log_transform=0): input and output are added in log/BCT space
+            x_t = self._inverse_scale(X[:, sl], Xscaler_mean[sl], Xscaler_std[sl], log_transform=0)
+            y_t = self._inverse_scale(Y, Yscaler_mean, Yscaler_std, log_transform=0)
+            Yk_out = self._inverse_transform(x_t + y_t, self.log_transform_Y, cols=self.Y_cols_all)
+        else:
+            Yk_out = self._inverse_scale(Y, Yscaler_mean, Yscaler_std, self.log_transform_Y, cols=self.Y_cols_all)
+            if self.output_omegas:
+                Yk_out = Yk_in + Yk_out
+
+        return Yk_in, Yk_out
+
 
     def train_model(self, i_cluster, model, loss_fn, optimizer, scheduler, X_train, X_val, Y_train, Y_val, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std):
 
@@ -317,16 +349,16 @@ class NN_manager():
 
         # Validation / conservation computed every "val_every" epochs (default 10)
         val_every = int(self.val_every)
-        n_val_points = max(1, n_epochs // val_every)
+
+        epochs = np.arange(n_epochs)
+        epochs_small = epochs[::val_every]
+        n_val_points = len(epochs_small)
 
         # Array to store sum of mass fractions: mean, min and max
         stats_sum_yk = np.empty((n_val_points, 3))
 
         # Array to store elements conservation: mean, min and max
         stats_A_elements = np.empty((n_val_points, A_element.shape[0], 3))
-
-        epochs = np.arange(n_epochs)
-        epochs_small = epochs[::val_every]
 
         best_val_loss = float("inf")
         best_state_dict = None
@@ -385,27 +417,10 @@ class NN_manager():
                     y_val_pred = model(X_val)
                     val_loss = loss_fn(y_val_pred, Y_val)
 
-                    # Inverse-scale the model's input state (species part of X),
-                    # excluding the time-step column when dt_var is used. We apply
-                    # per-species log/BCT inverse in accordance with
-                    # database_processing.log_excluded_species.
-                    if self.dt_var:  # Time needs to be removed from X here
-                        cols_x_slice = self.X_cols_all[1:-1]
-                        yval_in = self._inverse_scale(X_val[:,1:-1], Xscaler_mean[1:-1], Xscaler_std[1:-1], self.log_transform_X, cols=cols_x_slice)
-                    else:
-                        cols_x_slice = self.X_cols_all[1:]
-                        yval_in = self._inverse_scale(X_val[:,1:], Xscaler_mean[1:], Xscaler_std[1:], self.log_transform_X, cols=cols_x_slice)
+                    # Physical mass fractions at t (input) and t+dt (prediction)
+                    yval_in, yk_abs = self._physical_Yk(X_val, y_val_pred, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std)
 
                     # SUM OF MASS FRACTION
-                    # Inverse scale done per species to stay consistent with
-                    # database_processing (some species may be kept linear).
-                    yk = self._inverse_scale(y_val_pred, Yscaler_mean, Yscaler_std, self.log_transform_Y, cols=self.Y_cols_all)
-
-                    if self.output_omegas:
-                        yk_abs = yval_in + yk
-                    else:
-                        yk_abs = yk
-
                     sum_yk = yk_abs.sum(axis=1)
                     sum_yk = sum_yk.detach().cpu().numpy()
                     idx = epoch // val_every
@@ -504,7 +519,8 @@ class NN_manager():
             if self.scheduler_option == "ExpLR":
                 scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=self.LR_decay_rate)
             elif self.scheduler_option == "ReduceLROnPlateau":
-                # Plateau scheduler is driven by validation loss in train_model.
+                # Plateau scheduler is driven by validation loss in train_model, so it is only stepped
+                # every val_every epochs: patience is a number of validations (patience * val_every epochs).
                 scheduler = optim.lr_scheduler.ReduceLROnPlateau(
                     optimizer,
                     factor=0.5,
@@ -518,7 +534,7 @@ class NN_manager():
                 raise ValueError("Only scheduler implemented yet is ExpLR, ReduceLROnPlateau or None")
             
             # Perform training
-            epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements = self.train_model(i_cluster, model, loss_fn, optimizer, scheduler, X_train, X_val, Y_train, Y_val, Xscaler_mean, np.sqrt(Xscaler_var), Yscaler_mean, np.sqrt(Yscaler_var))
+            epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements = self.train_model(i_cluster, model, loss_fn, optimizer, scheduler, X_train, X_val, Y_train, Y_val, Xscaler_mean, utils.scaler_std(Xscaler_var), Yscaler_mean, utils.scaler_std(Yscaler_var))
 
             # Plot training monitoring data (loss, conservation,etc...)
             self.plot_losses_conservation(i_cluster, epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements)
@@ -562,26 +578,15 @@ class NN_manager():
 
         # ELEMENTS CONSERVATION
 
-        # Build the list of elements actually present, in order,
-        # together with the index they occupy in stats_A_elements
-        elements = []
-        idx = 0
-
-        elements.append(("H", idx)); idx += 1
-        elements.append(("O", idx)); idx += 1
-        if not self.remove_N2:
-            elements.append(("N", idx)); idx += 1
-        if self.fuel!="H2":
-            elements.append(("C", idx)); idx += 1
-
-        n = len(elements)
+        # Elements in the same order as the rows of A_element (and of stats_A_elements)
+        n = len(self.elements)
         ncols = 2
         nrows = -(-n // ncols)  # ceil division
 
         fig, axes = plt.subplots(nrows, ncols, squeeze=False)
         axes = axes.flat
 
-        for ax, (label, i) in zip(axes, elements):
+        for ax, (i, label) in zip(axes, enumerate(self.elements)):
             ax.plot(epochs_small, 100*stats_A_elements[:, i, 0], color="k")
             ax.plot(epochs_small, 100*stats_A_elements[:, i, 1], color="k", ls="--")
             ax.plot(epochs_small, 100*stats_A_elements[:, i, 2], color="k", ls="--")

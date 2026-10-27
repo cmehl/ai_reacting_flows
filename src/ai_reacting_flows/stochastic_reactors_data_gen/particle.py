@@ -37,6 +37,9 @@ class Particle(object):
         # Chemical mechanism
         self.mech_file = data_gen_parameters["mech_file"]
 
+        # Fuel (only single fuel for the mixture fraction)
+        self.fuel = data_gen_parameters["fuel"][0]
+
         # species names
         self.species_names = species_names
         
@@ -72,9 +75,9 @@ class Particle(object):
         # Species molecular weights
         self.spec_mol_weights = parent.gas.molecular_weights
         
-        self.species_atoms = utils.parse_species_names(self.species_names)
-
-        self.W_atoms = np.array([parent.gas.atomic_weight("C"), parent.gas.atomic_weight("H"), parent.gas.atomic_weight("O"), parent.gas.atomic_weight("N")]) # Order: C, H, O, N
+        # Number of atoms (rows: C, H, O, N) in each species and atomic weights [kg/kmol], from Cantera
+        self.species_atoms = utils.get_atomic_array(parent.gas)
+        self.W_atoms = utils.get_atomic_weights()
         
         # Compute initial equivalence ratio
         self.compute_equiv_ratio()
@@ -146,14 +149,8 @@ class Particle(object):
     def compute_equiv_ratio(self):
         """Equivalence ratio based on atomic (C, H, O) balance."""
 
-        # Cache atomic composition per species the first time it's needed;
-        # this never changes across calls, so avoid re-parsing every time.
-        if not hasattr(self, '_atomic_comp'):
-            self._atomic_comp = np.array([
-                utils.parse_species(spec)[:3] for spec in self.species_names
-            ])  # shape (n_species, 3) -> columns [n_C, n_H, n_O]  ([:3] because N is not considered here)
-
-        local_c, local_h, local_o = self._atomic_comp.T @ self.X
+        # Atoms C, H, O of each species ([:3] because N is not considered here)
+        local_c, local_h, local_o = self.species_atoms[:3] @ self.X
 
         o_stoich = 2.0 * local_c + 0.5 * local_h
         self.equiv_ratio = o_stoich / (local_o + 1.0e-20)
@@ -200,16 +197,21 @@ class Particle(object):
 
     # Mixture fraction based on atomic balance
     def compute_mixture_fraction(self):
-        """Mixture fraction based on atomic (C, H) mass balance."""
+        """Mixture fraction Z [-] based on atomic (C, H) mass balance.
+
+        Z = (Y_C + Y_H) / (Y_C + Y_H)_fuel, with Y_C, Y_H the elements mass fractions: 0 in air,
+        1 in pure fuel, for any fuel CxHyOzNw (e.g. NH3: (Y_C + Y_H)_fuel = 3 W_H / W_NH3).
+        Assumes the oxidizer contains no C and H (air).
+        """
 
          # Precompute per-species C/H mass contribution coefficients once;
         # only self.Y changes call-to-call, not composition or molar masses.
         if not hasattr(self, '_mixfrac_coeff'):
-            coeff = np.empty(len(self.species_names))
-            for idx, spec in enumerate(self.species_names):
-                n_C, n_H, _, _ = utils.parse_species(spec)
-                coeff[idx] = (n_C * 12.011 + n_H * 1.008) / self.spec_mol_weights[idx]
-            self._mixfrac_coeff = coeff
+            n_C, n_H = self.species_atoms[0], self.species_atoms[1]
+            coeff = (n_C * self.W_atoms[0] + n_H * self.W_atoms[1]) / self.spec_mol_weights
+
+            # Normalization by the C and H mass fraction of the pure fuel
+            self._mixfrac_coeff = coeff / coeff[self.species_names.index(self.fuel)]
 
         self.mix_frac = np.dot(self._mixfrac_coeff, self.Y)
 

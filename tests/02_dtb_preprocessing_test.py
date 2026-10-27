@@ -1,3 +1,12 @@
+"""
+Test 02: database undersampling.
+
+Reads STOCH_DTB_TEST/solutions.h5 (from test 01), applies the temperature threshold and the
+HRR-based undersampling in (PC1, PC2) space, and writes STOCH_DTB_TEST/solutions_resamp200K.h5.
+Check: histograms of the resampled database are close to the references in H2_resampled_TEST_histograms/.
+
+Requires test 01. Its output is used by test 03.
+"""
 import os
 import oyaml as yaml
 import numpy as np

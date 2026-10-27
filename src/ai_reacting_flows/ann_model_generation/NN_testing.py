@@ -76,8 +76,12 @@ class NNTesting():
         # k-means input vector here.
         self.clusterize_on = data_clustering.get("clusterize_on", "phys")
 
-        # Getting parameters from ANN model
-        with open(os.path.join(self.run_folder, f"STOCH_DTB_{database_params['dtb_folder_suffix']}","dtb_params.yaml"), "r") as file:
+        # Getting parameters from database generation
+        if database_params["database_type"] == "stoch":
+            dtb_params_file = os.path.join(f"STOCH_DTB_{database_params['dtb_folder_suffix']}", "dtb_params.yaml")
+        elif database_params["database_type"] == "flamelets":
+            dtb_params_file = os.path.join(f"FLAMELETS_DTB_{database_params['dtb_folder_suffix']}", "dtb_params_flmts.yaml")
+        with open(os.path.join(self.run_folder, dtb_params_file), "r") as file:
             dtb_parameters = yaml.safe_load(file)
 
         # Chemistry (maybe an information to get from model folder ?)
@@ -92,6 +96,7 @@ class NNTesting():
 
         # CANTERA solution object needed to access species indices
         self.gas = ct.Solution(self.mech)
+        utils.check_elements(self.gas)   # Only species made of C, H, O and N are handled
         self.spec_list_ref = self.gas.species_names
         self.nb_species_ref = len(self.spec_list_ref)
 
@@ -101,6 +106,7 @@ class NNTesting():
         if self.remove_N2:
             # We drop N2 from the ANN input/output space when with_N_chemistry
             # is disabled in dtb_processing.
+            self.spec_list_ANN = [spec for spec in self.spec_list_ref if spec != "N2"]
             self.nb_species_ANN -= 1
 
         # ANN input vector size
@@ -145,7 +151,7 @@ class NNTesting():
             self.pv_ind.append(self.gas.species_index(self.pv_species[i]))
 
         # Some constants used in the code
-        self.W_atoms = np.array([12.011, 1.008, 15.999, 14.007]) # Order: C, H, O, N
+        self.W_atoms = utils.get_atomic_weights() # Order: C, H, O, N
 
         # Cached validation data (optional, used by evaluate_on_validation_set)
         self._val_data_loaded = False
@@ -219,8 +225,11 @@ class NNTesting():
         T_ini = states.T
         Y_ini = states.Y
 
+        # Progress variable species mass fraction in the initial (unburnt) mixture
+        Yc_u = Y_ini[0, self.pv_ind].sum()
+
         # Matrix with number of each atom in species (order of rows: C, H, O, N)
-        atomic_array = utils.parse_species_names(self.spec_list_ANN)
+        atomic_array = utils.get_atomic_array(self.gas)
 
         #-------------------- CVODE COMPUTATION---------------------------
         for _ in range(nb_ite):
@@ -251,14 +260,15 @@ class NNTesting():
         # Vectors to store time data
         state_save = np.append(T_ann, Y_k_ann)
         sumYs = np.array([1.0])
-        progvar_vect = [0.0]
+        progvar = self.compute_progvar(np.append(T_ann, Y_k_ann), pressure, Yc_u)
+        progvar_vect = [progvar]
 
         for model in self.models_list:
             model.to(self.device)
             model.eval()
 
         # atomic composition of species
-        molecular_weights = utils.get_molecular_weights(self.gas.species_names)
+        molecular_weights = self.gas.molecular_weights
         atomic_cons = np.dot(atomic_array,np.reshape(Y_k_ann,-1)/molecular_weights)
         atomic_cons = np.multiply(self.W_atoms, atomic_cons)
 
@@ -269,9 +279,6 @@ class NNTesting():
             # Old state
             T_old = state[0]
             Y_old = state[1:]
-
-            # Computing current progress variable
-            progvar = 0.0  # self.compute_progvar(state, pressure)   # TODO: debug
 
             # Build clustering feature vector consistent with dtb_processing
             # configuration (clusterize_on: "phys", "all", or "dt").
@@ -318,6 +325,9 @@ class NNTesting():
             # Vector with all variable (T and Yks)
             state = np.append(T_new, Y_new)
 
+            # Progress variable of the new state (used for clustering at next step)
+            progvar = self.compute_progvar(state, pressure, Yc_u)
+
             # Saving values
             state_save = np.vstack([state_save,state])
             progvar_vect.append(progvar)
@@ -326,7 +336,7 @@ class NNTesting():
             sumYs = np.append(sumYs, np.sum(Y_new,axis=0))
 
             # atomic composition of species
-            atomic_cons_current = np.dot(atomic_array,Y_new.reshape(self.nb_species_ANN)/molecular_weights)
+            atomic_cons_current = np.dot(atomic_array,Y_new.reshape(self.nb_species_ref)/molecular_weights)
             atomic_cons_current = np.multiply(self.W_atoms, atomic_cons_current)
             atomic_cons = np.vstack([atomic_cons,atomic_cons_current])
 
@@ -386,7 +396,7 @@ class NNTesting():
             + 0.25 * self.gas.n_atoms(self.fuel, 'H')
             - 0.5 * self.gas.n_atoms(self.fuel, 'O')
         )
-        compo = f"{self.fuel}:{phi:3.2f}, O2:{fuel_ox_ratio:3.2f}, N2:{fuel_ox_ratio * 0.79 / 0.21:3.2f}"
+        compo = f"{self.fuel}:{phi}, O2:{fuel_ox_ratio}, N2:{fuel_ox_ratio * 0.79 / 0.21}"
 
         return self._run_0D_case(T0, pressure, dt, nb_ite, compo, reactor_type="ignition")
 
@@ -559,8 +569,8 @@ class NNTesting():
 
         for spec in self.spec_to_plot:
             fig, ax = plt.subplots(1, 1)
-            ax.plot(time_vect, states_cvode[:,self.spec_list_ANN.index(spec)+1], ls="--", color = "k", lw=2, label="CVODE")
-            ax.plot(time_vect, states_ann[:,self.spec_list_ANN.index(spec)+1], ls="-", color = "b", lw=2, marker='x', label="NN")
+            ax.plot(time_vect, states_cvode[:,self.spec_list_ref.index(spec)+1], ls="--", color = "k", lw=2, label="CVODE")
+            ax.plot(time_vect, states_ann[:,self.spec_list_ref.index(spec)+1], ls="-", color = "b", lw=2, marker='x', label="NN")
             ax.set_xlabel('$t$ $[ms]$', fontsize=ftsize)
             ax.set_ylabel(f'{spec} mass fraction $[-]$', fontsize=ftsize)
             if spec=="N2" and self.remove_N2: #because N2 is often constant
@@ -667,8 +677,8 @@ class NNTesting():
 
         for spec in self.spec_to_plot:
             fig, ax = plt.subplots(1, 1)
-            ax.plot(time_vect, states_cvode[:, self.spec_list_ANN.index(spec) + 1], ls="--", color="k", lw=2, label="CVODE")
-            ax.plot(time_vect, states_ann[:, self.spec_list_ANN.index(spec) + 1], ls="-", color="b", lw=2, marker='x', label="NN")
+            ax.plot(time_vect, states_cvode[:, self.spec_list_ref.index(spec) + 1], ls="--", color="k", lw=2, label="CVODE")
+            ax.plot(time_vect, states_ann[:, self.spec_list_ref.index(spec) + 1], ls="-", color="b", lw=2, marker='x', label="NN")
             ax.set_xlabel('$t$ $[ms]$', fontsize=ftsize)
             ax.set_ylabel(f'{spec} mass fraction $[-]$', fontsize=ftsize)
             if spec == "N2" and self.remove_N2:
@@ -754,9 +764,12 @@ class NNTesting():
 
         # Determining initial composition using phi
         fuel_ox_ratio = self.gas.n_atoms(self.fuel,'C') + 0.25*self.gas.n_atoms(self.fuel,'H') - 0.5*self.gas.n_atoms(self.fuel,'O')
-        compo = f'{self.fuel}:{phi:3.2f}, O2:{fuel_ox_ratio:3.2f}, N2:{fuel_ox_ratio * 0.79 / 0.21:3.2f}'
+        compo = f'{self.fuel}:{phi}, O2:{fuel_ox_ratio}, N2:{fuel_ox_ratio * 0.79 / 0.21}'
 
         self.gas.TPX = T0, pressure, compo
+
+        # Progress variable species mass fraction in the fresh gases
+        Yc_u = self.gas.Y[self.pv_ind].sum()
 
         f = ct.FreeFlame(self.gas, initial_grid)
 
@@ -787,7 +800,7 @@ class NNTesting():
         nb_pnts_total = len(f.grid)
         for i in range(nb_pnts_total):
             state = np.append(Tt[i], Yt[:,i])
-            c[i] = self.compute_progvar(state, pressure)
+            c[i] = self.compute_progvar(state, pressure, Yc_u)
 
         X_grid = f.grid
 
@@ -827,7 +840,7 @@ class NNTesting():
 
             # Computing current progress variable on physical state
             state_phys = np.append(Tt[i_reac], Yt_ann[:, i_reac])
-            progvar = self.compute_progvar(state_phys, pressure)
+            progvar = self.compute_progvar(state_phys, pressure, Yc_u)
 
             # Build clustering feature vector consistent with dtb_processing
             # configuration.
@@ -1055,8 +1068,8 @@ class NNTesting():
                 Yscaler_mean = Yscaler_array[:, 0]
                 Yscaler_var = Yscaler_array[:, 1]
 
-                Xscaler_std = np.sqrt(Xscaler_var)
-                Yscaler_std = np.sqrt(Yscaler_var)
+                Xscaler_std = utils.scaler_std(Xscaler_var)
+                Yscaler_std = utils.scaler_std(Yscaler_var)
 
                 # shape (n_features, 2): column 0 = mean, column 1 = std
                 Xscaler_mean_std = np.column_stack((Xscaler_mean, Xscaler_std))
@@ -1086,7 +1099,7 @@ class NNTesting():
 
             # We remove N2 from the physical-state part if necessary
             if self.remove_N2:
-                n2_index = self.spec_list_ANN.index("N2")
+                n2_index = self.spec_list_ref.index("N2")
                 log_state = np.delete(log_state, n2_index+1)
 
             # --------------------------------------------------------------
@@ -1191,7 +1204,7 @@ class NNTesting():
         scaled_y: array in scaled space
         mean, std: scaling statistics (numpy arrays)
         """
-        y = mean + (std + 1e-7) * scaled_y
+        y = mean + std * scaled_y
 
         return y
 
@@ -1202,7 +1215,7 @@ class NNTesting():
         mean, std: scaling statistics (numpy arrays)
         """
 
-        scaled_array = (x - mean) / (std + 1e-7)
+        scaled_array = (x - mean) / std
 
         return scaled_array
 
@@ -1244,7 +1257,7 @@ class NNTesting():
 
         # If N2 is not considered, it needs to be removed from the state_vector
         if self.remove_N2:
-            n2_index = self.spec_list_ANN.index("N2")
+            n2_index = self.spec_list_ref.index("N2")
             n2_value = state_vector[n2_index+1]
             state_vector = np.delete(state_vector, n2_index+1)
         
@@ -1326,7 +1339,11 @@ class NNTesting():
                 state_updated = Y_ini + Y_new
                 #
                 for i, spec in enumerate(self.spec_list_ANN):
-                    if spec not in self.log_excluded_species:
+                    if spec in self.log_excluded_species:
+                        # Kept on linear scale: state_updated is already Y(t+dt)
+                        Y_new[0,i] = state_updated[0,i]
+                    else:
+                        # Inverse of the log / Box-Cox transform
                         if self.log_transform_Y==1:
                             Y_new[0,i] = np.exp(state_updated[0,i])
                         elif self.log_transform_Y==2:
@@ -1425,7 +1442,7 @@ class NNTesting():
 
         # If N2 is not considered, it needs to be removed
         if self.remove_N2:
-            n2_index = self.spec_list_ANN.index("N2")
+            n2_index = self.spec_list_ref.index("N2")
             #
             Y_old = np.delete(Y_old, n2_index+1)
             Y_cvode = np.delete(Y_cvode, n2_index+1)
@@ -1632,19 +1649,22 @@ class NNTesting():
 #   THERMO-CHEMICAL FUNCTIONS 
 #-----------------------------------------------------------------------
     # Progress variable
-    def compute_progvar(self, state, pressure):
+    def compute_progvar(self, state, pressure, Yc_u):
+        """Progress variable c = (Yc - Yc_u) / (Yc_eq - Yc_u) [-], clipped to [0, 1].
+
+        Same definition as in the databases (stochastic particles and flamelets).
+        state: [T [K], Y_k [-]], pressure [Pa], Yc_u: progress variable species mass fraction
+        in the unburnt mixture [-]. Yc_eq is computed at equilibrium (HP) from the current state.
+        """
         # Equilibrium state in present conditions
-        pv_ind = self.pv_ind
         self.gas.TPY = state[0], pressure, state[1:]
         self.gas.equilibrate('HP')
 
-        Yc_eq = 0.0
-        Yc = 0.0
-        for i in pv_ind:
-            Yc_eq += self.gas.Y[i]
-            Yc += state[i+1]
-     
-        progvar = Yc/Yc_eq
+        Yc_eq = self.gas.Y[self.pv_ind].sum()
+        Yc = state[1:][self.pv_ind].sum()
+
+        denom = Yc_eq - Yc_u
+        progvar = (Yc - Yc_u) / denom if denom > 1e-10 else 0.0
 
         # Clipping
         progvar = min(max(progvar, 0.0), 1.0)
@@ -1657,10 +1677,10 @@ class NNTesting():
         Y_new_corr = Y_new.copy()
 
         # Matrix with number of each atom in species (order of rows: C, H, O, N)
-        atomic_array = utils.parse_species_names(self.spec_list_ANN)
+        atomic_array = utils.get_atomic_array(gas)
 
         # Species molecular weights
-        molecular_weights = utils.get_molecular_weights(gas.species_names)
+        molecular_weights = gas.molecular_weights
 
         # Initial elements mass fractions
         Y_a_in = np.dot(atomic_array,np.reshape(Y_old,-1)/molecular_weights)

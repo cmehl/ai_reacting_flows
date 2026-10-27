@@ -27,9 +27,7 @@ def _validate_params(params: dict) -> None:
         "results_folder_suffix",
         "dtb_file",
         "mech_file",
-        "T_threshold",
         "time_step_type",
-        "time_step",
         "time_step_range",
         "new_file_name",
     ]
@@ -73,7 +71,9 @@ def GenerateVariable_dt(dtb_type: str, params: dict, comm: "MPI.Comm") -> str:
     rank = comm.Get_rank()
     size = comm.Get_size()
 
-    np.random.seed(1234)
+    # One seed per rank, so that ranks do not draw the same random time steps
+    # (only the shuffle of rank 0 is used, as X is scattered from rank 0)
+    np.random.seed(1234 + rank)
 
     _validate_params(params)
 
@@ -274,10 +274,10 @@ def read_database_flmts(file_h5: str):
 
     h5file_r = h5py.File(file_h5, "r")
 
-    col_names_X = h5file_r["FLAMELETS/X"].attrs["cols"]
-    col_names_Y = h5file_r["FLAMELETS/Y"].attrs["cols"]
+    col_names_X = h5file_r["ITERATION_00000/X"].attrs["cols"]
+    col_names_Y = h5file_r["ITERATION_00000/Y"].attrs["cols"]
 
-    data_X = h5file_r.get("FLAMELETS/X")[()]
+    data_X = h5file_r.get("ITERATION_00000/X")[()]
     X = pd.DataFrame(data=data_X, columns=col_names_X).to_numpy().copy()
 
     h5file_r.close()

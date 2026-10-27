@@ -12,7 +12,7 @@ sns.set_style("darkgrid")
 
 from sklearn.model_selection import train_test_split
 
-from ai_reacting_flows.tools.utilities import compute_X_element
+from ai_reacting_flows.tools.utilities import compute_X_element, check_elements
 
 class DatabaseFlamelets(object):
 
@@ -59,6 +59,7 @@ class DatabaseFlamelets(object):
 
         # Initialize solution array
         gas = ct.Solution(self.mech_file)
+        check_elements(gas)   # Only species made of C, H, O and N are handled
         self.species_names = gas.species_names
         self.nb_spec = len(self.species_names)
         cols = (
@@ -88,6 +89,7 @@ class DatabaseFlamelets(object):
         n_samples = zerod_params["n_samples"]
         max_sim_time = zerod_params["max_sim_time"]
         solve_mode = zerod_params["solve_mode"]
+        cvode_stride = zerod_params.get("cvode_stride", 1)   # dt_cvode: one CVODE step out of cvode_stride is stored
          
         self.n_samples_0D = n_samples
         self.sim_numbers_0D = np.arange(n_samples)
@@ -155,7 +157,7 @@ class DatabaseFlamelets(object):
             fuel_ox_ratio = gas.n_atoms(species=self.fuel, element='C') \
                             + 0.25 * gas.n_atoms(species=self.fuel, element='H') \
                             - 0.5 * gas.n_atoms(species=self.fuel, element='O')
-            compo_ini = f'{self.fuel}:{phi_ini:3.2f}, O2:{fuel_ox_ratio:3.2f}, N2:{fuel_ox_ratio * 0.79 / 0.21:3.2f}'
+            compo_ini = f'{self.fuel}:{phi_ini}, O2:{fuel_ox_ratio}, N2:{fuel_ox_ratio * 0.79 / 0.21}'
             gas.TPX = temperature_ini, self.p, compo_ini
 
             nb_spec = len(gas.X)   # Number of species
@@ -188,34 +190,39 @@ class DatabaseFlamelets(object):
                 if solve_mode=="dt_cfd":
                     time += self.time_step
                     sim.advance(time)
-                    states.append(r.thermo.state, t=time)
+                    is_stored = True
                 elif solve_mode=="dt_cvode":
                     t_cvode = sim.step()
                     time = t_cvode
-                    if n_iter%5==0:   # dt_cvode gives too many points
-                        states.append(r.thermo.state, t=t_cvode)
+                    is_stored = (n_iter%cvode_stride==0)
                 else:
                     sys.exit("solve_mode should be dt_cvode or dt_cfd")
+
+                # Stored state, with its progress variable and HRR (computed below)
+                if is_stored:
+                    states.append(r.thermo.state, t=time)
 
                 # checking if equilibrium is reached
                 state_current = np.append(r.thermo.X, r.T)
                 residual = 100.0*np.linalg.norm(state_equil - state_current,ord=np.inf)/np.linalg.norm(state_equil,
                                                                                                            ord=np.inf)
                 
-                # Compute progress variable
-                Yc = gas.Y[self.pv_ind].sum(axis=0)
-                if Yc_eq - Yc_u > 1e-10:
-                    progvar = (Yc - Yc_u) / (Yc_eq - Yc_u)
-                else:
-                    progvar = 0.0
-                progvar_vect.append(progvar)
-                
-                # Compute heat release rate
-                hrr = 0.0       
-                for spec in gas.species_names:
-                    standard_enthalpy_spec = gas.standard_enthalpies_RT[gas.species_index(spec)] * ct.gas_constant * gas.T
-                    hrr += -gas.net_production_rates[gas.species_index(spec)] * standard_enthalpy_spec
-                hrr_vect.append(hrr)
+                if is_stored:
+
+                    # Compute progress variable
+                    Yc = gas.Y[self.pv_ind].sum(axis=0)
+                    if Yc_eq - Yc_u > 1e-10:
+                        progvar = (Yc - Yc_u) / (Yc_eq - Yc_u)
+                    else:
+                        progvar = 0.0
+                    progvar_vect.append(progvar)
+
+                    # Compute heat release rate
+                    hrr = 0.0
+                    for spec in gas.species_names:
+                        standard_enthalpy_spec = gas.standard_enthalpies_RT[gas.species_index(spec)] * ct.gas_constant * gas.T
+                        hrr += -gas.net_production_rates[gas.species_index(spec)] * standard_enthalpy_spec
+                    hrr_vect.append(hrr)
 
                 
                 n_iter +=1
@@ -373,7 +380,7 @@ class DatabaseFlamelets(object):
             fuel_ox_ratio = gas.n_atoms(species=self.fuel, element='C') \
                             + 0.25 * gas.n_atoms(species=self.fuel, element='H') \
                             - 0.5 * gas.n_atoms(species=self.fuel, element='O')
-            compo_ini = f'{self.fuel}:{phi_ini:3.2f}, O2:{fuel_ox_ratio:3.2f}, N2:{fuel_ox_ratio * 0.79 / 0.21:3.2f}'
+            compo_ini = f'{self.fuel}:{phi_ini}, O2:{fuel_ox_ratio}, N2:{fuel_ox_ratio * 0.79 / 0.21}'
             gas.TPX = temperature_ini, self.p, compo_ini
 
             nb_spec = len(gas.X)   # Number of species
@@ -811,7 +818,7 @@ class DatabaseFlamelets(object):
                     continue
 
                 # Elements (C, H, O, N)
-                X_el = compute_X_element(gas.species_names, Yknew)
+                X_el = compute_X_element(gas, Yknew)
                 O_N_ratio = X_el[2]/X_el[3]
                 # if O_N_ratio<0.25 or O_N_ratio > 0.28:
                 #     accepted = False
