@@ -224,6 +224,9 @@ class NNTesting():
         T_ini = states.T
         Y_ini = states.Y
 
+        # Progress variable species mass fraction in the initial (unburnt) mixture
+        Yc_u = Y_ini[0, self.pv_ind].sum()
+
         # Matrix with number of each atom in species (order of rows: C, H, O, N)
         atomic_array = utils.parse_species_names(self.spec_list_ref)
 
@@ -256,7 +259,8 @@ class NNTesting():
         # Vectors to store time data
         state_save = np.append(T_ann, Y_k_ann)
         sumYs = np.array([1.0])
-        progvar_vect = [0.0]
+        progvar = self.compute_progvar(np.append(T_ann, Y_k_ann), pressure, Yc_u)
+        progvar_vect = [progvar]
 
         for model in self.models_list:
             model.to(self.device)
@@ -274,9 +278,6 @@ class NNTesting():
             # Old state
             T_old = state[0]
             Y_old = state[1:]
-
-            # Computing current progress variable
-            progvar = 0.0  # self.compute_progvar(state, pressure)   # TODO: debug
 
             # Build clustering feature vector consistent with dtb_processing
             # configuration (clusterize_on: "phys", "all", or "dt").
@@ -322,6 +323,9 @@ class NNTesting():
 
             # Vector with all variable (T and Yks)
             state = np.append(T_new, Y_new)
+
+            # Progress variable of the new state (used for clustering at next step)
+            progvar = self.compute_progvar(state, pressure, Yc_u)
 
             # Saving values
             state_save = np.vstack([state_save,state])
@@ -763,6 +767,9 @@ class NNTesting():
 
         self.gas.TPX = T0, pressure, compo
 
+        # Progress variable species mass fraction in the fresh gases
+        Yc_u = self.gas.Y[self.pv_ind].sum()
+
         f = ct.FreeFlame(self.gas, initial_grid)
 
         f.flame.set_steady_tolerances(default=tol_ss)
@@ -792,7 +799,7 @@ class NNTesting():
         nb_pnts_total = len(f.grid)
         for i in range(nb_pnts_total):
             state = np.append(Tt[i], Yt[:,i])
-            c[i] = self.compute_progvar(state, pressure)
+            c[i] = self.compute_progvar(state, pressure, Yc_u)
 
         X_grid = f.grid
 
@@ -832,7 +839,7 @@ class NNTesting():
 
             # Computing current progress variable on physical state
             state_phys = np.append(Tt[i_reac], Yt_ann[:, i_reac])
-            progvar = self.compute_progvar(state_phys, pressure)
+            progvar = self.compute_progvar(state_phys, pressure, Yc_u)
 
             # Build clustering feature vector consistent with dtb_processing
             # configuration.
@@ -1641,19 +1648,22 @@ class NNTesting():
 #   THERMO-CHEMICAL FUNCTIONS 
 #-----------------------------------------------------------------------
     # Progress variable
-    def compute_progvar(self, state, pressure):
+    def compute_progvar(self, state, pressure, Yc_u):
+        """Progress variable c = (Yc - Yc_u) / (Yc_eq - Yc_u) [-], clipped to [0, 1].
+
+        Same definition as in the databases (stochastic particles and flamelets).
+        state: [T [K], Y_k [-]], pressure [Pa], Yc_u: progress variable species mass fraction
+        in the unburnt mixture [-]. Yc_eq is computed at equilibrium (HP) from the current state.
+        """
         # Equilibrium state in present conditions
-        pv_ind = self.pv_ind
         self.gas.TPY = state[0], pressure, state[1:]
         self.gas.equilibrate('HP')
 
-        Yc_eq = 0.0
-        Yc = 0.0
-        for i in pv_ind:
-            Yc_eq += self.gas.Y[i]
-            Yc += state[i+1]
-     
-        progvar = Yc/Yc_eq
+        Yc_eq = self.gas.Y[self.pv_ind].sum()
+        Yc = state[1:][self.pv_ind].sum()
+
+        denom = Yc_eq - Yc_u
+        progvar = (Yc - Yc_u) / denom if denom > 1e-10 else 0.0
 
         # Clipping
         progvar = min(max(progvar, 0.0), 1.0)

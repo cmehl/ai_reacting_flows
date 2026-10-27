@@ -189,7 +189,7 @@ Examples of all files can be found in `scripts/<CASE>/`. Units are SI.
 | `mixing_time` | Mixing time scale [s] |
 | `read_mixing` | If `true`, read mixing pairs from `pairs_list.pkl` in the case folder |
 | `T_threshold` | Chemistry is not computed below this temperature [K] |
-| `pv_species` | Species defining the progress variable (e.g. `[H2O]`) |
+| `pv_species` | Species defining the progress variable $c = (Y_c - Y_{c,u})/(Y_{c,eq} - Y_{c,u})$, with $Y_c$ the sum of their mass fractions, $u$ the unburnt mixture and $eq$ the equilibrium (e.g. `[H2O]`) |
 | `fuel` | List of fuels (e.g. `[H2]`) |
 | `calc_mean_traj` | If `true`, write mean trajectories of each inlet |
 | `ML_inference_flag` | Keep `false` |
