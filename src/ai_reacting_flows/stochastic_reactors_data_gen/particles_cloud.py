@@ -619,7 +619,7 @@ class ParticlesCloud(object):
         prob_of_pairs = masses_of_pairs / masses_of_pairs.sum()
 
         # Randomly select mixing pairs
-        pairs_index = np.random.choice(len(self.particle_pairs), size=self.Npairs_curl, p=prob_of_pairs,replace=False)
+        pairs_index = np.random.choice(len(self.particle_pairs), size=self.Npairs_curl[self.iteration], p=prob_of_pairs,replace=False)
         
         # Carrying out diffusion
         for i in pairs_index:
