@@ -217,7 +217,7 @@ Multi-dt generation (`generate_multi_dt.py`) reads the same file, with the addit
 | `pressure` | Pressure [Pa] |
 | `time_step` | $dt$ [s] between `X` and `Y` |
 | `include_zerod`, `include_oned_prem`, `include_oned_diff` | Which canonical cases to compute |
-| `zerod_params` | `phi_bounds`, `T0_bounds` [K], `n_samples`, `max_sim_time` [s], `solve_mode` (`dt_cfd`: constant $dt$, `dt_cvode`: CVODE internal steps) |
+| `zerod_params` | `phi_bounds`, `T0_bounds` [K], `n_samples`, `max_sim_time` [s], `solve_mode` (`dt_cfd`: constant $dt$, `dt_cvode`: CVODE internal steps), `cvode_stride` (`dt_cvode` only: one CVODE step out of `cvode_stride` is stored, optional, default 1) |
 | `oned_prem_params` | `phi_bounds`, `T0_bounds` [K], `n_samples` |
 | `oned_diff_params` | `strain_bounds` [1/s], `T0_bounds` [K], `n_samples`, `width` [m] |
 | `augment_dataset` | If `true`, add randomly perturbed states (enthalpy and $Y_k$), following Ding *et al.* |

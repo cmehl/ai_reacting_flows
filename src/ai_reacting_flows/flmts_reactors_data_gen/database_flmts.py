@@ -88,6 +88,7 @@ class DatabaseFlamelets(object):
         n_samples = zerod_params["n_samples"]
         max_sim_time = zerod_params["max_sim_time"]
         solve_mode = zerod_params["solve_mode"]
+        cvode_stride = zerod_params.get("cvode_stride", 1)   # dt_cvode: one CVODE step out of cvode_stride is stored
          
         self.n_samples_0D = n_samples
         self.sim_numbers_0D = np.arange(n_samples)
@@ -188,34 +189,39 @@ class DatabaseFlamelets(object):
                 if solve_mode=="dt_cfd":
                     time += self.time_step
                     sim.advance(time)
-                    states.append(r.thermo.state, t=time)
+                    is_stored = True
                 elif solve_mode=="dt_cvode":
                     t_cvode = sim.step()
                     time = t_cvode
-                    if n_iter%5==0:   # dt_cvode gives too many points
-                        states.append(r.thermo.state, t=t_cvode)
+                    is_stored = (n_iter%cvode_stride==0)
                 else:
                     sys.exit("solve_mode should be dt_cvode or dt_cfd")
+
+                # Stored state, with its progress variable and HRR (computed below)
+                if is_stored:
+                    states.append(r.thermo.state, t=time)
 
                 # checking if equilibrium is reached
                 state_current = np.append(r.thermo.X, r.T)
                 residual = 100.0*np.linalg.norm(state_equil - state_current,ord=np.inf)/np.linalg.norm(state_equil,
                                                                                                            ord=np.inf)
                 
-                # Compute progress variable
-                Yc = gas.Y[self.pv_ind].sum(axis=0)
-                if Yc_eq - Yc_u > 1e-10:
-                    progvar = (Yc - Yc_u) / (Yc_eq - Yc_u)
-                else:
-                    progvar = 0.0
-                progvar_vect.append(progvar)
-                
-                # Compute heat release rate
-                hrr = 0.0       
-                for spec in gas.species_names:
-                    standard_enthalpy_spec = gas.standard_enthalpies_RT[gas.species_index(spec)] * ct.gas_constant * gas.T
-                    hrr += -gas.net_production_rates[gas.species_index(spec)] * standard_enthalpy_spec
-                hrr_vect.append(hrr)
+                if is_stored:
+
+                    # Compute progress variable
+                    Yc = gas.Y[self.pv_ind].sum(axis=0)
+                    if Yc_eq - Yc_u > 1e-10:
+                        progvar = (Yc - Yc_u) / (Yc_eq - Yc_u)
+                    else:
+                        progvar = 0.0
+                    progvar_vect.append(progvar)
+
+                    # Compute heat release rate
+                    hrr = 0.0
+                    for spec in gas.species_names:
+                        standard_enthalpy_spec = gas.standard_enthalpies_RT[gas.species_index(spec)] * ct.gas_constant * gas.T
+                        hrr += -gas.net_production_rates[gas.species_index(spec)] * standard_enthalpy_spec
+                    hrr_vect.append(hrr)
 
                 
                 n_iter +=1
