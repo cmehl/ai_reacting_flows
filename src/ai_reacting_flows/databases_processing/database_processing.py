@@ -1201,33 +1201,26 @@ class LearningDatabase(object):
 
     def print_data_size(self):
 
+        # Cluster of each point: physical states (constant dt, clustering on "phys" or no clustering)
+        labels = self.X["cluster"].values
+
+        # Multi-dt clustering on "dt" or "all": one cluster per flattened (state, dt) point
+        if self.clusterized_dataset and self.dt_var:
+            if self.clusterize_on == "dt":
+                labels = self.time_clusters
+            elif self.clusterize_on == "all":
+                labels = self.all_clusters
+
         # Printing number of elements for each class
         size_total = 0
+        for i in range(self.nb_clusters):
 
-        if self.dt_var and self.clusterize_on == "dt":
-            for i in range(self.nb_clusters):
+            size_cluster_i = np.sum(labels==i)
+            size_total += size_cluster_i
 
-                size_cluster_i = self.time_clusters[self.time_clusters==i].shape[0]
-                size_total += size_cluster_i
+            print(f">> There are {size_cluster_i} points in cluster{i}")
 
-                print(f">> There are {size_cluster_i} points in cluster{i}")
-
-        # elif self.dt_var and self.clusterize_on in ["all", "double"]:
-        #     for i in range(self.nb_clusters_tot):
-        #         size_cluster_i = self.all_clusters[self.all_clusters==i].shape[0]
-        #         size_total += size_cluster_i
-
-        #         print(f">> There are {size_cluster_i} points in cluster{i}")
-
-        else:
-            for i in range(self.nb_clusters):
-
-                size_cluster_i = self.X[self.X["cluster"]==i].shape[0]
-                size_total += size_cluster_i
-
-                print(f">> There are {size_cluster_i} points in cluster{i}")
-
-            print(f"\n => There are {size_total} points overall")
+        print(f"\n => There are {size_total} points overall")
 
     
     # Distribution plotting function
@@ -1357,7 +1350,7 @@ class LearningDatabase(object):
         if self.is_resampled:
             fig.savefig(os.path.join(self.dtb_folder, f"distribution_{var}_resampled.png"), dpi=400)
         else:
-            fig.savefig(self.dtb_folder + f'_distribution_{var}.png', dpi=400)
+            fig.savefig(os.path.join(self.dtb_folder, f"distribution_{var}.png"), dpi=400)
 
 
 
