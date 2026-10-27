@@ -2,7 +2,7 @@
 Test 19: stochastic reactors and multi-dt generation with 2 MPI ranks.
 
 Runs a small H2 stochastic reactors simulation (CURL_MODIFIED, some particles activated later)
-on 1 rank (DummyComm), then with mpirun on 2 ranks reading the mixing pairs of the first run.
+on 1 rank (DummyComm), then with mpiexec on 2 ranks reading the mixing pairs of the first run.
 Then re-integrates the 2-rank database with 3 random time steps (GenerateVariable_dt) on 2 ranks.
 Check:
 - solutions.h5 is the same with 1 and 2 ranks (all_states, X and Y at every iteration), up to the
@@ -10,7 +10,7 @@ Check:
   has a different history). Errors in particles distribution or mixing would give O(1) differences.
 - the multi-dt file has one group per rank, contains all states, and the ranks draw different time steps.
 
-Needs mpirun (skipped otherwise). Independent of the other tests.
+Needs mpiexec (skipped otherwise). Independent of the other tests.
 """
 import os
 import sys
@@ -55,7 +55,7 @@ data_gen_parameters["time_step_range"] = [1.0e-7, 1.0e-6]
 data_gen_parameters["nb_dt"] = 3
 data_gen_parameters["new_file_name"] = "solutions_3dt.h5"
 
-# Launchers run with mpirun
+# Launchers run with mpiexec
 generation_script = """from mpi4py import MPI
 from ai_reacting_flows.stochastic_reactors_data_gen.main import generate_stochastic_database
 generate_stochastic_database(MPI.COMM_WORLD)
@@ -70,12 +70,20 @@ GenerateVariable_dt("stoch", params, MPI.COMM_WORLD)
 
 
 def run_mpi(folder, script, n_ranks=2):
-    """Run a python script with mpirun in folder."""
+    """Run a python script with mpiexec in folder."""
     with open(os.path.join(folder, "run.py"), "w") as file:
         file.write(script)
-    result = subprocess.run(["mpirun", "--oversubscribe", "-n", str(n_ranks), sys.executable, "run.py"],
-                            cwd=folder, capture_output=True, text=True)
-    assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
+
+    # Allow more ranks than cores with Open MPI (ignored by other MPI implementations)
+    env = dict(os.environ, OMPI_MCA_rmaps_base_oversubscribe="yes")
+    result = subprocess.run(["mpiexec", "-n", str(n_ranks), sys.executable, "run.py"],
+                            cwd=folder, env=env, capture_output=True, text=True)
+
+    # MPI version printed on failure, to diagnose launcher issues
+    if result.returncode != 0:
+        version = subprocess.run(["mpiexec", "--version"], capture_output=True, text=True)
+        pytest.fail(f"mpiexec failed (return code {result.returncode})\n{version.stdout}{version.stderr}\n"
+                    f"stdout:\n{result.stdout[-2000:]}\nstderr:\n{result.stderr[-2000:]}")
 
 
 def read_solutions(file_name):
@@ -84,7 +92,7 @@ def read_solutions(file_name):
         return {f"{grp}/{dset}": f[grp][dset][()] for grp in f.keys() for dset in f[grp].keys()}
 
 
-@pytest.mark.skipif(shutil.which("mpirun") is None, reason="mpirun not available")
+@pytest.mark.skipif(shutil.which("mpiexec") is None, reason="mpiexec not available")
 def test_two_ranks(tmp_path):
 
     # 1 rank (mixing pairs drawn and written)

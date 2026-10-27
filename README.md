@@ -278,4 +278,4 @@ For `DeepONet`, these three keys are dicts with `branch` and `trunk` entries (pl
 pytest tests/
 ```
 
-Tests 01 to 04 must run in order: the first one generates `tests/STOCH_DTB_TEST`, reused by the others, and results are compared to reference histograms. Tests 05 to 19 are independent and run on small cases in temporary folders (test 19 runs `mpirun -n 2` and is skipped without `mpirun`) (`h2_learning_database.py` builds a small H2 learning database for tests 08, 09 and 13). Each test file starts with a description of what it tests.
+Tests 01 to 04 must run in order: the first one generates `tests/STOCH_DTB_TEST`, reused by the others, and results are compared to reference histograms. Tests 05 to 19 are independent and run on small cases in temporary folders (test 19 runs `mpiexec -n 2` and is skipped without `mpiexec`) (`h2_learning_database.py` builds a small H2 learning database for tests 08, 09 and 13). Each test file starts with a description of what it tests.
