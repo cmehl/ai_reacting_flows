@@ -255,10 +255,15 @@ def parse_species_names(species_list):
     return atomic_array
 
 # Function to get matrix (Wj/Wk)*n_k^j   (Remark: order of atoms is C, H, O, N)
-def get_molar_mass_atomic_matrix(species, fuel, with_N2_chemistry):
+def get_molar_mass_atomic_matrix(species, with_N2_chemistry):
+    """Matrix A [-] such that A @ Y gives the elements mass fractions, and the elements names.
+
+    Rows: elements present in species (order C, H, O, N), N removed if with_N2_chemistry is False.
+    Columns: species (N2 removed if with_N2_chemistry is False).
+    """
 
     if not with_N2_chemistry:
-        species.remove("N2")
+        species = [spec for spec in species if spec != "N2"]
 
     nb_species = len(species)
 
@@ -274,14 +279,13 @@ def get_molar_mass_atomic_matrix(species, fuel, with_N2_chemistry):
     for k in range(nb_species):
         A_element[:,k] /=  mol_weights[k]
 
-    # Carbon not considered if fuel -> To make more general (get which atoms are in the list of species)
-    if fuel==["H2"]:
-        A_element = A_element[1:,:]
+    # Keep only elements present in species (N not considered without N chemistry)
+    elements = ["C", "H", "O", "N"]
+    kept = [j for j in range(4) if atomic_array[j,:].any()]
+    if not with_N2_chemistry and 3 in kept:
+        kept.remove(3)
 
-    if with_N2_chemistry is False:
-        A_element = A_element[:-1,:]
-
-    return A_element
+    return A_element[kept,:], [elements[j] for j in kept]
 
 
 def compute_X_element(species, Yk):

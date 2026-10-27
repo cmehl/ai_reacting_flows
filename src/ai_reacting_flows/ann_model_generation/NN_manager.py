@@ -82,7 +82,6 @@ class NN_manager():
         with open(os.path.join(self.run_folder, f"{prefix}_DTB_{database_params['dtb_folder_suffix']}",params_file), "r") as file:
             dtb_parameters = yaml.safe_load(file)
 
-        self.fuel = dtb_parameters["fuel"][0]   # Only single fuel for the moment
         self.mechanism = dtb_parameters["mech_file"]
 
         # Model folder name
@@ -163,7 +162,7 @@ class NN_manager():
         shutil.copy(os.path.join(self.run_folder, "networks_params.yaml"), self.directory)
 
         gas = ct.Solution(self.mechanism)
-        self.A_element = utils.get_molar_mass_atomic_matrix(gas.species_names, self.fuel, not self.remove_N2)
+        self.A_element, self.elements = utils.get_molar_mass_atomic_matrix(gas.species_names, not self.remove_N2)
 
         # Training stats
         if self.new_model_folder:
@@ -578,26 +577,15 @@ class NN_manager():
 
         # ELEMENTS CONSERVATION
 
-        # Build the list of elements actually present, in order,
-        # together with the index they occupy in stats_A_elements
-        elements = []
-        idx = 0
-
-        elements.append(("H", idx)); idx += 1
-        elements.append(("O", idx)); idx += 1
-        if not self.remove_N2:
-            elements.append(("N", idx)); idx += 1
-        if self.fuel!="H2":
-            elements.append(("C", idx)); idx += 1
-
-        n = len(elements)
+        # Elements in the same order as the rows of A_element (and of stats_A_elements)
+        n = len(self.elements)
         ncols = 2
         nrows = -(-n // ncols)  # ceil division
 
         fig, axes = plt.subplots(nrows, ncols, squeeze=False)
         axes = axes.flat
 
-        for ax, (label, i) in zip(axes, elements):
+        for ax, (i, label) in zip(axes, enumerate(self.elements)):
             ax.plot(epochs_small, 100*stats_A_elements[:, i, 0], color="k")
             ax.plot(epochs_small, 100*stats_A_elements[:, i, 1], color="k", ls="--")
             ax.plot(epochs_small, 100*stats_A_elements[:, i, 2], color="k", ls="--")
