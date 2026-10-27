@@ -316,6 +316,7 @@ class ParticlesCloud(object):
         
         
         # Initialize vector for tracking mean/std of temperature 
+        self.time_stats_vect = []
         self.mean_T_vect = []
         self.stdev_T_vect= []
         
@@ -1071,6 +1072,7 @@ class ParticlesCloud(object):
         # Mean and standard deviation of temperature
         self.mean_T = Temp_vect.mean()
         self.stdev_T = Temp_vect.std()
+        self.time_stats_vect.append(self.time)
         self.mean_T_vect.append(self.mean_T)
         self.stdev_T_vect.append(self.stdev_T)
         self.ratio_T_stdev = self.stdev_T / self.mean_T
@@ -1080,9 +1082,8 @@ class ParticlesCloud(object):
         if not os.path.isdir(self.results_folder + "/statistics"):
             os.mkdir(self.results_folder + "/statistics")
             
-        # Creating the time vector
-        N = len(self.mean_T_vect)
-        time_vect = np.linspace(0, self.time_max, N)
+        # Time of each statistics [s]
+        time_vect = np.array(self.time_stats_vect)
         
         # List -> array conversions
         self.mean_T_vect = np.array(self.mean_T_vect)
