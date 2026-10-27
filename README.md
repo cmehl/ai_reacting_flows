@@ -55,7 +55,7 @@ python ann_model_testing.py                # 4. testing on simple cases
 
 ## 1. Database generation
 
-+ **Stochastic reactors**: 0-D stochastic particles following [Wan *et al.*](https://www.sciencedirect.com/science/article/pii/S0010218020302170). Each particle is a chemical state; particles mix (CURL, CURL_MODIFIED, CURL_MODIFIED_DD or EMST models) to mimic diffusion.
++ **Stochastic reactors**: 0-D stochastic particles following [Wan *et al.*](https://www.sciencedirect.com/science/article/pii/S0010218020302170). Each particle is a chemical state; particles mix (CURL, CURL_MODIFIED, CURL_MODIFIED_DD (work in progress) or EMST models) to mimic diffusion.
 + **Canonical flames**: 0-D reactors, 1-D premixed and 1-D diffusion flames, launched with `generate_0D_dtb.py` and `dtb_params_flmts.yaml`.
 + **Multiple time steps** (optional): `generate_multi_dt.py` re-integrates the database states with several $dt$, so that $dt$ becomes a network input.
 
@@ -184,7 +184,7 @@ Examples of all files can be found in `scripts/<CASE>/`. Units are SI.
 | `time_step` | Constant $dt$ [s], or dict `{t_start: dt}` to change $dt$ over time (first key must be 0) |
 | `time_max` | End time [s] |
 | `automatic_termination` | Stop when temperature variance is low (optional, default `true`) |
-| `mixing_model` | `CURL`, `CURL_MODIFIED`, `CURL_MODIFIED_DD` or `EMST` |
+| `mixing_model` | `CURL`, `CURL_MODIFIED`, `CURL_MODIFIED_DD` (work in progress) or `EMST` |
 | `mixing_time` | Mixing time scale [s] |
 | `read_mixing` | If `true`, read mixing pairs from `pairs_list.pkl` in the case folder |
 | `T_threshold` | Chemistry is not computed below this temperature [K] |
@@ -277,4 +277,4 @@ For `DeepONet`, these three keys are dicts with `branch` and `trunk` entries (pl
 pytest tests/
 ```
 
-Tests must run in order: the first one generates `tests/STOCH_DTB_TEST`, reused by the others. Results are compared to reference histograms.
+Tests 01 to 04 must run in order: the first one generates `tests/STOCH_DTB_TEST`, reused by the others, and results are compared to reference histograms. Tests 05 to 07 are independent and run on small cases in temporary folders. Each test file starts with a description of what it tests.
