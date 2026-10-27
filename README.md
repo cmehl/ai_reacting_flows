@@ -193,7 +193,7 @@ Examples of all files can be found in `scripts/<CASE>/`. Units are SI.
 | `calc_mean_traj` | If `true`, write mean trajectories of each inlet |
 | `ML_inference_flag` | Keep `false` |
 
-Each inlet has a `type`, a number of particles `nb_particles`, `T` [K], `P` [Pa] and an optional `activation_time` [s] (time at which its particles enter the simulation, default 0). Additional keys depend on the type:
+Each inlet has a `type`, a number of particles `nb_particles`, `T` [K], `P` [Pa] and an optional `activation_time` [s] (time at which its particles enter the simulation, default 0; at least one inlet must start at 0). Additional keys depend on the type:
 
 + `cold_premixed`, `burnt_premixed`: `fuel`, `phi` (equivalence ratio)
 + `fuel`: `fuel`

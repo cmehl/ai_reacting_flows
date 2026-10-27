@@ -3,15 +3,19 @@ Test 10: stochastic reactors output when some particles are not yet active.
 
 Runs a very small H2 stochastic reactors simulation (CURL_MODIFIED) where the first inlet is
 activated after the end of the simulation, so only particles of the second inlet are active.
-Check: all_states in solutions.h5 only contains particles of the second inlet.
+Check: all_states in solutions.h5 only contains particles of the second inlet, and an error
+is raised if no inlet is active at t = 0.
 
 Independent of the other tests.
 """
 import os
 import h5py
 import numpy as np
+import copy
 import oyaml as yaml
+import pytest
 from ai_reacting_flows.stochastic_reactors_data_gen.main import generate_stochastic_database
+from ai_reacting_flows.stochastic_reactors_data_gen.particles_cloud import ParticlesCloud
 
 import DummyComm as dc
 
@@ -55,3 +59,14 @@ def test_all_states_active_particles(tmp_path):
             i_inlet = list(dset.attrs["cols"]).index("Inlet_number")
             assert dset.shape[0] == 10
             assert np.all(dset[:, i_inlet] == 2)
+
+
+def test_no_inlet_active_at_start(tmp_path):
+    os.chdir(tmp_path)
+
+    # Both inlets activated after t = 0
+    params = copy.deepcopy(data_gen_parameters)
+    params["inlets"]["inlet_2"]["activation_time"] = 1.0e-5
+
+    with pytest.raises(ValueError, match="activation_time = 0"):
+        ParticlesCloud(params, dc.DummyComm())

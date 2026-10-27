@@ -157,6 +157,10 @@ class ParticlesCloud(object):
 
         # Activation times for each particle
         activation_times = np.array([p.activation_time for p in self.particles_list])
+
+        # At least one inlet must be active from the start of the simulation
+        if activation_times.min() > 0.0:
+            raise ValueError("At least one inlet must have activation_time = 0")
         
         # =====================================================================
         #     MIXING MODEL INITIALIZATION 
