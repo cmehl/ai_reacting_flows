@@ -475,7 +475,7 @@ class LearningDatabase(object):
 
 
     # Re-sampling based on heat release rate
-    def undersample_HRR(self, jpdf_var_1, jpdf_var_2, hrr_func, keep_low_c, n_samples=None, n_bins=100, seed=1991, plot_distrib=False):
+    def undersample_HRR(self, jpdf_var_1, jpdf_var_2, hrr_func, keep_low_c, n_samples, n_bins=100, seed=1991, plot_distrib=False):
 
         if self.clusterized_dataset and self.dt_var and self.clusterize_on in ("dt", "all"):
             raise NotImplementedError(
