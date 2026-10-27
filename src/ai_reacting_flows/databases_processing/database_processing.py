@@ -67,6 +67,7 @@ class LearningDatabase(object):
         self.T_threshold  = data_processing["T_threshold"]
         self.output_omegas  = data_processing["output_omegas"]
         self.with_N_chemistry = data_processing["with_N_chemistry"]
+        self.lambda_bct = data_processing.get("lambda_bct", 0.1)   # Box-Cox parameter (same default in NN_manager and NNTesting)
 
         # Optional list of species to keep on the original (linear) scale
         # even when log/Box–Cox transforms are active. This generalizes the
@@ -124,9 +125,6 @@ class LearningDatabase(object):
 
         # Flag to check if database has already been processed
         self.is_processed = False
-
-        # Default BCT parameter
-        self.lambda_bct = 0.1
 
         # Saving detailed mechanism in database folder
         shutil.copy(self.detailed_mechanism, self.dtb_folder + "/" + self.database_name + "/mech_detailed.yaml")
