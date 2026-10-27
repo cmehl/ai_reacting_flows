@@ -314,7 +314,8 @@ class LearningDatabase(object):
             if self.log_transform_X>0:
 
                 if self.dt_var and self.clusterize_on=="dt":
-                    data_kmeans = self._compute_log(data_kmeans)
+                # dt always has a plain log transform (as in process_database and NNTesting.attribute_cluster)
+                    data_kmeans = np.log(np.clip(data_kmeans, 1e-300, None))
                 # elif self.dt_var and self.clusterize_on=="double":
                 #     data_kmeans_phys[:, 1:] = self._compute_log(data_kmeans_phys[:, 1:])
                 #     data_kmeans_time = self._compute_log(data_kmeans_time)
