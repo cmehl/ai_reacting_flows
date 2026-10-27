@@ -37,6 +37,9 @@ class Particle(object):
         # Chemical mechanism
         self.mech_file = data_gen_parameters["mech_file"]
 
+        # Fuel (only single fuel for the mixture fraction)
+        self.fuel = data_gen_parameters["fuel"][0]
+
         # species names
         self.species_names = species_names
         
@@ -200,7 +203,12 @@ class Particle(object):
 
     # Mixture fraction based on atomic balance
     def compute_mixture_fraction(self):
-        """Mixture fraction based on atomic (C, H) mass balance."""
+        """Mixture fraction Z [-] based on atomic (C, H) mass balance.
+
+        Z = (Y_C + Y_H) / (Y_C + Y_H)_fuel, with Y_C, Y_H the elements mass fractions: 0 in air,
+        1 in pure fuel, for any fuel CxHyOzNw (e.g. NH3: (Y_C + Y_H)_fuel = 3 W_H / W_NH3).
+        Assumes the oxidizer contains no C and H (air).
+        """
 
          # Precompute per-species C/H mass contribution coefficients once;
         # only self.Y changes call-to-call, not composition or molar masses.
@@ -209,7 +217,9 @@ class Particle(object):
             for idx, spec in enumerate(self.species_names):
                 n_C, n_H, _, _ = utils.parse_species(spec)
                 coeff[idx] = (n_C * 12.011 + n_H * 1.008) / self.spec_mol_weights[idx]
-            self._mixfrac_coeff = coeff
+
+            # Normalization by the C and H mass fraction of the pure fuel
+            self._mixfrac_coeff = coeff / coeff[self.species_names.index(self.fuel)]
 
         self.mix_frac = np.dot(self._mixfrac_coeff, self.Y)
 
