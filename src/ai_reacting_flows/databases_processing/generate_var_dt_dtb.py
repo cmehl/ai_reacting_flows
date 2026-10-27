@@ -73,7 +73,9 @@ def GenerateVariable_dt(dtb_type: str, params: dict, comm: "MPI.Comm") -> str:
     rank = comm.Get_rank()
     size = comm.Get_size()
 
-    np.random.seed(1234)
+    # One seed per rank, so that ranks do not draw the same random time steps
+    # (only the shuffle of rank 0 is used, as X is scattered from rank 0)
+    np.random.seed(1234 + rank)
 
     _validate_params(params)
 
