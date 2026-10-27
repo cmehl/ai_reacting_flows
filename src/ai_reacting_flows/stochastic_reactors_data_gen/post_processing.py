@@ -43,7 +43,7 @@ class StochDatabase(object):
             nb_inlets = 0 # number of inlets
             self.inlets_data_list = {}  # dictionary for storing data
             for inlet in traj_dataset.keys():
-                i = int(inlet[-1])
+                i = int(inlet.split()[-1])   # Dataset names: "INLET <i>"
                 self.inlets_data_list[i] = np.asarray(traj_dataset[inlet])
                 nb_inlets += 1
             #
@@ -424,7 +424,7 @@ class StochDatabase(object):
 
         j = 0   
         for i in self.inlets_data_list.keys():
-            ax.plot(self.inlets_data_list[i][:,self.nb_state_vars+1], self.inlets_data_list[i][:, 1], color="k", linestyle=linestyles[j], lw=2, label=f"Inlet {i:d}")
+            ax.plot(self.inlets_data_list[i][:,self.nb_state_vars+1], self.inlets_data_list[i][:, 1], color="k", linestyle=linestyles[j % len(linestyles)], lw=2, label=f"Inlet {i:d}")
             j += 1    
             
         ax.set_xlabel(r"$Z$ $[-]$")
@@ -448,7 +448,7 @@ class StochDatabase(object):
 
         j = 0   
         for i in self.inlets_data_list.keys():
-            ax.plot(self.inlets_data_list[i][:,0], self.inlets_data_list[i][:, 1], color="k", linestyle=linestyles[j], lw=2, label=f"Inlet {i:d}")
+            ax.plot(self.inlets_data_list[i][:,0], self.inlets_data_list[i][:, 1], color="k", linestyle=linestyles[j % len(linestyles)], lw=2, label=f"Inlet {i:d}")
             j += 1    
             
         ax.set_xlabel(r"$t$ $[s]$")
@@ -466,13 +466,16 @@ class StochDatabase(object):
         # To get species index, maybe to be put in __init__ at some point
         gas = ct.Solution(mech_file)
 
+        # styles
+        linestyles = ["--", "-", "-.", ":"]
+
         for spec in species_to_plot:
     
             fig, ax = plt.subplots()
             
             j = 0   
             for i in self.inlets_data_list.keys():
-                ax.plot(self.inlets_data_list[i][:,0], self.inlets_data_list[i][:, 3+gas.species_index(spec)], color="k", lw=2, linestyle=self.linestyles[j], label=f"Inlet {i:d}")
+                ax.plot(self.inlets_data_list[i][:,0], self.inlets_data_list[i][:, 3+gas.species_index(spec)], color="k", lw=2, linestyle=linestyles[j % len(linestyles)], label=f"Inlet {i:d}")
                 j += 1
                 
             ax.set_xlabel(r"$t$ $[s]$")
