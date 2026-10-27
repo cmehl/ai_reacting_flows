@@ -317,16 +317,16 @@ class NN_manager():
 
         # Validation / conservation computed every "val_every" epochs (default 10)
         val_every = int(self.val_every)
-        n_val_points = max(1, n_epochs // val_every)
+
+        epochs = np.arange(n_epochs)
+        epochs_small = epochs[::val_every]
+        n_val_points = len(epochs_small)
 
         # Array to store sum of mass fractions: mean, min and max
         stats_sum_yk = np.empty((n_val_points, 3))
 
         # Array to store elements conservation: mean, min and max
         stats_A_elements = np.empty((n_val_points, A_element.shape[0], 3))
-
-        epochs = np.arange(n_epochs)
-        epochs_small = epochs[::val_every]
 
         best_val_loss = float("inf")
         best_state_dict = None
