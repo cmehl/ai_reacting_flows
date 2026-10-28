@@ -10,6 +10,7 @@ and inference runs and keeps N2 unchanged.
 Independent of the other tests.
 """
 import os
+import shutil
 import h5py
 import numpy as np
 import oyaml as yaml
@@ -57,6 +58,7 @@ def write_learning_database(dtb_folder, database_type):
     }
     with open(os.path.join(dtb_folder, "dtb", "dtb_processing.yaml"), "w") as file:
         yaml.dump(dtb_processing, file, default_flow_style=False)
+    shutil.copy(mech_file, os.path.join(dtb_folder, "dtb", "mech_detailed.yaml"))
 
     # Database generation parameters (only fuel, mechanism and progress variable are read)
     dtb_params_file = "dtb_params.yaml" if database_type == "stoch" else "dtb_params_flmts.yaml"

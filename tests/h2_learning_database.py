@@ -7,6 +7,7 @@ differences of transformed mass fractions (output_omegas), optional log_excluded
 It also writes the run folder inputs needed by NN_manager (networks_params.yaml, dtb_params.yaml).
 """
 import os
+import shutil
 import h5py
 import numpy as np
 import oyaml as yaml
@@ -89,6 +90,7 @@ def write_h2_learning_database(run_folder, log_excluded_species=[]):
     }
     with open(os.path.join(dtb_folder, "dtb_processing.yaml"), "w") as file:
         yaml.dump(dtb_processing, file, default_flow_style=False)
+    shutil.copy(mech_file, os.path.join(dtb_folder, "mech_detailed.yaml"))
 
     with open(os.path.join(run_folder, "STOCH_DTB_TEST", "dtb_params.yaml"), "w") as file:
         yaml.dump({"fuel": ["H2"], "mech_file": mech_file, "pv_species": ["H2O"]}, file, default_flow_style=False)

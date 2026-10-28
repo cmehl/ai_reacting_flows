@@ -19,6 +19,7 @@ from ai_reacting_flows.ann_model_generation.NN_models import MLPModel, DeepONet,
 
 import ai_reacting_flows.tools.utilities as utils
 import ai_reacting_flows.tools.transforms as transforms
+from ai_reacting_flows.databases_processing.processing_parameters import read_processing_parameters, MECHANISM_FILE
 
 
 class NNTesting():
@@ -50,40 +51,29 @@ class NNTesting():
             networks_parameters = yaml.safe_load(file)
         self.dataset_path = os.path.join(self.run_folder, networks_parameters["database_path"])
         
-        with open(f"{self.dataset_path}/dtb_processing.yaml", "r") as file:
-            dtb_processing_params = yaml.safe_load(file)
+        # Processing parameters of the learning database (stored in training_data.h5, see processing_parameters.py)
+        params = read_processing_parameters(self.dataset_path, self.run_folder)
 
-        database_params = dtb_processing_params["database_params"]
-        self.dt_var = database_params["dt_var"]
-        self.fuel = database_params["fuel"] # fuel is a list, testing only takes 1 component fuel so far
-        self.mech = database_params["mech_file"]
+        self.dt_var = params["dt_var"]
+        self.fuel = params["fuel"] # testing only takes 1 component fuel so far
+        self.mech = os.path.join(self.dataset_path, MECHANISM_FILE)   # Mechanism copied in the database folder
 
-        data_processing = dtb_processing_params["data_processing"]
-        self.log_transform_X = data_processing["log_transform_X"]
-        self.log_transform_Y = data_processing["log_transform_Y"]
+        self.log_transform_X = params["log_transform_X"]
+        self.log_transform_Y = params["log_transform_Y"]
         # Box-Cox parameter (kept consistent with NN_manager)
-        self.lambda_bct = data_processing.get("lambda_bct", 0.1)
-        self.threshold = data_processing["threshold"]
-        self.remove_N2 = not data_processing["with_N_chemistry"]
-        self.output_omegas = data_processing["output_omegas"]
+        self.lambda_bct = params["lambda_bct"]
+        self.threshold = params["threshold"]
+        self.remove_N2 = not params["with_N_chemistry"]
+        self.output_omegas = params["output_omegas"]
         # General list of species for which input/output log/BCT should be
         # skipped, mirroring LearningDatabase.log_excluded_species.
-        self.log_excluded_species = data_processing.get("log_excluded_species", [])
+        self.log_excluded_species = params["log_excluded_species"]
 
-        data_clustering = dtb_processing_params["data_clustering"]
-        self.clustering_method  = data_clustering["clustering_method"]
+        self.clustering_method  = params["clustering_method"]
         # Keep track of the clustering feature layout used at database-processing
         # time ("phys", "dt", "all"). This is needed to build a consistent
         # k-means input vector here.
-        self.clusterize_on = data_clustering.get("clusterize_on", "phys")
-
-        # Getting parameters from database generation
-        if database_params["database_type"] == "stoch":
-            dtb_params_file = os.path.join(f"STOCH_DTB_{database_params['dtb_folder_suffix']}", "dtb_params.yaml")
-        elif database_params["database_type"] == "flamelets":
-            dtb_params_file = os.path.join(f"FLAMELETS_DTB_{database_params['dtb_folder_suffix']}", "dtb_params_flmts.yaml")
-        with open(os.path.join(self.run_folder, dtb_params_file), "r") as file:
-            dtb_parameters = yaml.safe_load(file)
+        self.clusterize_on = params["clusterize_on"]
 
         # Chemistry (maybe an information to get from model folder ?)
         self.spec_to_plot = testing_parameters["spec_to_plot"]
@@ -120,8 +110,8 @@ class NNTesting():
         self.nb_clusters = len(list(Path(self.models_folder).glob("*.pth")))
         print(f">> {self.nb_clusters} models were found")
 
-        # Check consistency with dtb_processing.yaml file, could help identify an issue
-        assert self.nb_clusters==data_clustering["nb_clusters"]
+        # Check consistency with the processing parameters, could help identify an issue
+        assert self.nb_clusters==params["nb_clusters"]
 
         # If more than one cluster, we need to check the clustering method
         if self.nb_clusters>1:
@@ -146,7 +136,7 @@ class NNTesting():
            self.load_clustering_algorithm()
 
         # Progress variable definition (we do it in any case, even if no clustering based on progress variable)
-        self.pv_species = dtb_parameters["pv_species"]
+        self.pv_species = params["pv_species"]
         self.pv_ind = []
         for i in range(len(self.pv_species)):
             self.pv_ind.append(self.gas.species_index(self.pv_species[i]))

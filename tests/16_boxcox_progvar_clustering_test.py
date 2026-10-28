@@ -51,6 +51,10 @@ def write_synthetic_database(dtb_folder):
     data[0, 2] = -1.0e-20                                  # Negative H2 mass fraction (as from Cantera)
 
     os.makedirs(dtb_folder)
+
+    # Generation parameters (only the progress variable species are read)
+    with open(os.path.join(dtb_folder, "dtb_params.yaml"), "w") as file:
+        yaml.dump({"pv_species": ["H2O"]}, file, default_flow_style=False)
     with h5py.File(os.path.join(dtb_folder, "solutions.h5"), "w") as f:
         grp = f.create_group("ITERATION_00000")
         grp.create_dataset("X", data=data).attrs["cols"] = cols
