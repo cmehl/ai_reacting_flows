@@ -157,7 +157,7 @@ def plot_validation_errors(diff, i_cluster, folder, max_points_scatter=50000):
 
 
 def plot_simulation_errors_by_dt(table, by_dt, case_type, folder):
-    """Simulation error E_sim [-] of a 0D series versus the time step dt [s], in
+    """Simulation error E_sim [-] of a series (0D or 1D) versus the time step dt [s], in
     folder/simulation_errors_<case_type>_by_dt.png.
 
     Left: E(dt), mean over the simulations of each dt, with its standard deviation as error bars.

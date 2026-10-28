@@ -5,7 +5,7 @@ Builds a small H2 learning database (N2 removed) and trains a model for one epoc
 Check:
 - error metrics (NN_testing_metrics.py): relative error, L2 error over a window, validation errors
   in unscaled space equal to the difference of the unscaled outputs, pooled statistics of groups,
-  normalized simulation error (eq. 6 of Mehl & Aubagnac).
+  normalized simulation error (eq. 6 of Mehl & Aubagnac), for 0D cases and 1D flames (a priori).
 - test_0D_ignition and test_0D_pyrolysis write their plots in TESTING_<model>/, including N2 when
   it is removed from the network species (the pyrolysis plots used to fail in this case).
 - series_cases gives all combinations of the parameters given as lists.
@@ -141,6 +141,11 @@ def test_nn_testing_outputs(tmp_path):
     folder = f"1D_diffusion_strain#1000.0_T_ox#1000.0_T_fuel#300.0_pressure#{pressure}_dt#{dt}_width#0.02_T_threshold#600.0"
     assert os.path.isfile(os.path.join(output, folder, "YH2.png"))
 
+    # 1D a priori error E_sim and its aggregation per dt (one flame)
+    assert errors["E_sim"] >= 0.0
+    by_dt = pd.read_csv(os.path.join(output, "simulation_errors_1D_diffusion_by_dt.csv"))
+    assert by_dt["nb_simulations"][0] == 1 and np.isclose(by_dt["E_mean"][0], errors["E_sim"])
+    assert os.path.isfile(os.path.join(output, "simulation_errors_1D_diffusion_by_dt.png"))
 
     # Validation set: statistics per output and scatter plot per cluster
     stats = test.evaluate_on_validation_set()

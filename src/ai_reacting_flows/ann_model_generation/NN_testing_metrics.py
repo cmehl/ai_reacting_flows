@@ -80,10 +80,11 @@ def pooled_mean_var(means, variances, counts):
 
 
 def normalized_trajectory_error(x_ann, x_ref, std):
-    """Error of a simulation: mean over the time steps and the variables of |x_ann - x_ref| / std.
+    """Error of a simulation: mean over the points and the variables of |x_ann - x_ref| / std.
 
-    x_ann, x_ref: (n_steps, 1 + N_S) temperature [K] and transformed mass fractions of the N_S species
-    (log or Box-Cox, see tools/transforms.py) along the ANN and reference simulations; std: standard
+    x_ann, x_ref: (n_points, 1 + N_S) temperature [K] and transformed mass fractions of the N_S species
+    (log or Box-Cox, see tools/transforms.py) of the ANN and reference simulations, at each time step
+    of a 0D simulation or at each grid point of a 1D flame after one step; std: standard
     deviations of these variables on the training dataset. This is eq. (6) of C. Mehl, D. Aubagnac,
     "Acceleration of chemical kinetics using artificial neural networks with variable time step",
     following X. Chen, C. Mehl, T. Faney, F. Di Meglio, Energy & Fuels 37 (18) (2023) 14222

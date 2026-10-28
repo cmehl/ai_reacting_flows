@@ -533,9 +533,11 @@ class NNTesting():
 
         X_grid = f.grid
 
-        # Initializing Y at t+dt
+        # Initializing T and Y at t+dt
         Yt_dt_exact = np.zeros(Yt.shape)
         Yt_dt_ann = np.zeros((self.gas.n_species, Yt.shape[1]))
+        T_dt_exact = np.zeros(len(Tt))
+        T_dt_ann = np.zeros(len(Tt))
 
         #-------------------- EXACT REACTION RATES --------------------------- 
         nb_0_reactors = len(X_grid) # number of 1D reactors
@@ -554,6 +556,7 @@ class NNTesting():
             states.append(r.thermo.state, t=time * 1e3)
 
             Yt_dt_exact[:,i_reac] = states.Y
+            T_dt_exact[i_reac] = states.T[0]
 
         # Reaction rates
         Omega_exact = (Yt_dt_exact-Yt)/dt
@@ -605,6 +608,7 @@ class NNTesting():
                 Y_new = Yt_ann[:,i_reac]
 
             Yt_dt_ann[:,i_reac] = np.reshape(Y_new,-1)
+            T_dt_ann[i_reac] = T_new
 
         # Reaction rates
         Omega_ann = (Yt_dt_ann-Yt_ann)/dt
@@ -614,6 +618,8 @@ class NNTesting():
             "c": c,
             "Yt_dt_exact": Yt_dt_exact,
             "Yt_dt_ann": Yt_dt_ann,
+            "T_dt_exact": T_dt_exact,
+            "T_dt_ann": T_dt_ann,
             "Omega_exact": Omega_exact,
             "Omega_ann": Omega_ann,
             "ann_calls": ann_calls,
@@ -663,8 +669,8 @@ class NNTesting():
         series: section of nn_testing.yaml: parameters of run_case (a list of values is swept, all
         combinations are run), plots (plots of each case), x_window ([x_min, x_max] [m] of the
         1D errors and plots, full domain if null).
-        Returns the summary: errors of each case, mean and standard deviation over the cases, and for
-        0D the simulation error aggregated per dt (E(dt)). The errors of each case are also written in
+        Returns the summary: errors of each case, mean and standard deviation over the cases, and the
+        simulation error aggregated per dt (E(dt)). The errors of each case are also written in
         simulation_errors_<case_type>.csv, and E(dt) in simulation_errors_<case_type>_by_dt.csv (plotted in
         simulation_errors_<case_type>_by_dt.png).
         """
@@ -749,8 +755,9 @@ class NNTesting():
         0D: simulation error E_sim [-] (see NN_testing_metrics.normalized_trajectory_error) over all the
         time steps, i.e. until CVODE equilibrium (equilibrium_steps, equilibrium_reached), error on the final temperature [%], ignition delays [s]
         (time at which T exceeds T0 + 200 K) and their error [%] (ignition only), numbers of ANN and CVODE calls.
-        1D: L2 error of the reaction rates of spec_to_plot over x_window (see NN_testing_metrics.l2_error),
-        numbers of ANN and CVODE calls.
+        1D: a priori error E_sim [-], normalized as for 0D, on the states after one step dt from each grid
+        point in x_window (mean over the points instead of the time steps), L2 error of the reaction
+        rates of spec_to_plot over x_window (see NN_testing_metrics.l2_error), numbers of ANN and CVODE calls.
         """
 
         errors = {}
@@ -778,6 +785,17 @@ class NNTesting():
         # 1D flames
         else:
             grid = result["flame"].grid
+
+            # Grid points of x_window [m] (all points if None)
+            in_window = np.ones(len(grid), dtype=bool)
+            if x_window is not None:
+                in_window = (grid >= x_window[0]) & (grid <= x_window[1])
+
+            # A priori error, normalized with the training standard deviations, after one step dt
+            x_ref = self._error_variables(np.column_stack([result["T_dt_exact"], result["Yt_dt_exact"].T])[in_window])
+            x_ann = self._error_variables(np.column_stack([result["T_dt_ann"], result["Yt_dt_ann"].T])[in_window])
+            errors["E_sim"] = metrics.normalized_trajectory_error(x_ann, x_ref, self.std_train)
+
             for spec in self.spec_to_plot:
                 k = self.spec_list_ref.index(spec)
                 errors[f"L2_error_omega_{spec}"] = metrics.l2_error(grid, result["Omega_ann"][k], result["Omega_exact"][k], x_window)
