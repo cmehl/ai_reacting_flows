@@ -79,16 +79,17 @@ def pooled_mean_var(means, variances, counts):
     return mean, var
 
 
-def normalized_trajectory_error(x_ann, x_ref, std):
-    """Error of a simulation: mean over the points and the variables of |x_ann - x_ref| / std.
+def normalized_errors_per_variable(x_ann, x_ref, std):
+    """Error of a simulation for each variable: mean over the points of |x_ann - x_ref| / std, array (1 + N_S).
+    The simulation error is their mean over the variables.
 
     x_ann, x_ref: (n_points, 1 + N_S) temperature [K] and transformed mass fractions of the N_S species
     (log or Box-Cox, see tools/transforms.py) of the ANN and reference simulations, at each time step
     of a 0D simulation or at each grid point of a 1D flame after one step; std: standard
-    deviations of these variables on the training dataset. This is eq. (6) of C. Mehl, D. Aubagnac,
+    deviations of these variables on the training dataset. The simulation error is eq. (6) of C. Mehl, D. Aubagnac,
     "Acceleration of chemical kinetics using artificial neural networks with variable time step",
     following X. Chen, C. Mehl, T. Faney, F. Di Meglio, Energy & Fuels 37 (18) (2023) 14222
     (the means of the normalization cancel in the differences).
     """
 
-    return float(np.mean(np.abs(x_ann - x_ref) / std))
+    return np.mean(np.abs(x_ann - x_ref) / std, axis=0)

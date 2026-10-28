@@ -14,7 +14,7 @@ Check:
 - run_testing (sections of nn_testing.yaml) runs the selected series, including 1D premixed and
   diffusion flames, and writes their summaries (errors of each case, mean); evaluate_on_validation_set
   statistics and plots; the 0D simulation errors E_sim per case and per dt in CSV tables, with the
-  training standard deviations as normalization.
+  training standard deviations as normalization, the contribution of each variable and the speed-up.
 
 Independent of the other tests.
 """
@@ -68,10 +68,10 @@ def test_metrics():
     assert np.allclose(mean, np.concatenate(groups).mean(axis=0))
     assert np.allclose(var, np.concatenate(groups).var(axis=0))
 
-    # Simulation error: mean over steps and variables of the normalized absolute differences
+    # Simulation error of each variable: mean over steps of the normalized absolute differences
     x_ref = np.zeros((2, 3))
-    x_ann = np.array([[2.0, 0.0, 1.0], [0.0, 4.0, 0.0]])
-    assert np.isclose(metrics.normalized_trajectory_error(x_ann, x_ref, np.array([2.0, 4.0, 1.0])), 0.5)
+    x_ann = np.array([[2.0, 0.0, 1.0], [0.0, 4.0, 2.0]])
+    assert np.allclose(metrics.normalized_errors_per_variable(x_ann, x_ref, np.array([2.0, 4.0, 1.0])), [0.5, 0.5, 1.5])
 
     errors = metrics.validation_errors(Y_pred - Y_val, std_Y)
     assert np.allclose(errors["mse_phys"], np.mean(diff**2, axis=0))
@@ -143,6 +143,13 @@ def test_nn_testing_outputs(tmp_path):
     assert np.isclose(by_dt["E_mean"][0], table["E_sim"].mean())
     assert os.path.isfile(os.path.join(output, "simulation_errors_0D_ignition_by_dt.png"))
 
+    # Contributions of the variables (E_sim is their mean) and speed-up
+    variables = ["E_T"] + [f"E_{spec}" for spec in test.inference.spec_list_ANN]
+    assert np.allclose(table[variables].mean(axis=1), table["E_sim"])
+    assert np.allclose(table["speedup"], table["time_cvode"] / table["time_ann"]) and np.all(table["speedup"] > 0.0)
+    assert np.isclose(by_dt["E_T"][0], table["E_T"].mean()) and np.isclose(by_dt["speedup_mean"][0], table["speedup"].mean())
+    assert os.path.isfile(os.path.join(output, "simulation_errors_0D_ignition_by_variable.png"))
+
     # Normalization: standard deviations of the training inputs (one cluster)
     with h5py.File("STOCH_DTB_TEST/dtb/training_data.h5", "r") as f:
         cols = [c.decode() if isinstance(c, bytes) else str(c) for c in f["CLUSTER_0/X_train"].attrs["cols"]]
@@ -163,6 +170,7 @@ def test_nn_testing_outputs(tmp_path):
     by_dt = pd.read_csv(os.path.join(output, "simulation_errors_1D_diffusion_by_dt.csv"))
     assert by_dt["nb_simulations"][0] == 1 and np.isclose(by_dt["E_mean"][0], errors["E_sim"])
     assert os.path.isfile(os.path.join(output, "simulation_errors_1D_diffusion_by_dt.png"))
+    assert errors["speedup"] > 0.0 and "E_H2" in errors
 
     # Errors of one ANN step: one value per network species (terms of the MSE loss), and on T [%]
     test.gas.TPX = 1200.0, pressure, "H2:0.6, O2:1.0, N2:3.76"

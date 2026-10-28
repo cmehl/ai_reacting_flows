@@ -11,6 +11,7 @@ import cantera as ct
 
 import torch
 from datetime import datetime
+from time import perf_counter
 from ai_reacting_flows.ann_model_generation.NN_models import MLPModel, DeepONet, DeepONet_shift
 from ai_reacting_flows.ann_model_generation.NN_inference import NNInference
 import ai_reacting_flows.ann_model_generation.NN_testing_metrics as metrics
@@ -228,9 +229,14 @@ class NNTesting():
         #-------------------- CVODE COMPUTATION---------------------------
         # Until equilibrium (or max_simulation_time if not reached)
         equilibrium_reached = False
+        time_cvode = 0.0   # CPU time of the chemistry integration [s]
         while not equilibrium_reached and simtime < max_simulation_time - 0.5 * dt:
             simtime += dt
+
+            start = perf_counter()
             sim.advance(simtime)
+            time_cvode += perf_counter() - start
+
             states.append(r.thermo.state, t=simtime*1.0e3)
 
             if reactor_type=="ignition" and states.T[-1] > T0+200.0 and tau_ign_CVODE==0.0:
@@ -271,6 +277,7 @@ class NNTesting():
 
         # NEURAL NETWORK COMPUTATION
         time = 0.0
+        time_ann = 0.0   # CPU time of the chemistry steps (clustering, network, CVODE if hybrid) [s]
         state = np.append(T_ann, Y_k_ann)
         for i in range(nb_ite):
             # Old state
@@ -278,7 +285,9 @@ class NNTesting():
             Y_old = state[1:]
 
             # Attribute cluster for current state before ANN advancement.
+            start = perf_counter()
             self.attribute_cluster(state, dt, progvar)
+            time_ann += perf_counter() - start
 
             # Log a compact line for each ANN advancement (index, T_old,
             # dt, cluster, and whether dt is part of the clustering vector).
@@ -290,6 +299,7 @@ class NNTesting():
                 f"cluster={self.cluster}, "
             )
 
+            start = perf_counter()
             T_new, Y_new = self.advance_state_NN(T_old, Y_old, pressure, dt)
 
             # If hybrid, we check conservation and use CVODE if not satisfied
@@ -302,6 +312,7 @@ class NNTesting():
                     ann_calls +=1
             else:
                 ann_calls += 1
+            time_ann += perf_counter() - start
 
             # Vector with all variable (T and Yks)
             state = np.append(T_new, Y_new)
@@ -345,6 +356,8 @@ class NNTesting():
             "progvar": np.array(progvar_vect),
             "ann_calls": ann_calls,
             "cvode_calls": cvode_calls,
+            "time_cvode": time_cvode,
+            "time_ann": time_ann,
         }
 
     def run_0D_ignition_case(self, phi, T0, pressure, dt, max_simulation_time, T_eq_tolerance=1.0):
@@ -576,7 +589,9 @@ class NNTesting():
 
         #-------------------- EXACT REACTION RATES --------------------------- 
         nb_0_reactors = len(X_grid) # number of 1D reactors
+        time_cvode = 0.0   # CPU time of the chemistry integration (reactor creation and advance) [s]
         for i_reac in range(nb_0_reactors):
+            start = perf_counter()
             self.gas.TPY = Tt[i_reac], pressure, Yt[:,i_reac]
             r = ct.IdealGasConstPressureReactor(self.gas)
 
@@ -588,6 +603,7 @@ class NNTesting():
             # We advance solution by dt
             time = dt
             sim.advance(time)
+            time_cvode += perf_counter() - start
             states.append(r.thermo.state, t=time * 1e3)
 
             Yt_dt_exact[:,i_reac] = states.Y
@@ -603,6 +619,7 @@ class NNTesting():
         # Initial solution
         Yt_ann = Yt
 
+        time_ann = 0.0   # CPU time of the chemistry steps (clustering, network, CVODE if hybrid) [s]
         for i_reac in range(nb_0_reactors):
 
             # Computing current progress variable on physical state
@@ -610,7 +627,9 @@ class NNTesting():
             progvar = self.compute_progvar(state_phys, pressure, Yc_u[i_reac])
 
             # Attribute cluster
+            start = perf_counter()
             self.attribute_cluster(state_phys, dt, progvar)
+            time_ann += perf_counter() - start
 
             # Log parameters used for clustering in 1D case at this spatial
             # location (x index only; grid position can be inferred from f.grid
@@ -624,6 +643,7 @@ class NNTesting():
             )
 
             # advance to t + dt
+            start = perf_counter()
             if Tt[i_reac] >= T_threshold:
                 T_new, Y_new = self.advance_state_NN(Tt[i_reac], Yt_ann[:,i_reac], pressure, dt)
 
@@ -641,6 +661,7 @@ class NNTesting():
             else:
                 T_new = Tt[i_reac]
                 Y_new = Yt_ann[:,i_reac]
+            time_ann += perf_counter() - start
 
             Yt_dt_ann[:,i_reac] = np.reshape(Y_new,-1)
             T_dt_ann[i_reac] = T_new
@@ -659,6 +680,8 @@ class NNTesting():
             "Omega_ann": Omega_ann,
             "ann_calls": ann_calls,
             "cvode_calls": cvode_calls,
+            "time_cvode": time_cvode,
+            "time_ann": time_ann,
         }
 
 
@@ -708,7 +731,8 @@ class NNTesting():
         Returns the summary: errors of each case, mean and standard deviation over the cases, and the
         simulation error aggregated per dt (E(dt)). The errors of each case are also written in
         simulation_errors_<case_type>.csv, and E(dt) in simulation_errors_<case_type>_by_dt.csv (plotted in
-        simulation_errors_<case_type>_by_dt.png).
+        simulation_errors_<case_type>_by_dt.png), with the mean contribution of each variable (plotted in
+        simulation_errors_<case_type>_by_variable.png) and the mean speed-up.
         """
 
         x_window = series.get("x_window")
@@ -750,9 +774,16 @@ class NNTesting():
 
         # 0D: simulation error aggregated over the simulations of each dt, E(dt)
         if "E_sim" in table:
-            by_dt = table.groupby("dt")["E_sim"].agg(E_mean="mean", E_std=lambda e: e.std(ddof=0), nb_simulations="count")
+            grouped = table.groupby("dt")
+            by_dt = grouped["E_sim"].agg(E_mean="mean", E_std=lambda e: e.std(ddof=0), nb_simulations="count")
+
+            # Mean contribution of each variable (E_T, E_<species>) and mean speed-up
+            variables = ["E_T"] + [f"E_{spec}" for spec in self.inference.spec_list_ANN]
+            by_dt = by_dt.join(grouped[variables].mean()).join(grouped["speedup"].mean().rename("speedup_mean"))
+
             by_dt.to_csv(os.path.join(self.output_folder, f"simulation_errors_{case_type}_by_dt.csv"))
             plots.plot_simulation_errors_by_dt(table, by_dt, case_type, self.output_folder)
+            plots.plot_errors_per_variable(by_dt, variables, case_type, self.output_folder)
             summary["E_sim_by_dt"] = {float(dt): {key: float(value) for key, value in row.items()} for dt, row in by_dt.iterrows()}
 
         with open(os.path.join(self.output_folder, f"summary_{case_type}.yaml"), "w") as file:
@@ -794,12 +825,13 @@ class NNTesting():
     def case_errors(self, case_type, result, x_window=None):
         """Errors of the ANN compared to CVODE for the result of one case (dict of floats, None if not defined).
 
-        0D: simulation error E_sim [-] (see NN_testing_metrics.normalized_trajectory_error) over all the
+        0D: simulation error E_sim [-] and its contributions E_<variable> (see _simulation_errors) over all the
         time steps, i.e. until CVODE equilibrium (equilibrium_steps, equilibrium_reached), error on the final temperature [%], ignition delays [s]
         (time at which T exceeds T0 + 200 K) and their error [%] (ignition only), numbers of ANN and CVODE calls.
         1D: a priori error E_sim [-], normalized as for 0D, on the states after one step dt from each grid
         point in x_window (mean over the points instead of the time steps), L2 error of the reaction
         rates of spec_to_plot over x_window (see NN_testing_metrics.l2_error), numbers of ANN and CVODE calls.
+        Both: CPU times of the chemistry of CVODE and ANN (time_cvode, time_ann [s]) and speedup = time_cvode / time_ann.
         """
 
         errors = {}
@@ -810,7 +842,7 @@ class NNTesting():
             # Simulation error, normalized with the training standard deviations, over the steps (initial state excluded)
             x_ref = self._error_variables(result["states_ref"][1:])
             x_ann = self._error_variables(result["states_ann"][1:])
-            errors["E_sim"] = metrics.normalized_trajectory_error(x_ann, x_ref, self.std_train)
+            errors.update(self._simulation_errors(x_ann, x_ref))
             errors["equilibrium_steps"] = len(result["states_ref"]) - 1
             errors["equilibrium_reached"] = bool(result["equilibrium_reached"])
 
@@ -836,7 +868,7 @@ class NNTesting():
             # A priori error, normalized with the training standard deviations, after one step dt
             x_ref = self._error_variables(np.column_stack([result["T_dt_exact"], result["Yt_dt_exact"].T])[in_window])
             x_ann = self._error_variables(np.column_stack([result["T_dt_ann"], result["Yt_dt_ann"].T])[in_window])
-            errors["E_sim"] = metrics.normalized_trajectory_error(x_ann, x_ref, self.std_train)
+            errors.update(self._simulation_errors(x_ann, x_ref))
 
             for spec in self.spec_to_plot:
                 k = self.spec_list_ref.index(spec)
@@ -844,6 +876,24 @@ class NNTesting():
 
         errors["ann_calls"] = result["ann_calls"]
         errors["cvode_calls"] = result["cvode_calls"]
+
+        # CPU times of the chemistry [s] and speed-up of the ANN
+        errors["time_cvode"] = result["time_cvode"]
+        errors["time_ann"] = result["time_ann"]
+        errors["speedup"] = result["time_cvode"] / result["time_ann"]
+
+        return errors
+
+
+    def _simulation_errors(self, x_ann, x_ref):
+        """Simulation error E_sim [-] and its contributions E_T, E_<species> [-] of each variable
+        (see NN_testing_metrics.normalized_errors_per_variable): E_sim is their mean."""
+
+        per_variable = metrics.normalized_errors_per_variable(x_ann, x_ref, self.std_train)
+
+        errors = {"E_sim": float(per_variable.mean())}
+        for name, value in zip(["T"] + self.inference.spec_list_ANN, per_variable):
+            errors[f"E_{name}"] = float(value)
 
         return errors
 

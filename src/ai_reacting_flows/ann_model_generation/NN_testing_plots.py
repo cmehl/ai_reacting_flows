@@ -186,3 +186,29 @@ def plot_simulation_errors_by_dt(table, by_dt, case_type, folder):
 
     fig.savefig(os.path.join(folder, f"simulation_errors_{case_type}_by_dt.png"), dpi=400)
     plt.close(fig)
+
+
+def plot_errors_per_variable(by_dt, variables, case_type, folder):
+    """Mean contribution E_<variable> [-] of each variable (T and network species) to the simulation
+    error of a series, one bar per dt [s], in folder/simulation_errors_<case_type>_by_variable.png.
+
+    by_dt: indexed by dt, with the columns of variables (E_T, E_<species>).
+    """
+
+    dts = by_dt.index.to_numpy()
+    positions = np.arange(len(variables))
+    width = 0.8 / len(dts)
+
+    fig, ax = plt.subplots(1, 1, figsize=(max(6, 0.5 * len(variables) * len(dts)), 4))
+
+    for i, dt in enumerate(dts):
+        ax.bar(positions + i * width, by_dt.loc[dt, variables], width, label=rf'$\Delta t$ = {dt:.1e} s')
+
+    ax.set_xticks(positions + 0.5 * (len(dts) - 1) * width, [var.removeprefix("E_") for var in variables], rotation=90)
+    ax.set_ylabel(r'$E_{variable}$ $[-]$', fontsize=FONTSIZE)
+    ax.set_title(case_type)
+    ax.legend()
+    fig.tight_layout()
+
+    fig.savefig(os.path.join(folder, f"simulation_errors_{case_type}_by_variable.png"), dpi=400)
+    plt.close(fig)
