@@ -8,7 +8,8 @@ Check:
   normalized simulation error (eq. 6 of Mehl & Aubagnac), for 0D cases and 1D flames (a priori).
 - test_0D_ignition and test_0D_pyrolysis write their plots in TESTING_<model>/, including N2 when
   it is removed from the network species (the pyrolysis plots used to fail in this case).
-- series_cases gives all combinations of the parameters given as lists.
+- series_cases gives all combinations of the parameters given as lists, and with a conditions file
+  (sim_test_*.csv of a flamelets database) one case per row of the file and per value of the other lists.
 - run_testing (sections of nn_testing.yaml) runs the selected series, including 1D premixed and
   diffusion flames, and writes their summaries (errors of each case, mean); evaluate_on_validation_set
   statistics and plots; the 0D simulation errors E_sim per case and per dt in CSV tables, with the
@@ -22,7 +23,7 @@ import numpy as np
 import pandas as pd
 import oyaml as yaml
 from ai_reacting_flows.ann_model_generation.NN_manager import NN_manager
-from ai_reacting_flows.ann_model_generation.NN_testing import NNTesting, series_cases
+from ai_reacting_flows.ann_model_generation.NN_testing import NNTesting, series_cases, read_conditions_file
 import ai_reacting_flows.ann_model_generation.NN_testing_metrics as metrics
 import ai_reacting_flows.tools.transforms as transforms
 from h2_learning_database import write_h2_learning_database, dt, pressure
@@ -83,6 +84,21 @@ def test_series_cases():
 
     assert len(cases) == 4
     assert {"phi": 0.7, "T0": 1000.0, "max_simulation_time": 1.0e-3, "diluent": None} in cases
+
+
+def test_conditions_file(tmp_path):
+    # Test simulations of a flamelets database (as written by database_flmts.py): one case per row and dt
+    path = tmp_path / "sim_test_1D_diff.csv"
+    pd.DataFrame({"Strain": [100.0, 500.0], "T0": [300.0, 400.0], "sim_number": [3, 7]}).to_csv(path, index=False)
+    conditions = read_conditions_file(path, "1D_diffusion")
+
+    assert conditions == [{"strain": 100.0, "T_ox": 300.0}, {"strain": 500.0, "T_ox": 400.0}]
+
+    cases = series_cases({"run": True, "conditions_file": str(path), "strain": [1.0, 2.0, 3.0], "T_ox": [300.0],
+                          "T_fuel": [300.0], "dt": [1.0e-6, 1.0e-5]}, conditions)
+
+    assert len(cases) == 4
+    assert cases[3] == {"strain": 500.0, "T_ox": 400.0, "T_fuel": 300.0, "dt": 1.0e-5}
 
 
 def test_nn_testing_outputs(tmp_path):

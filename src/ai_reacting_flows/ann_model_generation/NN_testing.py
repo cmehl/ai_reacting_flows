@@ -24,17 +24,52 @@ import ai_reacting_flows.tools.transforms as transforms
 CASE_TYPES = ["0D_ignition", "0D_pyrolysis", "1D_premixed", "1D_diffusion"]
 
 # Keys of a series section of nn_testing.yaml that are not parameters of the cases
-SERIES_OPTIONS = ["run", "plots", "x_window"]
+SERIES_OPTIONS = ["run", "plots", "x_window", "conditions_file"]
+
+# Columns of the conditions files of a flamelets database (sim_test_*.csv, database_flmts.py) and
+# corresponding parameters of the cases (the air temperature T0 of the diffusion flames is T_ox)
+CONDITIONS_COLUMNS = {
+    "0D_ignition": {"Phi": "phi", "T0": "T0"},
+    "1D_premixed": {"Phi": "phi", "T0": "T0"},
+    "1D_diffusion": {"Strain": "strain", "T0": "T_ox"},
+}
 
 
-def series_cases(series):
+def series_cases(series, conditions=None):
     """Cases (list of dicts of parameters) of a series section of nn_testing.yaml: parameters given
-    as lists are swept and all combinations are returned, other parameters are the same for all cases."""
+    as lists are swept and all combinations are returned, other parameters are the same for all cases.
+
+    conditions: optional list of dicts of parameters, one per simulation (see read_conditions_file).
+    Their parameters replace those of the series, and each one is run with all the combinations of the
+    other parameters (e.g. each dt).
+    """
 
     params = {key: value for key, value in series.items() if key not in SERIES_OPTIONS}
-    values = [value if isinstance(value, list) else [value] for value in params.values()]
 
-    return [dict(zip(params.keys(), combination)) for combination in itertools.product(*values)]
+    if conditions is None:
+        conditions = [{}]
+
+    # Parameters given by the conditions are not swept (their value is replaced)
+    values = [value if isinstance(value, list) and key not in conditions[0] else [value] for key, value in params.items()]
+
+    cases = []
+    for condition in conditions:
+        for combination in itertools.product(*values):
+            case = dict(zip(params.keys(), combination))
+            case.update(condition)
+            cases.append(case)
+
+    return cases
+
+
+def read_conditions_file(path, case_type):
+    """Conditions of the test simulations of a flamelets database (sim_test_0D.csv, sim_test_1D_prem.csv
+    or sim_test_1D_diff.csv written by database_flmts.py) as parameters of case_type, one dict per
+    simulation (see CONDITIONS_COLUMNS)."""
+
+    table = pd.read_csv(path)
+
+    return [{param: float(row[col]) for col, param in CONDITIONS_COLUMNS[case_type].items()} for _, row in table.iterrows()]
 
 
 def print_errors(errors):
@@ -668,7 +703,8 @@ class NNTesting():
 
         series: section of nn_testing.yaml: parameters of run_case (a list of values is swept, all
         combinations are run), plots (plots of each case), x_window ([x_min, x_max] [m] of the
-        1D errors and plots, full domain if null).
+        1D errors and plots, full domain if null), conditions_file (sim_test_*.csv of a flamelets database
+        whose conditions replace those of the series, see read_conditions_file, not used if null).
         Returns the summary: errors of each case, mean and standard deviation over the cases, and the
         simulation error aggregated per dt (E(dt)). The errors of each case are also written in
         simulation_errors_<case_type>.csv, and E(dt) in simulation_errors_<case_type>_by_dt.csv (plotted in
@@ -676,7 +712,13 @@ class NNTesting():
         """
 
         x_window = series.get("x_window")
-        cases = series_cases(series)
+
+        # Conditions of the test simulations of a flamelets database
+        conditions = None
+        if series.get("conditions_file") is not None:
+            conditions = read_conditions_file(series["conditions_file"], case_type)
+
+        cases = series_cases(series, conditions)
 
         print(f"\n>> Series {case_type}: {len(cases)} cases")
 

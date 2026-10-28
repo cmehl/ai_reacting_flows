@@ -320,7 +320,7 @@ For `DeepONet`, these three keys are dicts with `branch` and `trunk` entries (pl
 | `1D_diffusion` | Series of 1-D counterflow flames of pure fuel against air: `strain` [1/s], `T_ox` [K], `T_fuel` [K], `pressure` [Pa], `dt` [s], `width` [m], `T_threshold` [K], `x_window` |
 | `validation_set` | `run`, `max_points_scatter` (maximum number of points plotted per cluster) |
 
-Each series section has `run` (run the series or not) and `plots` (plots of each case). Parameters given as lists are swept (all combinations are run), others are the same for all cases. `x_window` is `[x_min, x_max]` [m] for the 1-D errors and plots, or `null` for the whole flame. The 1-D diffusion flame has the setup of the flamelets database (mixture-averaged transport).
+Each series section has `run` (run the series or not) and `plots` (plots of each case). Parameters given as lists are swept (all combinations are run), others are the same for all cases. `x_window` is `[x_min, x_max]` [m] for the 1-D errors and plots, or `null` for the whole flame. The 1-D diffusion flame has the setup of the flamelets database (mixture-averaged transport). `conditions_file` (0-D ignition, 1-D premixed and diffusion) runs the test simulations set aside by a flamelets database (`FLAMELETS_DTB_<suffix>/sim_test_0D.csv`, `sim_test_1D_prem.csv`, `sim_test_1D_diff.csv`): each row gives one simulation (`Phi`, `T0` → `phi`, `T0`; for diffusion flames `Strain`, `T0` → `strain`, `T_ox`), run with every combination of the other parameters of the section (e.g. each `dt`); `null` to use the parameters of the section.
 
 # Tests
 

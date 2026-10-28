@@ -20,6 +20,7 @@ hybrid_ann_cvode_tol: 5.0e-05          # Tolerance on |sum(Y_k) - 1| [-]
   dt: [1.0e-07, 5.0e-07, 1.0e-06]      # Time step [s]
   max_simulation_time: 5.0e-04         # Maximum end time [s] if CVODE equilibrium is not reached
   T_eq_tolerance: 1.0                  # [K] CVODE and ANN stop when CVODE T is this close to equilibrium
+  conditions_file: null                # sim_test_0D.csv of a flamelets database: its Phi, T0 replace phi, T0
 
 # 0D constant-pressure pyrolysis of fuel, optionally diluted
 0D_pyrolysis:
@@ -43,6 +44,7 @@ hybrid_ann_cvode_tol: 5.0e-05          # Tolerance on |sum(Y_k) - 1| [-]
   dt: [1.0e-07, 5.0e-07, 1.0e-06]      # Time step [s]
   T_threshold: 600.0                   # ANN not applied below this temperature [K]
   x_window: [0.008, 0.014]             # [x_min, x_max] [m] of errors and plots, null for the full flame
+  conditions_file: null                # sim_test_1D_prem.csv of a flamelets database: its Phi, T0 replace phi, T0
 
 # 1D counterflow diffusion flame (pure fuel against air): a priori ANN vs CVODE reaction rates
 1D_diffusion:
@@ -56,6 +58,7 @@ hybrid_ann_cvode_tol: 5.0e-05          # Tolerance on |sum(Y_k) - 1| [-]
   width: 0.02                          # Distance between the inlets [m]
   T_threshold: 600.0                   # ANN not applied below this temperature [K]
   x_window: null                       # [x_min, x_max] [m] of errors and plots, null for the full flame
+  conditions_file: null                # sim_test_1D_diff.csv of a flamelets database: its Strain, T0 replace strain, T_ox
 
 # Comparison of the ANN to the validation set of training_data.h5 (scatter plots of errors)
 validation_set:
