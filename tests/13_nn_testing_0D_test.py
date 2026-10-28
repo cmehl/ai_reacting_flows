@@ -8,6 +8,8 @@ Check:
 - run_0D_ignition_case runs with N2 removed from the network species.
 - with progress variable clustering, the 0D case attributes clusters from the progress variable
   of the current state (states advanced with CVODE through the hybrid mode, so that it ignites).
+- the 0D case stops at the first step where the CVODE temperature is within T_eq_tolerance of the
+  equilibrium temperature, with the same number of ANN steps.
 
 Independent of the other tests.
 """
@@ -40,7 +42,7 @@ def test_nn_testing_0D(tmp_path):
     assert np.isclose(test.compute_progvar(state_eq, pressure, Yc_u), 1.0, rtol=1.0e-6)
 
     # 0D ignition with N2 removed from the network species
-    result = test.run_0D_ignition_case(phi=0.6, T0=1200.0, pressure=pressure, dt=dt, simulation_time=3 * dt)
+    result = test.run_0D_ignition_case(phi=0.6, T0=1200.0, pressure=pressure, dt=dt, max_simulation_time=3 * dt)
     assert result["states_ann"].shape == (4, 1 + gas.n_species)
 
     # Progress variable clustering (2 clusters with the same network), states advanced with CVODE
@@ -60,8 +62,17 @@ def test_nn_testing_0D(tmp_path):
         clusters.append(test.cluster)
     test.attribute_cluster = spy
 
-    result = test.run_0D_ignition_case(phi=0.6, T0=1200.0, pressure=pressure, dt=dt, simulation_time=64 * dt)
+    result = test.run_0D_ignition_case(phi=0.6, T0=1200.0, pressure=pressure, dt=dt, max_simulation_time=64 * dt)
     progvar = result["progvar"][:-1]   # progress variable of the state before each step
 
     assert progvar.max() > 0.9
     assert clusters == [0 if c < 0.5 else 1 for c in progvar]
+
+    # Stop at CVODE equilibrium (max_simulation_time not reached), same number of ANN steps
+    result = test.run_0D_ignition_case(phi=0.6, T0=1200.0, pressure=pressure, dt=dt, max_simulation_time=1.0, T_eq_tolerance=1.0)
+    T_ref = result["states_ref"][:, 0]
+
+    assert result["equilibrium_reached"]
+    assert abs(T_ref[-1] - result["T_eq"]) <= 1.0 and abs(T_ref[-2] - result["T_eq"]) > 1.0
+    assert result["states_ann"].shape == result["states_ref"].shape
+    assert len(T_ref) < 1.0 / dt

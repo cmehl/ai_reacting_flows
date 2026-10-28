@@ -64,3 +64,30 @@ def validation_errors(diff_scaled, std_Y):
         "mae_phys": np.mean(np.abs(diff_unscaled), axis=0),
         "rmse_phys": np.sqrt(mse_phys),
     }
+
+
+def pooled_mean_var(means, variances, counts):
+    """Mean and variance of the union of groups, from the mean, variance and number of points of each
+    group (arrays (n_groups, n_features), (n_groups, n_features), (n_groups))."""
+
+    counts = np.asarray(counts, dtype=float)[:, None]
+    n_tot = counts.sum()
+
+    mean = np.sum(counts * means, axis=0) / n_tot
+    var = np.sum(counts * (variances + means**2), axis=0) / n_tot - mean**2
+
+    return mean, var
+
+
+def normalized_trajectory_error(x_ann, x_ref, std):
+    """Error of a simulation: mean over the time steps and the variables of |x_ann - x_ref| / std.
+
+    x_ann, x_ref: (n_steps, 1 + N_S) temperature [K] and transformed mass fractions of the N_S species
+    (log or Box-Cox, see tools/transforms.py) along the ANN and reference simulations; std: standard
+    deviations of these variables on the training dataset. This is eq. (6) of C. Mehl, D. Aubagnac,
+    "Acceleration of chemical kinetics using artificial neural networks with variable time step",
+    following X. Chen, C. Mehl, T. Faney, F. Di Meglio, Energy & Fuels 37 (18) (2023) 14222
+    (the means of the normalization cancel in the differences).
+    """
+
+    return float(np.mean(np.abs(x_ann - x_ref) / std))

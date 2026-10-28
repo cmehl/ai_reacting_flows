@@ -58,9 +58,9 @@ phi = 0.4
 T0 = 1200.0
 pressure = 101325.0
 dt = 0.5e-6
-simulation_time = 5.0e-4   # End time [s]
+max_simulation_time = 5.0e-4   # Maximum end time [s] if equilibrium is not reached
 
-test.test_0D_ignition(phi, T0, pressure, dt, simulation_time)
+test.test_0D_ignition(phi, T0, pressure, dt, max_simulation_time)
 
 # %% [markdown]
 # Another test, if the ANN has been built for that, is to assess its ability to reproduce laminar premixed flames. The test here is *a priori*, in the sense that we take a CANTERA converged solution, and compare the exact reaction rate to the ANN reaction rate. For a species $k$, if the exact solution is written $Y_k$, the local reaction rate is estimated as:

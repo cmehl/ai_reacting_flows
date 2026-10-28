@@ -154,3 +154,35 @@ def plot_validation_errors(diff, i_cluster, folder, max_points_scatter=50000):
 
     fig.savefig(os.path.join(folder, f"cluster_{i_cluster}_errors.png"), dpi=400)
     plt.close(fig)
+
+
+def plot_simulation_errors_by_dt(table, by_dt, case_type, folder):
+    """Simulation error E_sim [-] of a 0D series versus the time step dt [s], in
+    folder/simulation_errors_<case_type>_by_dt.png.
+
+    Left: E(dt), mean over the simulations of each dt, with its standard deviation as error bars.
+    Right: box plot of the E_sim of the simulations of each dt.
+    table: one row per simulation (columns dt and E_sim); by_dt: E_mean and E_std indexed by dt.
+    """
+
+    dts = by_dt.index.to_numpy()
+
+    fig, axs = plt.subplots(1, 2, figsize=(10, 4))
+
+    # Mean and standard deviation per dt
+    axs[0].errorbar(dts, by_dt["E_mean"], yerr=by_dt["E_std"], color="b", lw=2, marker="o", capsize=4)
+    axs[0].set_xscale("log")
+    axs[0].set_xlabel(r'$\Delta t$ $[s]$', fontsize=FONTSIZE)
+    axs[0].set_ylabel(r'$E(\Delta t)$ $[-]$', fontsize=FONTSIZE)
+
+    # Distribution of the simulation errors per dt
+    errors_per_dt = [table.loc[table["dt"] == dt, "E_sim"].to_numpy() for dt in dts]
+    axs[1].boxplot(errors_per_dt, tick_labels=[f"{dt:.1e}" for dt in dts])
+    axs[1].set_xlabel(r'$\Delta t$ $[s]$', fontsize=FONTSIZE)
+    axs[1].set_ylabel(r'$E_i$ $[-]$', fontsize=FONTSIZE)
+
+    fig.suptitle(case_type)
+    fig.tight_layout()
+
+    fig.savefig(os.path.join(folder, f"simulation_errors_{case_type}_by_dt.png"), dpi=400)
+    plt.close(fig)

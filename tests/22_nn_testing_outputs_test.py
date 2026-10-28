@@ -4,18 +4,22 @@ Test 22: NNTesting error metrics and plots.
 Builds a small H2 learning database (N2 removed) and trains a model for one epoch.
 Check:
 - error metrics (NN_testing_metrics.py): relative error, L2 error over a window, validation errors
-  in unscaled space equal to the difference of the unscaled outputs.
+  in unscaled space equal to the difference of the unscaled outputs, pooled statistics of groups,
+  normalized simulation error (eq. 6 of Mehl & Aubagnac).
 - test_0D_ignition and test_0D_pyrolysis write their plots in TESTING_<model>/, including N2 when
   it is removed from the network species (the pyrolysis plots used to fail in this case).
 - series_cases gives all combinations of the parameters given as lists.
 - run_testing (sections of nn_testing.yaml) runs the selected series, including 1D premixed and
   diffusion flames, and writes their summaries (errors of each case, mean); evaluate_on_validation_set
-  statistics and plots.
+  statistics and plots; the 0D simulation errors E_sim per case and per dt in CSV tables, with the
+  training standard deviations as normalization.
 
 Independent of the other tests.
 """
 import os
+import h5py
 import numpy as np
+import pandas as pd
 import oyaml as yaml
 from ai_reacting_flows.ann_model_generation.NN_manager import NN_manager
 from ai_reacting_flows.ann_model_generation.NN_testing import NNTesting, series_cases
@@ -29,7 +33,7 @@ testing_parameters = {"models_folder": "MODEL_TEST", "spec_to_plot": ["H2", "N2"
 # Series as in nn_testing.yaml: 2 ignition cases, 1 premixed flame, 1 diffusion flame, validation set
 series_parameters = {
     "0D_ignition": {"run": True, "plots": False, "phi": [0.5, 0.7], "T0": [1200.0], "pressure": [pressure],
-                    "dt": [dt], "simulation_time": 3 * dt},
+                    "dt": [dt], "max_simulation_time": 3 * dt, "T_eq_tolerance": 1.0},
     "0D_pyrolysis": {"run": False},
     "1D_premixed": {"run": True, "plots": False, "phi": [0.6], "T0": [300.0], "pressure": [pressure], "dt": [dt],
                     "T_threshold": 600.0, "x_window": None},
@@ -55,6 +59,18 @@ def test_metrics():
     mean_Y, std_Y = np.array([1.0, -2.0, 0.5]), np.array([0.1, 3.0, 1.0])
     diff = transforms.unscale(Y_pred, mean_Y, std_Y) - transforms.unscale(Y_val, mean_Y, std_Y)
 
+    # Pooled statistics equal to the statistics of the union
+    groups = [rng.normal(loc=i, scale=i + 1.0, size=(n, 2)) for i, n in enumerate([30, 50, 20])]
+    mean, var = metrics.pooled_mean_var(np.array([g.mean(axis=0) for g in groups]),
+                                        np.array([g.var(axis=0) for g in groups]), [len(g) for g in groups])
+    assert np.allclose(mean, np.concatenate(groups).mean(axis=0))
+    assert np.allclose(var, np.concatenate(groups).var(axis=0))
+
+    # Simulation error: mean over steps and variables of the normalized absolute differences
+    x_ref = np.zeros((2, 3))
+    x_ann = np.array([[2.0, 0.0, 1.0], [0.0, 4.0, 0.0]])
+    assert np.isclose(metrics.normalized_trajectory_error(x_ann, x_ref, np.array([2.0, 4.0, 1.0])), 0.5)
+
     errors = metrics.validation_errors(Y_pred - Y_val, std_Y)
     assert np.allclose(errors["mse_phys"], np.mean(diff**2, axis=0))
     assert np.allclose(errors["mae_phys"], np.mean(np.abs(diff), axis=0))
@@ -63,10 +79,10 @@ def test_metrics():
 
 def test_series_cases():
     cases = series_cases({"run": True, "plots": False, "x_window": None, "phi": [0.5, 0.7], "T0": [1000.0, 1200.0],
-                          "simulation_time": 1.0e-3, "diluent": None})
+                          "max_simulation_time": 1.0e-3, "diluent": None})
 
     assert len(cases) == 4
-    assert {"phi": 0.7, "T0": 1000.0, "simulation_time": 1.0e-3, "diluent": None} in cases
+    assert {"phi": 0.7, "T0": 1000.0, "max_simulation_time": 1.0e-3, "diluent": None} in cases
 
 
 def test_nn_testing_outputs(tmp_path):
@@ -76,12 +92,12 @@ def test_nn_testing_outputs(tmp_path):
     test = NNTesting(testing_parameters)
 
     # 0D plots, N2 plotted while removed from the network species
-    test.test_0D_ignition(phi=0.6, T0=1200.0, pressure=pressure, dt=dt, simulation_time=3 * dt)
-    test.test_0D_pyrolysis(T0=1200.0, pressure=pressure, dt=dt, simulation_time=3 * dt, diluent="N2", X_diluent=0.5)
+    test.test_0D_ignition(phi=0.6, T0=1200.0, pressure=pressure, dt=dt, max_simulation_time=3 * dt)
+    test.test_0D_pyrolysis(T0=1200.0, pressure=pressure, dt=dt, max_simulation_time=3 * dt, diluent="N2", X_diluent=0.5)
 
     output = "TESTING_MODEL_TEST"
-    for folder in [f"0D_ignition_phi#0.6_T0#1200.0_pressure#{pressure}_dt#{dt}_simulation_time#{3 * dt}",
-                   f"0D_pyrolysis_T0#1200.0_pressure#{pressure}_dt#{dt}_simulation_time#{3 * dt}_diluent#N2_X_diluent#0.5"]:
+    for folder in [f"0D_ignition_phi#0.6_T0#1200.0_pressure#{pressure}_dt#{dt}_max_simulation_time#{3 * dt}_T_eq_tolerance#1.0",
+                   f"0D_pyrolysis_T0#1200.0_pressure#{pressure}_dt#{dt}_max_simulation_time#{3 * dt}_T_eq_tolerance#1.0_diluent#N2_X_diluent#0.5"]:
         for name in ["Temperature", "YH2", "YN2", "SumYs", "AtomCons"]:
             assert os.path.isfile(os.path.join(output, folder, f"{name}.png"))
 
@@ -99,6 +115,23 @@ def test_nn_testing_outputs(tmp_path):
     assert [case["params"]["phi"] for case in summary["cases"]] == [0.5, 0.7]
     assert np.isclose(summary["mean"]["T_final_error_percent"], np.mean(errors))
 
+    # Simulation errors: one row per case, and E(dt) aggregated over the 2 cases of the single dt
+    table = pd.read_csv(os.path.join(output, "simulation_errors_0D_ignition.csv"))
+    by_dt = pd.read_csv(os.path.join(output, "simulation_errors_0D_ignition_by_dt.csv"))
+
+    assert list(table["phi"]) == [0.5, 0.7]
+    assert np.all(table["E_sim"] >= 0.0) and np.all(table["equilibrium_steps"] == 3)
+    assert not table["equilibrium_reached"].any()   # stopped by max_simulation_time
+    assert by_dt["nb_simulations"][0] == 2
+    assert np.isclose(by_dt["E_mean"][0], table["E_sim"].mean())
+    assert os.path.isfile(os.path.join(output, "simulation_errors_0D_ignition_by_dt.png"))
+
+    # Normalization: standard deviations of the training inputs (one cluster)
+    with h5py.File("STOCH_DTB_TEST/dtb/training_data.h5", "r") as f:
+        cols = [c.decode() if isinstance(c, bytes) else str(c) for c in f["CLUSTER_0/X_train"].attrs["cols"]]
+        idx = [cols.index("Temperature_X")] + [cols.index(f"{spec}_X") for spec in test.inference.spec_list_ANN]
+        assert np.allclose(test.std_train, np.sqrt(f["CLUSTER_0/Xscaler"][idx, 1]))
+
     # 1D flames: errors on the reaction rates, and plots
     assert summaries["1D_premixed"]["cases"][0]["errors"]["L2_error_omega_H2"] >= 0.0
 
@@ -107,6 +140,7 @@ def test_nn_testing_outputs(tmp_path):
     assert errors["ann_calls"] > 0
     folder = f"1D_diffusion_strain#1000.0_T_ox#1000.0_T_fuel#300.0_pressure#{pressure}_dt#{dt}_width#0.02_T_threshold#600.0"
     assert os.path.isfile(os.path.join(output, folder, "YH2.png"))
+
 
     # Validation set: statistics per output and scatter plot per cluster
     stats = test.evaluate_on_validation_set()

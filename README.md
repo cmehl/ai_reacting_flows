@@ -179,11 +179,20 @@ TESTING_<models_folder>/
 ├── nn_testing.yaml                       copy of the inputs
 ├── <case type>_<parameters>/             plots of each case (if plots: true)
 ├── summary_<case type>.yaml              errors of each case, mean and std over the series
+├── simulation_errors_<case type>.csv     one row per case: parameters and errors
+├── simulation_errors_<case type>_by_dt.csv   0-D: E(dt), std and number of simulations per dt
+├── simulation_errors_<case type>_by_dt.png   0-D: E(dt) with std bars, and box plot of E_i per dt
 ├── plots_validation/                     scatter plots of validation errors
 └── nn_testing_<timestamp>.log
 ```
 
-Errors: 0-D cases give the error on the final temperature [%], and for ignition the ignition delays (time at which $T$ exceeds $T_0 + 200$ K) and their error [%]; 1-D flames give the L2 error of the reaction rates of `spec_to_plot`. Single cases can also be run from Python (`test_0D_ignition`, `test_0D_pyrolysis`, `test_1D_premixed`, `test_1D_diffusion`), as in `notebooks/ann_model_testing.py`.
+Errors: 0-D cases give the simulation error $\mathcal{E}_i$ (`E_sim`), the error on the final temperature [%], and for ignition the ignition delays (time at which $T$ exceeds $T_0 + 200$ K) and their error [%]; 1-D flames give the L2 error of the reaction rates of `spec_to_plot`.
+
+The simulation error of a 0-D case $i$ run with time step $dt$ is the normalized error of Mehl & Aubagnac (variable time step ANN, eq. 6), following Chen et al. (Energy & Fuels 37, 2023):
+
+$$\mathcal{E}_i(dt) = \frac{1}{N_i} \sum_{j=1}^{N_i} \frac{1}{N_S + 1} \left( \sum_{k=1}^{N_S} \frac{|f(Y_{k,j}^{NN}) - f(Y_{k,j}^{ref})|}{\sigma_k} + \frac{|T_j^{NN} - T_j^{ref}|}{\sigma_T} \right)$$
+
+with $f$ the transform of the network inputs (log or Box-Cox), $N_S$ the number of species of the network (N2 excluded without N chemistry), $\sigma$ the standard deviations of the training inputs over all clusters, and $N_i$ the number of time steps of the simulation. Each 0-D simulation stops when the CVODE temperature is within `T_eq_tolerance` of the equilibrium (HP) temperature of the initial mixture, and the ANN is run for the same number of steps; `max_simulation_time` only caps the simulations that do not reach equilibrium (`equilibrium_reached: false`). $\mathcal{E}(dt)$, the mean of $\mathcal{E}_i$ over the simulations run with $dt$, is written in `simulation_errors_<case type>_by_dt.csv` and plotted in `simulation_errors_<case type>_by_dt.png` (mean with standard deviation bars, and box plot of $\mathcal{E}_i$ per $dt$). Single cases can also be run from Python (`test_0D_ignition`, `test_0D_pyrolysis`, `test_1D_premixed`, `test_1D_diffusion`), as in `notebooks/ann_model_testing.py`.
 
 `NNTesting` (`NN_testing.py`) runs the reference and ANN cases; the error metrics are in `NN_testing_metrics.py` and the plots in `NN_testing_plots.py`. The ANN chemistry step itself (clustering, transforms, networks) is in `NN_inference.py` (`NNInference`), shared with the stochastic reactors.
 
@@ -305,8 +314,8 @@ For `DeepONet`, these three keys are dicts with `branch` and `trunk` entries (pl
 | `yk_renormalization` | If `true`, ANN mass fractions are corrected to conserve the elements |
 | `hybrid_ann_cvode` | If `true`, CVODE is used when the ANN mass fractions sum differs from 1 by more than `hybrid_ann_cvode_tol` |
 | `hybrid_ann_cvode_tol` | Tolerance on the sum of mass fractions [-] |
-| `0D_ignition` | Series of 0-D ignitions of fuel/air: `phi`, `T0` [K], `pressure` [Pa], `dt` [s], `simulation_time` [s] (end time, the same for any `dt`) |
-| `0D_pyrolysis` | Series of 0-D pyrolysis: `T0` [K], `pressure` [Pa], `dt` [s], `simulation_time` [s], `diluent` (species or `null`), `X_diluent` [-] |
+| `0D_ignition` | Series of 0-D ignitions of fuel/air: `phi`, `T0` [K], `pressure` [Pa], `dt` [s], `T_eq_tolerance` [K] (CVODE and ANN stop when the CVODE temperature is this close to equilibrium), `max_simulation_time` [s] (end time if equilibrium is not reached) |
+| `0D_pyrolysis` | Series of 0-D pyrolysis: `T0` [K], `pressure` [Pa], `dt` [s], `T_eq_tolerance` [K], `max_simulation_time` [s], `diluent` (species or `null`), `X_diluent` [-] |
 | `1D_premixed` | Series of 1-D premixed flames: `phi`, `T0` [K], `pressure` [Pa], `dt` [s], `T_threshold` [K] (ANN not applied below), `x_window` |
 | `1D_diffusion` | Series of 1-D counterflow flames of pure fuel against air: `strain` [1/s], `T_ox` [K], `T_fuel` [K], `pressure` [Pa], `dt` [s], `width` [m], `T_threshold` [K], `x_window` |
 | `validation_set` | `run`, `max_points_scatter` (maximum number of points plotted per cluster) |

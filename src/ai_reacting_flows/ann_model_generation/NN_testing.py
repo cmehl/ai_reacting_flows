@@ -4,6 +4,7 @@ import h5py
 import oyaml as yaml
 
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 
 import cantera as ct
@@ -99,6 +100,10 @@ class NNTesting():
         # Renormalization of Yk to satisfy elements conservation
         self.yk_renormalization = testing_parameters["yk_renormalization"]
 
+        # Standard deviations of T [K] and transformed Y_k of the network species on the training dataset
+        # (all clusters), normalization of the simulation error E_sim (see case_errors)
+        self.std_train = self._training_std()
+
         # Cached validation data (optional, used by evaluate_on_validation_set)
         self._val_data_loaded = False
         self._X_val = []
@@ -125,7 +130,7 @@ class NNTesting():
 #   0D TEST CASES
 #-----------------------------------------------------------------------
 
-    def _run_0D_case(self, T0, pressure, dt, simulation_time, gas_init_compo, reactor_type="ignition"):
+    def _run_0D_case(self, T0, pressure, dt, max_simulation_time, T_eq_tolerance, gas_init_compo, reactor_type="ignition"):
         """Internal helper to run one 0D constant-pressure reactor case.
 
         Parameters
@@ -136,8 +141,11 @@ class NNTesting():
             Initial pressure [Pa].
         dt : float
             Time step used by both CVODE and ANN loops [s].
-        simulation_time : float
-            End time [s], the same for any dt: simulation_time / dt time steps.
+        max_simulation_time : float
+            Maximum end time [s], used only if CVODE does not reach equilibrium before.
+        T_eq_tolerance : float
+            CVODE stops when its temperature is within T_eq_tolerance [K] of the HP equilibrium
+            temperature of the initial mixture. The ANN is run for the same number of steps.
         gas_init_compo : str
             Cantera composition string used for the initial state (e.g. fuel+air
             for ignition, or pure fuel for pyrolysis).
@@ -156,11 +164,13 @@ class NNTesting():
         tau_ign_CVODE = 0.0
         tau_ign_ANN = 0.0
 
-        # Number of time steps
-        nb_ite = int(round(simulation_time / dt))
-
         #-------------------- INITIALISATION---------------------------
         # Setting composition
+        self.gas.TPX = T0, pressure, gas_init_compo
+
+        # Equilibrium temperature of the initial mixture (constant enthalpy and pressure) [K]
+        self.gas.equilibrate('HP')
+        T_eq = self.gas.T
         self.gas.TPX = T0, pressure, gas_init_compo
 
         # Defining reactor
@@ -181,13 +191,20 @@ class NNTesting():
         atomic_array = utils.get_atomic_array(self.gas)
 
         #-------------------- CVODE COMPUTATION---------------------------
-        for _ in range(nb_ite):
+        # Until equilibrium (or max_simulation_time if not reached)
+        equilibrium_reached = False
+        while not equilibrium_reached and simtime < max_simulation_time - 0.5 * dt:
             simtime += dt
             sim.advance(simtime)
             states.append(r.thermo.state, t=simtime*1.0e3)
 
             if reactor_type=="ignition" and states.T[-1] > T0+200.0 and tau_ign_CVODE==0.0:
                 tau_ign_CVODE = simtime
+
+            equilibrium_reached = abs(states.T[-1] - T_eq) <= T_eq_tolerance
+
+        # Number of time steps, the same for the ANN
+        nb_ite = len(states.T) - 1
 
         # Equilibrium temperature
         Teq_ref = states.T[len(states.T)-1]
@@ -285,6 +302,8 @@ class NNTesting():
             "tau_ign_cvode": tau_ign_CVODE,
             "tau_ign_ann": tau_ign_ANN,
             "Teq_ref": Teq_ref,
+            "T_eq": T_eq,
+            "equilibrium_reached": equilibrium_reached,
             "Teq_ann": Teq_ann,
             "atomic_cons": atomic_cons,
             "sumYs": sumYs,
@@ -293,7 +312,7 @@ class NNTesting():
             "cvode_calls": cvode_calls,
         }
 
-    def run_0D_ignition_case(self, phi, T0, pressure, dt, simulation_time):
+    def run_0D_ignition_case(self, phi, T0, pressure, dt, max_simulation_time, T_eq_tolerance=1.0):
         """Run one 0D ignition case (fuel+air, parametrized by phi).
 
         This is the core simulation routine for premixed ignition, without
@@ -310,8 +329,10 @@ class NNTesting():
             Initial pressure [Pa].
         dt : float
             Time step used by both CVODE and ANN loops.
-        simulation_time : float
-            End time [s] (simulation_time / dt time steps).
+        max_simulation_time : float
+            Maximum end time [s] if equilibrium is not reached before.
+        T_eq_tolerance : float
+            Equilibrium criterion [K] ending the simulation (see _run_0D_case).
 
         Returns
         -------
@@ -327,10 +348,10 @@ class NNTesting():
         )
         compo = f"{self.fuel}:{phi}, O2:{fuel_ox_ratio}, N2:{fuel_ox_ratio * 0.79 / 0.21}"
 
-        return self._run_0D_case(T0, pressure, dt, simulation_time, compo, reactor_type="ignition")
+        return self._run_0D_case(T0, pressure, dt, max_simulation_time, T_eq_tolerance, compo, reactor_type="ignition")
 
 
-    def run_0D_pyrolysis_case(self, T0, pressure, dt, simulation_time, diluent=None, X_diluent=0.0):
+    def run_0D_pyrolysis_case(self, T0, pressure, dt, max_simulation_time, T_eq_tolerance=1.0, diluent=None, X_diluent=0.0):
         """Run one 0D pyrolysis case (pure fuel or fuel+diluent).
 
         This uses the same CVODE/ANN integration as the ignition case but
@@ -345,8 +366,10 @@ class NNTesting():
             Initial pressure [Pa].
         dt : float
             Time step used by both CVODE and ANN loops.
-        simulation_time : float
-            End time [s] (simulation_time / dt time steps).
+        max_simulation_time : float
+            Maximum end time [s] if equilibrium is not reached before.
+        T_eq_tolerance : float
+            Equilibrium criterion [K] ending the simulation (see _run_0D_case).
         diluent : str or None, optional
             Optional inert species name (e.g. "N2", "Ar"). If None, a pure
             fuel case is used.
@@ -367,21 +390,21 @@ class NNTesting():
             X_fuel = max(0.0, 1.0 - X_diluent)
             compo = f"{self.fuel}:{X_fuel:3.2f}, {diluent}:{X_diluent:3.2f}"
 
-        return self._run_0D_case(T0, pressure, dt, simulation_time, compo, reactor_type="pyrolysis")
+        return self._run_0D_case(T0, pressure, dt, max_simulation_time, T_eq_tolerance, compo, reactor_type="pyrolysis")
 
     # OD IGNITION (wrapper with plotting)
-    def test_0D_ignition(self, phi, T0, pressure, dt, simulation_time):
+    def test_0D_ignition(self, phi, T0, pressure, dt, max_simulation_time, T_eq_tolerance=1.0):
         """One 0D ignition case with printed errors and plots (see run_case)."""
 
         return self.test_case("0D_ignition", {"phi": phi, "T0": T0, "pressure": pressure, "dt": dt,
-                                              "simulation_time": simulation_time})
+                                              "max_simulation_time": max_simulation_time, "T_eq_tolerance": T_eq_tolerance})
 
 
-    def test_0D_pyrolysis(self, T0, pressure, dt, simulation_time, diluent=None, X_diluent=0.0):
+    def test_0D_pyrolysis(self, T0, pressure, dt, max_simulation_time, T_eq_tolerance=1.0, diluent=None, X_diluent=0.0):
         """One 0D pyrolysis case with printed errors and plots (see run_case)."""
 
-        return self.test_case("0D_pyrolysis", {"T0": T0, "pressure": pressure, "dt": dt, "simulation_time": simulation_time,
-                                               "diluent": diluent, "X_diluent": X_diluent})
+        return self.test_case("0D_pyrolysis", {"T0": T0, "pressure": pressure, "dt": dt, "max_simulation_time": max_simulation_time,
+                                               "T_eq_tolerance": T_eq_tolerance, "diluent": diluent, "X_diluent": X_diluent})
 
 #-----------------------------------------------------------------------
 #   1D TEST CASES
@@ -638,9 +661,12 @@ class NNTesting():
         """Run all the cases of a series and write their errors in TESTING_<model>/summary_<case_type>.yaml.
 
         series: section of nn_testing.yaml: parameters of run_case (a list of values is swept, all
-        combinations are run), plots (plots of each case) and x_window ([x_min, x_max] [m] of the
+        combinations are run), plots (plots of each case), x_window ([x_min, x_max] [m] of the
         1D errors and plots, full domain if null).
-        Returns the summary: errors of each case, mean and standard deviation over the cases.
+        Returns the summary: errors of each case, mean and standard deviation over the cases, and for
+        0D the simulation error aggregated per dt (E(dt)). The errors of each case are also written in
+        simulation_errors_<case_type>.csv, and E(dt) in simulation_errors_<case_type>_by_dt.csv (plotted in
+        simulation_errors_<case_type>_by_dt.png).
         """
 
         x_window = series.get("x_window")
@@ -669,6 +695,17 @@ class NNTesting():
             mean[key], std[key] = metrics.mean_std(values)
 
         summary = {"n_cases": len(entries), "mean": mean, "std": std, "cases": entries}
+
+        # Table of the errors of each simulation (one row per case: parameters and errors)
+        table = pd.DataFrame([{**entry["params"], **entry["errors"]} for entry in entries])
+        table.to_csv(os.path.join(self.output_folder, f"simulation_errors_{case_type}.csv"), index=False)
+
+        # 0D: simulation error aggregated over the simulations of each dt, E(dt)
+        if "E_sim" in table:
+            by_dt = table.groupby("dt")["E_sim"].agg(E_mean="mean", E_std=lambda e: e.std(ddof=0), nb_simulations="count")
+            by_dt.to_csv(os.path.join(self.output_folder, f"simulation_errors_{case_type}_by_dt.csv"))
+            plots.plot_simulation_errors_by_dt(table, by_dt, case_type, self.output_folder)
+            summary["E_sim_by_dt"] = {float(dt): {key: float(value) for key, value in row.items()} for dt, row in by_dt.iterrows()}
 
         with open(os.path.join(self.output_folder, f"summary_{case_type}.yaml"), "w") as file:
             yaml.dump(summary, file, default_flow_style=False, sort_keys=False)
@@ -709,8 +746,9 @@ class NNTesting():
     def case_errors(self, case_type, result, x_window=None):
         """Errors of the ANN compared to CVODE for the result of one case (dict of floats, None if not defined).
 
-        0D: error on the final temperature [%], ignition delays [s] (time at which T exceeds T0 + 200 K)
-        and their error [%] (ignition only), numbers of ANN and CVODE calls.
+        0D: simulation error E_sim [-] (see NN_testing_metrics.normalized_trajectory_error) over all the
+        time steps, i.e. until CVODE equilibrium (equilibrium_steps, equilibrium_reached), error on the final temperature [%], ignition delays [s]
+        (time at which T exceeds T0 + 200 K) and their error [%] (ignition only), numbers of ANN and CVODE calls.
         1D: L2 error of the reaction rates of spec_to_plot over x_window (see NN_testing_metrics.l2_error),
         numbers of ANN and CVODE calls.
         """
@@ -719,6 +757,14 @@ class NNTesting():
 
         # 0D reactors
         if case_type.startswith("0D"):
+
+            # Simulation error, normalized with the training standard deviations, over the steps (initial state excluded)
+            x_ref = self._error_variables(result["states_ref"][1:])
+            x_ann = self._error_variables(result["states_ann"][1:])
+            errors["E_sim"] = metrics.normalized_trajectory_error(x_ann, x_ref, self.std_train)
+            errors["equilibrium_steps"] = len(result["states_ref"]) - 1
+            errors["equilibrium_reached"] = bool(result["equilibrium_reached"])
+
             errors["T_final_error_percent"] = float(metrics.relative_error_percent(result["Teq_ref"], result["Teq_ann"]))
 
             # Ignition delays (no delay if CVODE does not ignite)
@@ -909,6 +955,41 @@ class NNTesting():
         err_T = 100.0*np.abs((T_ann-T_cvode)/T_cvode)
 
         return err_Yk, err_T
+
+
+    def _training_std(self):
+        """Standard deviations of [T, transformed Y_k of the network species] on the training inputs of all
+        clusters, pooled from the scaler statistics of each cluster in training_data.h5."""
+
+        cols = ["Temperature_X"] + [f"{spec}_X" for spec in self.inference.spec_list_ANN]
+
+        means, variances, counts = [], [], []
+        with h5py.File(f"{self.inference.dataset_path:s}/training_data.h5", 'r') as h5file_r:
+            for i_cluster in range(self.inference.nb_clusters):
+                grp = h5file_r[f"CLUSTER_{i_cluster}"]
+
+                # Columns of the training inputs (T, species, possibly dt)
+                cols_X = [c.decode() if isinstance(c, bytes) else str(c) for c in grp["X_train"].attrs["cols"]]
+                idx = [cols_X.index(col) for col in cols]
+
+                means.append(grp["Xscaler"][idx, 0])
+                variances.append(grp["Xscaler"][idx, 1])
+                counts.append(grp["X_train"].shape[0])
+
+        _, var = metrics.pooled_mean_var(np.array(means), np.array(variances), counts)
+
+        return transforms.scaler_std(var)
+
+
+    def _error_variables(self, states):
+        """[T [K], transformed Y_k of the network species] (n, 1 + N_S) of states [T, Y_k of all species]
+        (n, 1 + n_species), transformed as the network inputs."""
+
+        cols_ANN = [1 + self.spec_list_ref.index(spec) for spec in self.inference.spec_list_ANN]
+        Y_t = transforms.transform_species(states[:, cols_ANN], self.inference.spec_list_ANN, self.inference.log_transform_X,
+                                           self.inference.threshold, self.inference.lambda_bct, self.inference.log_excluded_species)
+
+        return np.column_stack([states[:, 0], Y_t])
 
 
     def _load_validation_data(self):
