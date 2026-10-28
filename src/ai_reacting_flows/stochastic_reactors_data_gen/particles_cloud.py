@@ -20,8 +20,6 @@ from ai_reacting_flows.stochastic_reactors_data_gen.pre_processing import Inlet
 import ai_reacting_flows.tools.utilities as utils
 from ai_reacting_flows.tools.utilities import PRINT
 
-# from ai_reacting_flows.stochastic_reactors_data_gen.ann_model import ModelANN
-
 matplotlib.use('Agg')
 sns.set()
 
@@ -484,11 +482,6 @@ class ParticlesCloud(object):
 
         # We perform chemical reactions -> each processor computes on its chunks
         for part in lists_particles:
-            # if self.ML_inference_flag:
-            #     part.react_NN_wrapper(self)
-            # else:
-            #     part.react(dt, self)
-
             # Reaction only if time is larger than activation time
             if self.time >= part.activation_time:
                 part.react(dt, self)
@@ -921,21 +914,6 @@ class ParticlesCloud(object):
 
         # As we have a list of lists of particles we need to concatenate
         self.particles_list = list(itertools.chain.from_iterable(result))
-
-# =============================================================================
-#   MACHINE LEARNING RELATED FUNCTIONS
-# =============================================================================        
-    
-    # def _init_ML_modelling(self):
-        
-    #     # Initializing ANN model
-    #     self.ann_model = ModelANN(self.ML_model)
-        
-    #     # Loading model
-    #     self.ann_model.load_ann_model()
-
-    #     # Load scalers
-    #     self.ann_model.load_scalers()
 
 # =============================================================================
 #   MEAN TRAJECTORIES

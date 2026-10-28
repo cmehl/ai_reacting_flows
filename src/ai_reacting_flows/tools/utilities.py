@@ -10,8 +10,6 @@ import sys
 import numpy as np
 from scipy.stats import gaussian_kde
 import cantera as ct
-# import oyaml.yaml as yaml
-import copy
 
 #==============================================================================
 # COMBUSTION RELATED FUNCTIONS
@@ -329,12 +327,6 @@ def compute_0D_reactor(fuel, mech_file, phi, T0, p):
 # MATHEMATICAL UTILITIES
 # =============================================================================
 
-# TODO: check if the sample is really as it should be
-def sample_comb2(dims, nsamp):
-    idx = np.random.choice(np.prod(dims), nsamp, replace=False)
-    return np.vstack(np.unravel_index(idx, dims)).T
-
-
 def sample_pairs(n, nsamp):
 
     max_pairs = n * (n - 1) // 2
@@ -399,78 +391,3 @@ def smart_binwidth(x, fallback_bins=10):
         binwidth = max(binwidth, min_binwidth)
 
         return binwidth
-
-# #==============================================================================
-# # CANTERA RELATED FUNCTIONS
-# # =============================================================================
-
-# # Class to manipulate CANTERA YAML files
-# class cantera_yaml(object):
-
-#     def __init__(self, yaml_file):
-
-#         # read yaml file
-#         with open(yaml_file) as f:       
-#             self.data = yaml.load(f,Loader=yaml.FullLoader)
-
-
-#     # When playing with CANTERA mechanism species, it may be useful to remove all reactions
-#     def remove_reactions(self):
-#         self.data["reactions"] = []
-
-
-#     # Keep only a given set of species in mechanism
-#     def reduce_mechanism_species(self, species_to_keep):
-        
-#         data_save = copy.deepcopy(self.data)
-#         for i in range(len(data_save["species"])):
-
-#             spec_entry = copy.deepcopy(data_save["species"][i])
-#             spec = spec_entry['name']
-#             # 
-#             if spec not in species_to_keep:
-#                 self.data["phases"][0]['species'].remove(spec)
-#                 self.data["species"].remove(spec_entry)
-
-
-#     # Add copies of species; may be useful to add fictive species with real species characteristics
-#     def add_species_copies(self, fictive_species, suffix="_F"):
-
-#         for i in range(len(self.data["species"])):
-
-#             spec_entry = copy.deepcopy(self.data["species"][i])
-#             spec = spec_entry['name']
-#             # 
-#             if spec in fictive_species:
-#                 spec_to_add = copy.deepcopy(self.data["species"][i])
-#                 spec_to_add["name"] = spec + suffix
-#                 self.data["species"].append(spec_to_add)
-
-#                 self.data["phases"][0]['species'].append(spec + suffix)
-
-
-#     # Function to add species and reduce mechanism in the same time: necessary if fictive species are not in reduced mechanism
-#     def reduce_mechanism_and_add_fictive_species(self, species_to_keep, fictive_species, suffix="_F"):
-        
-#         data_save = copy.deepcopy(self.data)
-#         for i in range(len(self.data["species"])):
-
-#             spec_entry = copy.deepcopy(data_save["species"][i])
-#             spec = spec_entry['name']
-#             # 
-#             if spec in fictive_species:
-#                 spec_to_add = copy.deepcopy(data_save["species"][i])
-#                 spec_to_add["name"] = spec + suffix
-#                 self.data["species"].append(spec_to_add)
-
-#                 self.data["phases"][0]['species'].append(spec + suffix)
-
-#             if spec not in species_to_keep:
-#                 self.data["phases"][0]['species'].remove(spec)
-#                 self.data["species"].remove(spec_entry)
-
-
-#     # Function to write modified mechanism in a new file
-#     def export_to_yaml(self, yaml_file):
-#         with open(yaml_file, "w") as f:
-#             yaml.dump(self.data, f)

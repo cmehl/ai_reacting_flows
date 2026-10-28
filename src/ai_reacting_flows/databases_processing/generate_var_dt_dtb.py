@@ -158,14 +158,6 @@ def GenerateVariable_dt(dtb_type: str, params: dict, comm: "MPI.Comm") -> str:
         if new_states is not None:
             all_new_states.append(new_states)
 
-
-    # all_new_states = np.concatenate(all_new_states)
-    # X_new, Y_new = np.dsplit(all_new_states, 2)
-    # X_new, Y_new = np.squeeze(X_new), np.squeeze(Y_new)
-    # # Remove last column (dummy variable) from Y.
-    # Y_new = Y_new[:, :-1]
-    # #
-
     Y_new = np.stack(all_new_states)
     dt_array = np.stack(dt_array)
 
@@ -183,7 +175,6 @@ def GenerateVariable_dt(dtb_type: str, params: dict, comm: "MPI.Comm") -> str:
     # The solution is to write a group in h5 file per rank and write in the file rank after rank (not possible to write at the same time)
     # This is done below using send/redv command, ensuring that each rank writes when the previosu has finished. 
 
-    token = None
     TAG_WRITE_TOKEN = 42
 
     if rank == 0:
@@ -192,19 +183,19 @@ def GenerateVariable_dt(dtb_type: str, params: dict, comm: "MPI.Comm") -> str:
             grp = f.create_group(f"ITERATION_{rank:05d}")   # ITERATION naming instead of RANK to make it readable straight away in database processing
             dset_X = grp.create_dataset("X", data=state_list)
             dset_Y = grp.create_dataset("Y", data=Y_new)
-            dset_DT = grp.create_dataset("DT", data=dt_array)
+            grp.create_dataset("DT", data=dt_array)
             dset_X.attrs["cols"] = col_names_X
             dset_Y.attrs["cols"] = col_names_Y
         print(f"Processor {rank} has written its group to {output_path}. \n", flush=True)
     else:
         # Wait for the previous rank to signal it has finished writing.
-        token = comm.recv(source=rank - 1, tag=TAG_WRITE_TOKEN)
+        comm.recv(source=rank - 1, tag=TAG_WRITE_TOKEN)
 
         with h5py.File(output_path, "a") as f:
             grp = f.create_group(f"ITERATION_{rank:05d}")
             dset_X = grp.create_dataset("X", data=state_list)
             dset_Y = grp.create_dataset("Y", data=Y_new)
-            dset_DT = grp.create_dataset("DT", data=dt_array)
+            grp.create_dataset("DT", data=dt_array)
             dset_X.attrs["cols"] = col_names_X
             dset_Y.attrs["cols"] = col_names_Y
         print(f"Processor {rank} has written its group to {output_path}. \n", flush=True)
