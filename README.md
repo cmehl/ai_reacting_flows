@@ -143,6 +143,8 @@ In `training_data.h5`, each group `CLUSTER_<i>` contains:
 
 `Pressure`, `Prog_var` and `HRR` are not kept, nor `N2` unless `with_N_chemistry: true`.
 
+The processing parameters are stored as attributes of `training_data.h5` (`dt_var`, `fuel`, transforms, `threshold`, `lambda_bct`, `output_omegas`, `with_N_chemistry`, `log_excluded_species`, clustering, number of clusters, `pv_species`). Training and testing read them there, and use the mechanism copy `mech_detailed.yaml`, so the YAML files of database processing and generation are not read again. Databases processed before this was introduced are still read through their YAML files.
+
 ## 3. ANN model generation
 
 The class `NN_manager` (PyTorch) trains one network per cluster (MLP or DeepONet) to find $Y_k(t+dt)=ANN(T(t), Y_k(t))$. GPU is used if available.

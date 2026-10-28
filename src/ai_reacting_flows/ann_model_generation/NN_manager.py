@@ -19,6 +19,7 @@ import torch.optim as optim
 import ai_reacting_flows.tools.utilities as utils
 import ai_reacting_flows.tools.transforms as transforms
 from ai_reacting_flows.ann_model_generation.NN_models import MLPModel, DeepONet, DeepONet_shift
+from ai_reacting_flows.databases_processing.processing_parameters import read_processing_parameters, MECHANISM_FILE
 
 torch.set_default_dtype(torch.float64)
 
@@ -52,38 +53,24 @@ class NN_manager():
             networks_parameters = yaml.safe_load(file)
         self.dataset_path = os.path.join(self.run_folder, networks_parameters["database_path"])
         
-        with open(f"{self.dataset_path}/dtb_processing.yaml", "r") as file:
-            dtb_processing_params = yaml.safe_load(file)
+        # Processing parameters of the learning database (stored in training_data.h5, see processing_parameters.py)
+        params = read_processing_parameters(self.dataset_path, self.run_folder)
 
-        database_params = dtb_processing_params["database_params"]
-        dtb_type = database_params["database_type"]
-        self.dt_var = database_params["dt_var"]
-        
-        data_processing = dtb_processing_params["data_processing"]
-        self.remove_N2 = not data_processing["with_N_chemistry"]
-        self.log_transform_X = data_processing["log_transform_X"]
-        self.log_transform_Y = data_processing["log_transform_Y"]
-        self.lambda_bct = data_processing.get("lambda_bct", 0.1)
-        self.output_omegas = data_processing["output_omegas"]
+        self.dt_var = params["dt_var"]
+        self.remove_N2 = not params["with_N_chemistry"]
+        self.log_transform_X = params["log_transform_X"]
+        self.log_transform_Y = params["log_transform_Y"]
+        self.lambda_bct = params["lambda_bct"]
+        self.output_omegas = params["output_omegas"]
         # General list of species for which input/output log/BCT should be
         # skipped. This mirrors LearningDatabase.log_excluded_species.
-        self.log_excluded_species = data_processing.get("log_excluded_species", [])
+        self.log_excluded_species = params["log_excluded_species"]
 
-        data_clustering = dtb_processing_params["data_clustering"]
-        self.clustering_type = data_clustering["clustering_method"]
-        self.nb_clusters = data_clustering["nb_clusters"]
+        self.clustering_type = params["clustering_method"]
+        self.nb_clusters = params["nb_clusters"]
 
-        if dtb_type == "stoch":
-            params_file = "dtb_params.yaml"
-            prefix = "STOCH"
-        elif dtb_type == "flamelets":
-            params_file = "dtb_params_flmts.yaml"
-            prefix = "FLAMELETS"
-
-        with open(os.path.join(self.run_folder, f"{prefix}_DTB_{database_params['dtb_folder_suffix']}",params_file), "r") as file:
-            dtb_parameters = yaml.safe_load(file)
-
-        self.mechanism = dtb_parameters["mech_file"]
+        # Mechanism copied in the database folder by LearningDatabase
+        self.mechanism = os.path.join(self.dataset_path, MECHANISM_FILE)
 
         # Model folder name
         self.model_name = "MODEL_" + networks_parameters["model_name_suffix"]
@@ -107,7 +94,6 @@ class NN_manager():
         # Log high-level dataset and processing configuration.
         self._log(
             "INIT "
-            f"dtb_type={dtb_type}, "
             f"dt_var={self.dt_var}, "
              f"remove_N2={self.remove_N2}, "
              f"log_transform_X={self.log_transform_X}, "

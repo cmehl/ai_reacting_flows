@@ -34,6 +34,7 @@ from sklearn.model_selection import train_test_split
 
 import ai_reacting_flows.tools.utilities as utils
 import ai_reacting_flows.tools.transforms as transforms
+from ai_reacting_flows.databases_processing.processing_parameters import write_processing_parameters
 
 sns.set_style("darkgrid")
 
@@ -815,6 +816,9 @@ class LearningDatabase(object):
         # Also writing all data in a h5 file which is easier to read than csv. CM: maybe remove csv ultimately
         h5file_w = h5py.File(os.path.join(self.dtb_folder,self.database_name,"training_data.h5"), 'w')
 
+        # Processing parameters, read by training and testing (processing_parameters.py)
+        write_processing_parameters(h5file_w, self._processing_parameters())
+
         # Pressure removed by default (can be changed later)
         remove_pressure_X = True
         remove_pressure_Y = True
@@ -1010,6 +1014,34 @@ class LearningDatabase(object):
                    self.plot_distributions(X_train, X_val, Y_train, Y_val, spec, i_cluster)
 
         h5file_w.close()
+
+
+    def _processing_parameters(self):
+        """Parameters used to build the training data, written in training_data.h5 (see processing_parameters.py)."""
+
+        # Progress variable species, from the generation parameters copied in the database folder
+        if self.database_type=="stoch":
+            params_file = "dtb_params.yaml"
+        elif self.database_type=="flamelets":
+            params_file = "dtb_params_flmts.yaml"
+        with open(os.path.join(self.dtb_folder, params_file), "r") as file:
+            pv_species = yaml.safe_load(file)["pv_species"]
+
+        return {
+            "dt_var": self.dt_var,
+            "fuel": self.fuel,
+            "log_transform_X": self.log_transform_X,
+            "log_transform_Y": self.log_transform_Y,
+            "lambda_bct": self.lambda_bct,
+            "threshold": self.threshold,
+            "output_omegas": self.output_omegas,
+            "with_N_chemistry": self.with_N_chemistry,
+            "log_excluded_species": list(self.log_excluded_species),
+            "clustering_method": self.clustering_method,
+            "clusterize_on": self.clusterize_on,
+            "nb_clusters": self.nb_clusters,   # Number of clusters actually written (1 without clustering)
+            "pv_species": list(pv_species),
+        }
 
 
     def _flatten_multi_dt_arrays(self, X_p, Y_p, dt_p):     
