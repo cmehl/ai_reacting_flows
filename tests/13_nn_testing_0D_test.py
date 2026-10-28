@@ -44,12 +44,12 @@ def test_nn_testing_0D(tmp_path):
     assert result["states_ann"].shape == (4, 1 + gas.n_species)
 
     # Progress variable clustering (2 clusters with the same network), states advanced with CVODE
-    test.nb_clusters = 2
-    test.clustering_method = "progvar"
-    test.c_bounds = [0.0, 0.5, 1.0]
-    test.models_list = 2 * test.models_list
-    test.Xscaler_list = 2 * test.Xscaler_list
-    test.Yscaler_list = 2 * test.Yscaler_list
+    test.inference.nb_clusters = 2
+    test.inference.clustering_method = "progvar"
+    test.inference.c_bounds = [0.0, 0.5, 1.0]
+    test.inference.models_list = 2 * test.inference.models_list
+    test.inference.Xscaler_list = 2 * test.inference.Xscaler_list
+    test.inference.Yscaler_list = 2 * test.inference.Yscaler_list
     test.hybrid_ann_cvode = True
     test.hybrid_ann_cvode_tol = -1.0
 

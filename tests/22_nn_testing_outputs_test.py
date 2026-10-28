@@ -70,6 +70,6 @@ def test_nn_testing_outputs(tmp_path):
     # Validation set: statistics per output and scatter plot per cluster
     stats = test.evaluate_on_validation_set(scatter_folder="plots_validation")
 
-    assert len(stats) == test.nb_clusters
+    assert len(stats) == test.inference.nb_clusters
     assert stats[0]["mse_phys"].shape == (test.nb_species_ANN,)
     assert os.path.isfile("plots_validation/cluster_0_errors.png")
