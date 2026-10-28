@@ -312,15 +312,6 @@ class LearningDatabase(object):
             # ------------------------------------------------------------------
 
             # Normalizing states before k-means
-            # if self.dt_var and self.clusterize_on=="double":
-            #     Xscaler = StandardScaler()
-            #     Xscaler.fit(data_kmeans_phys)
-            #     data_kmeans_phys = Xscaler.transform(data_kmeans_phys)
-            #     #
-            #     Tscaler = StandardScaler()
-            #     Tscaler.fit(data_kmeans_time)
-            #     data_kmeans_time = Tscaler.transform(data_kmeans_time)
-            # else:
             Xscaler = StandardScaler()
             Xscaler.fit(data_kmeans)
             data_kmeans = Xscaler.transform(data_kmeans)
@@ -371,34 +362,14 @@ class LearningDatabase(object):
             # ------------------------------------------------------------------
 
             # Saving K-means model
-            # if self.dt_var and self.clusterize_on == 'double':
-            #     with open(self.dtb_folder + "/" + self.database_name + "/kmeans_model_phys.pkl", "wb") as f:
-            #         pickle.dump(kmeans_phys, f)
-            #     with open(self.dtb_folder + "/" + self.database_name + "/kmeans_model_time.pkl", "wb") as f:
-            #         pickle.dump(kmeans_time, f)
-            # else:
             with open(self.dtb_folder + "/" + self.database_name + "/kmeans_model.pkl", "wb") as f:
                 pickle.dump(kmeans, f)
 
             # Saving scaler
             joblib.dump(Xscaler, self.dtb_folder + "/" + self.database_name + "/Xscaler_kmeans.pkl")
-            # if self.dt_var and self.clusterize_on == 'double':
-            #     joblib.dump(Tscaler, self.dtb_folder + "/" + self.database_name + "/Tscaler_kmeans.pkl")
 
             # Saving normalization parameters and centroids
             np.savetxt(self.dtb_folder + "/" + self.database_name + '/kmeans_norm.dat', np.vstack([Xscaler.mean_, Xscaler.var_]).T)
-            # if self.dt_var and self.clusterize_on == 'double':
-            #     np.savetxt(self.dtb_folder + "/" + self.database_name + '/kmeans_norm_time.dat', np.vstack([Tscaler.mean_, Tscaler.var_]).T)
-            #     centroids_phys = kmeans_phys.cluster_centers_
-            #     centroids_time = kmeans_time.cluster_centers_
-            #     centroids = np.zeros((self.nb_clusters_tot, len(centroids_phys[0])))
-            #     k = 0
-            #     for i in range(nb_clusters_phys):
-            #         for j in range(nb_clusters_time):
-            #             centroids[k, :] = np.append(centroids_phys[i, :-1], centroids_time[j, -1])
-            #             k += 1
-            #     np.savetxt(self.dtb_folder + "/" + self.database_name + '/km_centroids.dat', centroids.T)
-            # else:
             np.savetxt(self.dtb_folder + "/" + self.database_name + '/km_centroids.dat', kmeans.cluster_centers_.T)
 
 
@@ -463,53 +434,16 @@ class LearningDatabase(object):
         x = self.X[jpdf_var_1]
         y = self.X[jpdf_var_2]
         data, x_e, y_e = np.histogram2d(x, y, bins = n_bins, density = True)
-        # data = data.T
-
-        # fig, ax = plt.subplots()
-        # ax.scatter(x, y, c=a, s=1)
-        # norm = Normalize(vmin = np.min(a), vmax = np.max(a))
-        # cbar = fig.colorbar(cm.ScalarMappable(norm = norm), ax=ax)
-        # cbar.ax.set_ylabel('logHRR')
-        # fig.tight_layout()
 
         data_hrr, _, _ = np.histogram2d(x, y, bins = n_bins, density = True, weights=a)
-        # data_hrr = data_hrr.T
         counts, _, _ = np.histogram2d(x, y, bins = n_bins, density = False)
         data_hrr = data_hrr / counts
         data_hrr[np.where(np.isnan(data_hrr))] = 0.0
         data_hrr[np.where(np.isinf(data_hrr))] = 0.0
 
-        # METHOD OF CHI, A PRIORI NOT USEFUL
-        # # Finding number of samples to keep (methodology of Chi et al.), if no number is provided in function input
-        # if n_samples is None:
-        #     # We first locate the bin with maximal HRR
-        #     list_indices = np.where(data_hrr==np.amax(data_hrr))
-        #     # We then compute the number of desired samples
-        #     n_samples = n * (data[list_indices[0][0],list_indices[1][0]]/data_hrr[list_indices[0][0],list_indices[1][0]])
-        #     n_samples = int(n_samples)
-
         # Computing weighting function
         f_m = (data_hrr/data) #(n_samples/n) * (data_hrr/data) (factor n_samples/n useless as we normalize later)
         f_m[np.where(np.isnan(f_m))] = 0.0
-
-        # X, Y = np.meshgrid(x_e, y_e)
-        # fig, ax = plt.subplots()
-        # im = ax.pcolormesh(X, Y, data_hrr.T, cmap="viridis", vmin=0.0, vmax=0.0005)
-        # fig.colorbar(im, ax=ax)
-        # fig.show()
-
-        # X, Y = np.meshgrid(x_e, y_e)
-        # fig, ax = plt.subplots()
-        # im=ax.pcolormesh(X, Y, data.T, cmap="viridis", vmin=0.0, vmax=0.1)
-        # fig.colorbar(im, ax=ax)
-        # fig.show()
-
-        # p_1 = f_m/f_m.sum()
-        # X, Y = np.meshgrid(x_e, y_e)
-        # fig, ax = plt.subplots()
-        # im = ax.pcolormesh(X, Y, p_1.T, cmap="viridis", vmin=0.0, vmax=0.000001)
-        # fig.colorbar(im, ax=ax)
-        # fig.show()
 
         f_m_interp = interpn( ( 0.5*(x_e[1:] + x_e[:-1]) , 0.5*(y_e[1:]+y_e[:-1]) ) , f_m , np.vstack([x,y]).T , method = "linear", bounds_error = False)
         f_m_interp[np.where(np.isnan(f_m_interp))] = 0.0
@@ -521,21 +455,7 @@ class LearningDatabase(object):
         # PLOTTING FOR PAPER----------------------------------------------------------------------------
 
         data_hrr_interp = interpn( ( 0.5*(x_e[1:] + x_e[:-1]) , 0.5*(y_e[1:]+y_e[:-1]) ) , data_hrr , np.vstack([x,y]).T , method = "linear", bounds_error = False)
-        # data_hrr_interp[np.where(np.isnan(data_hrr_interp))] = 0.0
-        #
         data_interp = interpn( ( 0.5*(x_e[1:] + x_e[:-1]) , 0.5*(y_e[1:]+y_e[:-1]) ) , data , np.vstack([x,y]).T , method = "linear", bounds_error = False)
-        # data_interp[np.where(np.isnan(data_interp))] = 0.0
-
-        # # Single plot (better for ppt)
-        # fig, ax = plt.subplots()
-        # im = ax.scatter(x, y, c=np.log(p), s=4, vmin=-20, vmax=-5)
-        # cbar = fig.colorbar(im, ax=ax)
-        # cbar.ax.set_ylabel(r'$\log(f_m)$ $[-]$', fontsize=16)
-        # fig.tight_layout()
-        # ax.set_ylabel(r"$Y_{H_{2}O}$ $[-]$", fontsize=16)
-        # ax.set_xlabel(r"$T$ $[K]$", fontsize=16)
-        # fig.tight_layout()
-        # fig.savefig("fm.png", dpi=400, bbox_inches="tight")
 
         if plot_distrib:
             fig, (ax1,ax2,ax3) = plt.subplots(nrows=3)
@@ -960,16 +880,6 @@ class LearningDatabase(object):
             Y_val = pd.DataFrame(Y_val_array, columns=Y_val.columns, index=Y_val.index)
         
 
-            # Forcing constant N2
-            # n2_cte = not self.with_N_chemistry
-            # if n2_cte:
-            #     if self.output_omegas:
-            #         Y_train["N2_Y"] = 0.0
-            #         Y_val["N2_Y"] = 0.0
-            #     else:
-            #         Y_train["N2_Y"] = X_train["N2_X"]
-            #         Y_val["N2_Y"] = X_val["N2_X"]
-
             print(">> Saving datasets", flush=True)
 
             # Saving in h5 format
@@ -1361,14 +1271,6 @@ class LearningDatabase(object):
 
         # Get states only (temperature and Yk's)
         data = self.X[features].values
-
-        # # If log transform, we also apply it for pca
-        # if self.log_transform_X>0:
-        #     data[data < self.threshold] = self.threshold
-        #     if self.log_transform_X==1:
-        #         data[:, 1:] = np.log(data[:, 1:])
-        #     elif self.log_transform_X==2:
-        #         data[:, 1:] = (data[:, 1:]**self.lambda_bct - 1.0)/self.lambda_bct
 
         # Scaling data
         pca_scaler = StandardScaler()

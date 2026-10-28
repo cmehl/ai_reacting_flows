@@ -100,12 +100,6 @@ class NNTesting():
             self.spec_list_ANN = [spec for spec in self.spec_list_ref if spec != "N2"]
             self.nb_species_ANN -= 1
 
-        # ANN input vector size
-        if self.dt_var:
-            self.ann_input_size = self.nb_species_ANN + 2
-        else:
-            self.ann_input_size = self.nb_species_ANN + 1
-
         # Find number of clusters -> equal for instance to number of json files in model folder
         self.nb_clusters = len(list(Path(self.models_folder).glob("*.pth")))
         print(f">> {self.nb_clusters} models were found")
@@ -443,9 +437,8 @@ class NNTesting():
             runner) with the corresponding input parameters attached under key
             "params".
         summary : dict
-            Aggregate metrics across all cases: averages and standard deviations
-            for equilibrium-temperature error, characteristic delays, and
-            solver calls.
+            Aggregate metrics across all cases: average and standard deviation
+            of the equilibrium-temperature error.
         """
 
         if mode not in ("ignition", "pyrolysis"):
@@ -454,8 +447,6 @@ class NNTesting():
         results = []
 
         err_Teq_list = []
-        tau_cvode_list = []
-        tau_ann_list = []
         ann_calls_list = []
         cvode_calls_list = []
 
@@ -474,20 +465,14 @@ class NNTesting():
             Teq_ann = res["Teq_ann"]
             err_Teq_list.append(100.0 * abs(Teq_ref - Teq_ann) / Teq_ref)
 
-            tau_cvode_list.append(res["tau_ign_cvode"])
-            tau_ann_list.append(res["tau_ign_ann"])
             ann_calls_list.append(res["ann_calls"])
             cvode_calls_list.append(res["cvode_calls"])
 
         err_Teq_arr = np.array(err_Teq_list)
-        tau_cvode_arr = np.array(tau_cvode_list)
-        tau_ann_arr = np.array(tau_ann_list)
         ann_calls_arr = np.array(ann_calls_list)
         cvode_calls_arr = np.array(cvode_calls_list)
 
-
         # Summary
-        # TODO: complete with aggregated error metrics
         summary = {
             "n_cases": len(results),
             # Equilibrium temperature error stats (percent)
@@ -1009,10 +994,6 @@ class NNTesting():
             # Add to list
             self.models_list.append(model)
 
-            # if self.verbose:
-            #     print(f"Loading ANN model for cluster {i_cluster}")
-            #     summary(model, input_size=(1, self.ann_input_size))
-
 
     def load_scalers(self):
 
@@ -1371,15 +1352,8 @@ class NNTesting():
             model.to(self.device)
             model.eval()
 
-            mean_X = torch.from_numpy(self.Xscaler_list[i_cluster][:, 0]).to(self.device).to(torch.float64)
-            std_X = torch.from_numpy(self.Xscaler_list[i_cluster][:, 1]).to(self.device).to(torch.float64)
             mean_Y = torch.from_numpy(self.Yscaler_list[i_cluster][:, 0]).to(self.device).to(torch.float64)
             std_Y = torch.from_numpy(self.Yscaler_list[i_cluster][:, 1]).to(self.device).to(torch.float64)
-
-            # Unscale inputs back to log/physical space to mimic runtime
-            # convention, then rescale using local helper to be fully
-            # consistent. This keeps this routine aligned with advance_state_NN.
-            X_unscaled = transforms.unscale(X_val_t, mean_X, std_X)
 
             # Forward pass
             with torch.no_grad():

@@ -119,14 +119,6 @@ class NN_manager():
                 raise FileNotFoundError(f"new_model_folder is set to False but model {self.directory} does not exist")
             print(f">> Existing model folder {self.directory} is used. \n")
 
-        # Get the number of clusters   CM: TO ADAPT !!!
-        # assert (self.nb_clusters == len(next(os.walk(self.dataset_path))[1]))
-        # if ((self.nb_clusters != len(self.networks_defs)) or (self.nb_clusters != len(self.networks_types))):
-        #     raise ValueError(
-        #         f"number of clusters in {self.dataset_path} ({self.nb_clusters}) inconsistent with "
-        #         f"'networks_types' and/or 'networks_files' length ({len(self.networks_defs)} and {len(self.networks_types)})"
-        #     )
-
         # Check if nb_clusters is consistent with the number of groups in training_data.h5
         self._check_nb_clusters()
 

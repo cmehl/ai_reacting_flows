@@ -12,7 +12,6 @@ import numpy as np
 import h5py
 import pandas as pd
 import cantera as ct
-import scipy as sc
 
 from mpi4py import MPI
 
@@ -50,17 +49,6 @@ def generate_stochastic_database(comm : 'MPI.Comm'):
                 print("")
                 raise
 
-
-        # if (data_gen_parameters["mixing_time"] < data_gen_parameters["time_step"]):
-        #     # Mixing model choice
-        #     try:
-        #         raise ValueError("Input error.")
-        #     except ValueError:
-        #         print("")
-        #         print(">> Curl model diffusion time cannot be lower than the numerical time step.")
-        #         print("")
-        #         raise
-            
 
     #==========================================================================
     # INITIALIZING RUN
