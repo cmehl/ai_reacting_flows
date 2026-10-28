@@ -1119,10 +1119,6 @@ class NNTesting():
             scatter plots (random subsampling if larger).
         """
 
-        # Ensure models and scalers have been loaded
-        self.load_models()
-        self.load_scalers()
-
         # Load validation data from training_data.h5
         self._load_validation_data()
 
