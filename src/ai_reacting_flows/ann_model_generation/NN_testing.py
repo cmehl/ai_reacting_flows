@@ -918,101 +918,49 @@ class NNTesting():
 #   ANALYZING ERRORS
 #-----------------------------------------------------------------------
 
-    #WARNING: function not up to date (actually not used), it does not consider log excluded species for instance
-    def compute_ann_errors(self, T, Y, pressure, dt, already_transformed=False):
+    def compute_ann_errors(self, T, Y, pressure, dt, Yc_u):
+        """Errors of one ANN step of dt [s] from the state T [K], Y [-] (all species) at pressure [Pa],
+        compared to CVODE. Yc_u: progress variable species mass fraction of the unburnt mixture [-]
+        (progress variable for clustering).
 
-        T_old = T.copy()
+        Returns err_Yk: squared differences of the scaled network outputs per network species [-], i.e.
+        the terms of the MSE training loss (outputs as built by LearningDatabase, see
+        transforms.network_target), and err_T: relative error on the temperature [%].
+        """
 
-        # Dealing with the case where Y is already transformed (logged or bct) at input of function
-        if already_transformed:
-            if self.inference.log_transform_X==1:
-                Y_old = np.exp(Y)
-            elif self.inference.log_transform_X==2:
-                Y_old = (self.inference.lambda_bct*Y+1.0)**(1./self.inference.lambda_bct)
-        else:
-            Y_old = Y.copy()
-
-        # Assign to cluster
-        # Computing current progress variable on physical state
-        state_phys = np.append(T_old, Y_old)
-        progvar = self.compute_progvar(state_phys, pressure, self.mechanism_type)
-        self.progvar = progvar
-
-        self.attribute_cluster(state_phys, dt, progvar)
+        # Assign to cluster from the progress variable of the state
+        state = np.append(T, Y)
+        progvar = self.compute_progvar(state, pressure, Yc_u)
+        self.attribute_cluster(state, dt, progvar)
 
         # Log the parameters used in this error-computation call for
         # debugging consistency with dtb_processing / NN_manager.
         self._log(
             "ERR_CLUSTER "
-            f"T={float(T_old):.6e}, "
+            f"T={float(T):.6e}, "
             f"dt={float(dt):.6e}, "
             f"cluster={self.cluster}, "
             f"clusterize_on={self.inference.clusterize_on}, "
         )
-            
 
-        # CVODE run
-        T_cvode, Y_cvode = self.advance_state_CVODE(T_old, Y_old, pressure, dt)
+        # CVODE and ANN steps
+        T_cvode, Y_cvode = self.advance_state_CVODE(T, Y, pressure, dt)
+        T_ann, Y_ann = self.advance_state_NN(T, Y, pressure, dt)
 
-        # ANN run
-        T_ann, Y_ann = self.advance_state_NN(T_old, Y_old, pressure, dt)
+        # Network outputs of both steps (network species only), in the space of the training targets
+        inf = self.inference   # Short name for the transform parameters
+        cols_ANN = [self.spec_list_ref.index(spec) for spec in inf.spec_list_ANN]
+        y_cvode, y_ann = [transforms.network_target(Y[None, cols_ANN], np.reshape(Y_new, -1)[None, cols_ANN],
+                                                    inf.spec_list_ANN, inf.output_omegas, inf.log_transform_X,
+                                                    inf.log_transform_Y, inf.threshold, inf.lambda_bct,
+                                                    inf.log_excluded_species)[0]
+                          for Y_new in (Y_cvode, Y_ann)]
 
-        # If N2 is not considered, it needs to be removed
-        if self.remove_N2:
-            n2_index = self.spec_list_ref.index("N2")
-            #
-            Y_old = np.delete(Y_old, n2_index+1)
-            Y_cvode = np.delete(Y_cvode, n2_index+1)
-            Y_ann = np.delete(Y_ann, n2_index+1)
+        # Scaled with the output scaler of the cluster (the mean cancels in the difference)
+        std_Y = inf.Yscaler_list[self.cluster][:, 1]
+        err_Yk = ((y_ann - y_cvode) / std_Y) ** 2
 
-        # Taking log if necessary (if output is difference of logs)
-        if self.inference.log_transform_Y==1:
-            # Apply threshold only to non-excluded species.
-            for i, spec in enumerate(self.inference.spec_list_ANN):
-                if spec in self.inference.log_excluded_species:
-                    continue
-                idx = i  # here Y_* already correspond to species only
-                if idx >= Y_old.shape[0]:
-                    break
-                if Y_old[idx] < self.inference.threshold:
-                    Y_old[idx] = self.inference.threshold
-                if Y_cvode[idx] < self.inference.threshold:
-                    Y_cvode[idx] = self.inference.threshold
-                if Y_ann[idx] < self.inference.threshold:
-                    Y_ann[idx] = self.inference.threshold
-        elif self.inference.log_transform_Y==2:
-            Y_old[Y_old<0.0] = 0.0
-            Y_cvode[Y_cvode<0.0] = 0.0
-            Y_ann[Y_ann<0.0] = 0.0
-        #
-        if self.inference.log_transform_Y==1:
-            log_Y_old = np.log(Y_old)
-            log_Y_cvode = np.log(Y_cvode)
-            log_Y_ann = np.log(Y_ann)
-        elif self.inference.log_transform_Y==2:
-            log_Y_old = (Y_old**self.inference.lambda_bct - 1.0)/self.inference.lambda_bct
-            log_Y_cvode = (Y_cvode**self.inference.lambda_bct - 1.0)/self.inference.lambda_bct
-            log_Y_ann = (Y_ann**self.inference.lambda_bct - 1.0)/self.inference.lambda_bct
-        else:
-            log_Y_old = Y_old
-            log_Y_cvode = Y_cvode
-            log_Y_ann = Y_ann
-
-
-        # We compute difference of logs
-        diff_log_Y_cvode = log_Y_cvode - log_Y_old
-        diff_log_Y_ann = log_Y_ann - log_Y_old
-
-        # Normalized differences in log space (using scaler statistics)
-        mean_Y = self.inference.Yscaler_list[self.cluster][:, 0]
-        std_Y = self.inference.Yscaler_list[self.cluster][:, 1]
-        diff_log_Y_cvode_norm = transforms.scale(diff_log_Y_cvode, mean_Y, std_Y)
-        diff_log_Y_ann_norm = transforms.scale(diff_log_Y_ann, mean_Y, std_Y)
-
-        # Error in normalized log-space (MSE per species)
-        err_Yk = (diff_log_Y_cvode_norm - diff_log_Y_ann_norm) ** 2
-
-        err_T = 100.0*np.abs((T_ann-T_cvode)/T_cvode)
+        err_T = 100.0 * np.abs((T_ann - T_cvode) / T_cvode)
 
         return err_Yk, err_T
 
