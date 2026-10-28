@@ -105,10 +105,11 @@ def plot_0D_case(result, folder, spec_to_plot, species_names, remove_N2):
     fig3.savefig(folder + "/AtomCons.png", dpi=500)
 
 
-def plot_1D_reaction_rates(grid, Omega_exact, Omega_ann, spec_to_plot, species_names, folder):
+def plot_1D_reaction_rates(grid, Omega_exact, Omega_ann, spec_to_plot, species_names, folder, x_window=None):
     """Reaction rates [1/s] of spec_to_plot along the 1D flame grid [m], exact (CVODE) and ANN, in folder.
 
     Omega_exact, Omega_ann: (n_species, n_points), rows in the order of species_names.
+    x_window: optional [x_min, x_max] [m] of the plots, full grid if None.
     """
 
     new_folder(folder)
@@ -121,13 +122,12 @@ def plot_1D_reaction_rates(grid, Omega_exact, Omega_ann, spec_to_plot, species_n
         ax.plot(grid, Omega_ann[k,:], ls="--", color = "purple", lw=2, label="Neural network")
         ax.set_xlabel('$x$ [m]')
         ax.set_ylabel(f'{spec} Reaction rate')
-        ax.set_xlim([0.008, 0.014])
+        if x_window is not None:
+            ax.set_xlim(x_window)
         ax.legend()
         fig.tight_layout()
 
         fig.savefig(folder + f"/Y{spec}.png", dpi=700)
-
-        plt.show()
 
 
 def plot_validation_errors(diff, i_cluster, folder, max_points_scatter=50000):

@@ -1,7 +1,10 @@
 import os
+import itertools
 import h5py
+import oyaml as yaml
 
 import numpy as np
+import matplotlib.pyplot as plt
 
 import cantera as ct
 
@@ -16,18 +19,51 @@ import ai_reacting_flows.tools.utilities as utils
 import ai_reacting_flows.tools.transforms as transforms
 
 
+# Types of test cases, sections of nn_testing.yaml
+CASE_TYPES = ["0D_ignition", "0D_pyrolysis", "1D_premixed", "1D_diffusion"]
+
+# Keys of a series section of nn_testing.yaml that are not parameters of the cases
+SERIES_OPTIONS = ["run", "plots", "x_window"]
+
+
+def series_cases(series):
+    """Cases (list of dicts of parameters) of a series section of nn_testing.yaml: parameters given
+    as lists are swept and all combinations are returned, other parameters are the same for all cases."""
+
+    params = {key: value for key, value in series.items() if key not in SERIES_OPTIONS}
+    values = [value if isinstance(value, list) else [value] for value in params.values()]
+
+    return [dict(zip(params.keys(), combination)) for combination in itertools.product(*values)]
+
+
+def print_errors(errors):
+    """Print the errors of one case."""
+
+    for key, value in errors.items():
+        print(f"   >>> {key}: {value}")
+
+
 class NNTesting():
 
     def __init__(self, testing_parameters):
+        """testing_parameters: content of nn_testing.yaml (see README). Only models_folder, spec_to_plot,
+        yk_renormalization, hybrid_ann_cvode and hybrid_ann_cvode_tol are needed to run single cases."""
 
-        self.verbose = True
+        self.testing_parameters = testing_parameters
 
         self.run_folder = os.getcwd()
-        # Simple text log file in the run folder to trace parameters actually
+
+        # Outputs (plots, summaries, log) in TESTING_<models_folder>/ of the run folder, with a copy of the parameters
+        self.output_folder = os.path.join(self.run_folder, f"TESTING_{testing_parameters['models_folder']}")
+        os.makedirs(self.output_folder, exist_ok=True)
+        with open(os.path.join(self.output_folder, "nn_testing.yaml"), "w") as file:
+            yaml.dump(testing_parameters, file, default_flow_style=False, sort_keys=False)
+
+        # Simple text log file in the output folder to trace parameters actually
         # used by this testing helper. Use a per-run timestamped filename so
         # logs do not accumulate across different executions.
         ts_run = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.log_path = os.path.join(self.run_folder, f"nn_testing_{ts_run}.log")
+        self.log_path = os.path.join(self.output_folder, f"nn_testing_{ts_run}.log")
 
         def _log(msg: str):
             """Append a timestamped message to the nn_testing.log file."""
@@ -89,7 +125,7 @@ class NNTesting():
 #   0D TEST CASES
 #-----------------------------------------------------------------------
 
-    def _run_0D_case(self, T0, pressure, dt, nb_ite, gas_init_compo, reactor_type="ignition"):
+    def _run_0D_case(self, T0, pressure, dt, simulation_time, gas_init_compo, reactor_type="ignition"):
         """Internal helper to run one 0D constant-pressure reactor case.
 
         Parameters
@@ -99,9 +135,9 @@ class NNTesting():
         pressure : float
             Initial pressure [Pa].
         dt : float
-            Time step used by both CVODE and ANN loops.
-        nb_ite : int
-            Number of time steps.
+            Time step used by both CVODE and ANN loops [s].
+        simulation_time : float
+            End time [s], the same for any dt: simulation_time / dt time steps.
         gas_init_compo : str
             Cantera composition string used for the initial state (e.g. fuel+air
             for ignition, or pure fuel for pyrolysis).
@@ -119,6 +155,9 @@ class NNTesting():
 
         tau_ign_CVODE = 0.0
         tau_ign_ANN = 0.0
+
+        # Number of time steps
+        nb_ite = int(round(simulation_time / dt))
 
         #-------------------- INITIALISATION---------------------------
         # Setting composition
@@ -254,7 +293,7 @@ class NNTesting():
             "cvode_calls": cvode_calls,
         }
 
-    def run_0D_ignition_case(self, phi, T0, pressure, dt, nb_ite=100):
+    def run_0D_ignition_case(self, phi, T0, pressure, dt, simulation_time):
         """Run one 0D ignition case (fuel+air, parametrized by phi).
 
         This is the core simulation routine for premixed ignition, without
@@ -271,8 +310,8 @@ class NNTesting():
             Initial pressure [Pa].
         dt : float
             Time step used by both CVODE and ANN loops.
-        nb_ite : int, optional
-            Number of time steps.
+        simulation_time : float
+            End time [s] (simulation_time / dt time steps).
 
         Returns
         -------
@@ -288,10 +327,10 @@ class NNTesting():
         )
         compo = f"{self.fuel}:{phi}, O2:{fuel_ox_ratio}, N2:{fuel_ox_ratio * 0.79 / 0.21}"
 
-        return self._run_0D_case(T0, pressure, dt, nb_ite, compo, reactor_type="ignition")
+        return self._run_0D_case(T0, pressure, dt, simulation_time, compo, reactor_type="ignition")
 
 
-    def run_0D_pyrolysis_case(self, T0, pressure, dt, nb_ite=100, diluent=None, X_diluent=0.0):
+    def run_0D_pyrolysis_case(self, T0, pressure, dt, simulation_time, diluent=None, X_diluent=0.0):
         """Run one 0D pyrolysis case (pure fuel or fuel+diluent).
 
         This uses the same CVODE/ANN integration as the ignition case but
@@ -306,8 +345,8 @@ class NNTesting():
             Initial pressure [Pa].
         dt : float
             Time step used by both CVODE and ANN loops.
-        nb_ite : int, optional
-            Number of time steps.
+        simulation_time : float
+            End time [s] (simulation_time / dt time steps).
         diluent : str or None, optional
             Optional inert species name (e.g. "N2", "Ar"). If None, a pure
             fuel case is used.
@@ -328,139 +367,32 @@ class NNTesting():
             X_fuel = max(0.0, 1.0 - X_diluent)
             compo = f"{self.fuel}:{X_fuel:3.2f}, {diluent}:{X_diluent:3.2f}"
 
-        return self._run_0D_case(T0, pressure, dt, nb_ite, compo, reactor_type="pyrolysis")
-
-    def run_0D_series(self, cases, mode="ignition"):
-        """Run a series of 0D cases (ignition or pyrolysis) and aggregate errors.
-
-        Parameters
-        ----------
-        cases : iterable of dict
-            For ``mode="ignition"``: each dict must contain keys compatible
-            with :meth:`run_0D_ignition_case`, e.g. ``{"phi": ..., "T0": ...,
-            "pressure": ..., "dt": ..., "nb_ite": ...}``.
-
-            For ``mode="pyrolysis"``: each dict must contain keys compatible
-            with :meth:`run_0D_pyrolysis_case`, e.g. ``{"T0": ..., "pressure":
-            ..., "dt": ..., "nb_ite": ..., "diluent": ..., "X_diluent": ...}``.
-
-        mode : {"ignition", "pyrolysis"}
-            Selects which 0D case runner to use and how to interpret the
-            aggregated delay metrics.
-
-        Returns
-        -------
-        results : list[dict]
-            Per-case results (direct outputs from the selected single-case
-            runner) with the corresponding input parameters attached under key
-            "params".
-        summary : dict
-            Aggregate metrics across all cases: average and standard deviation
-            of the equilibrium-temperature error.
-        """
-
-        if mode not in ("ignition", "pyrolysis"):
-            raise ValueError(f"Unsupported 0D mode: {mode}")
-
-        results = []
-
-        err_Teq_list = []
-        ann_calls_list = []
-        cvode_calls_list = []
-
-        for case in cases:
-            if mode == "ignition":
-                res = self.run_0D_ignition_case(**case)
-            else:
-                res = self.run_0D_pyrolysis_case(**case)
-
-            # Attach input parameters to the result for traceability
-            res_with_params = {"params": dict(case), **res}
-            results.append(res_with_params)
-
-            # equilibrium temperature error (percent)
-            err_Teq_list.append(metrics.relative_error_percent(res["Teq_ref"], res["Teq_ann"]))
-
-            ann_calls_list.append(res["ann_calls"])
-            cvode_calls_list.append(res["cvode_calls"])
-
-        err_Teq_mean, err_Teq_std = metrics.mean_std(err_Teq_list)
-        ann_calls_arr = np.array(ann_calls_list)
-        cvode_calls_arr = np.array(cvode_calls_list)
-
-        # Summary
-        summary = {
-            "n_cases": len(results),
-            # Equilibrium temperature error stats (percent)
-            "Teq_error_mean_percent": err_Teq_mean,
-            "Teq_error_std_percent": err_Teq_std,
-            "mode": mode,
-        }
-
-        return results, summary
-    
+        return self._run_0D_case(T0, pressure, dt, simulation_time, compo, reactor_type="pyrolysis")
 
     # OD IGNITION (wrapper with plotting)
-    def test_0D_ignition(self, phi, T0, pressure, dt, nb_ite=100):
+    def test_0D_ignition(self, phi, T0, pressure, dt, simulation_time):
+        """One 0D ignition case with printed errors and plots (see run_case)."""
 
-        result = self.run_0D_ignition_case(phi, T0, pressure, dt, nb_ite)
-
-        tau_ign_CVODE = result["tau_ign_cvode"]
-        tau_ign_ANN = result["tau_ign_ann"]
-        ann_calls = result["ann_calls"]
-        cvode_calls = result["cvode_calls"]
-
-        # Error on equilibrium temperature
-        error_Teq = metrics.relative_error_percent(result["Teq_ref"], result["Teq_ann"])
-
-        if self.verbose:
-            print(f"\nError on equilibrium flame temperature is: {error_Teq} % \n")
-
-        print("\n NUMBER OF CALLS TO SOLVERS:")
-        print(f"   >>> Number of ANN calls: {ann_calls}")
-        print(f"   >>> Number of CVODE calls: {cvode_calls}")
-
-        # Plots
-        plots.plot_0D_case(result, f'./plots_0D_T0#{T0}_phi#{phi}', self.spec_to_plot, self.spec_list_ref, self.remove_N2)
-
-        # Ignition delays comparison
-        print(f" >> CVODE ignition delay: {tau_ign_CVODE}")
-        print(f" >> ANN ignition delay: {tau_ign_ANN}")
+        return self.test_case("0D_ignition", {"phi": phi, "T0": T0, "pressure": pressure, "dt": dt,
+                                              "simulation_time": simulation_time})
 
 
-    def test_0D_pyrolysis(self, T0, pressure, dt, nb_ite=100, diluent=None, X_diluent=0.0):
-        """Wrapper around run_0D_pyrolysis_case with plotting.
+    def test_0D_pyrolysis(self, T0, pressure, dt, simulation_time, diluent=None, X_diluent=0.0):
+        """One 0D pyrolysis case with printed errors and plots (see run_case)."""
 
-        Same plots as test_0D_ignition, but folder naming and printed labels
-        reflect the pyrolysis case and do not include phi.
-        """
-
-        result = self.run_0D_pyrolysis_case(T0, pressure, dt, nb_ite, diluent=diluent, X_diluent=X_diluent)
-
-        ann_calls = result["ann_calls"]
-        cvode_calls = result["cvode_calls"]
-
-        # Error on equilibrium temperature
-        error_Teq = metrics.relative_error_percent(result["Teq_ref"], result["Teq_ann"])
-
-        if self.verbose:
-            print(f"\nError on equilibrium temperature (pyrolysis case) is: {error_Teq} % \n")
-
-        print("\n NUMBER OF CALLS TO SOLVERS (pyrolysis):")
-        print(f"   >>> Number of ANN calls: {ann_calls}")
-        print(f"   >>> Number of CVODE calls: {cvode_calls}")
-
-        # Plots (no phi in folder naming)
-        plots.plot_0D_case(result, f'./plots_0D_pyro_P#{pressure}_T0#{T0}_dt#{dt}', self.spec_to_plot, self.spec_list_ref, self.remove_N2)
+        return self.test_case("0D_pyrolysis", {"T0": T0, "pressure": pressure, "dt": dt, "simulation_time": simulation_time,
+                                               "diluent": diluent, "X_diluent": X_diluent})
 
 #-----------------------------------------------------------------------
-#   1D PREMIXED TEST CASE
+#   1D TEST CASES
 #-----------------------------------------------------------------------
 
     def run_1D_premixed_case(self, phi, T0, pressure, dt, T_threshold=0.0):
         """Run one 1D premixed flame case and return structured results.
 
-        Core computation without plotting/printing, suitable for parameter sweeps.
+        Freely propagating flame of fuel/air at equivalence ratio phi, fresh gases at T0 [K] and
+        pressure [Pa], unity Lewis numbers. ANN and CVODE reaction rates compared a priori on the
+        converged flame (see _a_priori_reaction_rates).
         """
 
         #-------------------- 1D FLAME COMPUTATION ---------------------------
@@ -499,6 +431,72 @@ class NNTesting():
         f.set_refine_criteria(ratio=3, slope=0.05, curve=0.1, prune=0.03)
         f.solve(loglevel=loglevel, refine_grid=True)
 
+        return self._a_priori_reaction_rates(f, pressure, dt, T_threshold, np.full(len(f.grid), Yc_u))
+
+
+    def run_1D_diffusion_case(self, strain, T_ox, T_fuel, pressure, dt, width=0.02, T_threshold=0.0):
+        """Run one 1D counterflow diffusion flame case and return structured results.
+
+        Pure fuel at T_fuel [K] against air at T_ox [K], at pressure [Pa], strain rate strain [1/s],
+        distance between the inlets width [m], mixture-averaged transport: same setup as the
+        flamelets database (database_flmts.compute_1d_diffusion). ANN and CVODE reaction rates
+        compared a priori on the converged flame (see _a_priori_reaction_rates).
+        """
+
+        loglevel = 0  # amount of diagnostic output (0 to 8)
+
+        # Stream compositions
+        compo_ox = 'O2:0.21, N2:0.79'
+        compo_fuel = f'{self.fuel}:1'
+
+        self.gas.TPX = T_ox, pressure, compo_ox
+        density_ox = self.gas.density
+        Yc_ox = self.gas.Y[self.pv_ind].sum()
+
+        self.gas.TPX = T_fuel, pressure, compo_fuel
+        density_fuel = self.gas.density
+        Yc_fuel = self.gas.Y[self.pv_ind].sum()
+
+        # Stream mass flow rates [kg/m2/s]
+        vel = strain * width / 2.0
+        mdot_ox = density_ox * vel
+        mdot_fuel = density_fuel * vel
+
+        f = ct.CounterflowDiffusionFlame(self.gas, width=width)
+
+        f.transport_model = 'mixture-averaged'
+        f.soret_enabled = False
+        f.radiation_enabled = False
+
+        f.set_max_jac_age(10, 10)
+        f.set_time_step(1e-5, [2, 5, 10, 20])
+
+        # Set the state of the two inlets
+        f.fuel_inlet.mdot = mdot_fuel
+        f.fuel_inlet.X = compo_fuel
+        f.fuel_inlet.T = T_fuel
+
+        f.oxidizer_inlet.mdot = mdot_ox
+        f.oxidizer_inlet.X = compo_ox
+        f.oxidizer_inlet.T = T_ox
+
+        f.set_refine_criteria(ratio=2, slope=0.06, curve=0.12, prune=0.04)
+        f.solve(loglevel=loglevel, auto=True)
+
+        # Unburnt progress variable species mass fraction: mixing of the two streams at the local mixture fraction
+        Z = f.mixture_fraction("Bilger")
+        Yc_u = Z * Yc_fuel + (1.0 - Z) * Yc_ox
+
+        return self._a_priori_reaction_rates(f, pressure, dt, T_threshold, Yc_u)
+
+
+    def _a_priori_reaction_rates(self, f, pressure, dt, T_threshold, Yc_u):
+        """Reaction rates [1/s] of the converged 1D flame f, (Y_k(t+dt) - Y_k) / dt, with each point
+        advanced by dt [s] with CVODE and with the ANN (points below T_threshold [K] are frozen for the ANN).
+
+        Yc_u: unburnt progress variable species mass fraction at each point [-] (progress variable for clustering).
+        """
+
         # Mass fractions and temperature at steady state
         Yt = f.Y
         Tt = f.T
@@ -508,7 +506,7 @@ class NNTesting():
         nb_pnts_total = len(f.grid)
         for i in range(nb_pnts_total):
             state = np.append(Tt[i], Yt[:,i])
-            c[i] = self.compute_progvar(state, pressure, Yc_u)
+            c[i] = self.compute_progvar(state, pressure, Yc_u[i])
 
         X_grid = f.grid
 
@@ -548,7 +546,7 @@ class NNTesting():
 
             # Computing current progress variable on physical state
             state_phys = np.append(Tt[i_reac], Yt_ann[:, i_reac])
-            progvar = self.compute_progvar(state_phys, pressure, Yc_u)
+            progvar = self.compute_progvar(state_phys, pressure, Yc_u[i_reac])
 
             # Attribute cluster
             self.attribute_cluster(state_phys, dt, progvar)
@@ -598,97 +596,165 @@ class NNTesting():
             "ann_calls": ann_calls,
             "cvode_calls": cvode_calls,
         }
-    
 
-    def run_1D_premixed_series(self, cases, species_for_error=None, x_window=None):
-        """Run a series of 1D premixed cases and aggregate reaction-rate errors.
-
-        Parameters
-        ----------
-        cases : iterable of dict
-            Each dict must contain keys compatible with run_1D_premixed_case,
-            e.g.: {"phi": ..., "T0": ..., "pressure": ..., "dt": ..., "T_threshold": ...}.
-        species_for_error : list[str] | None
-            If provided, compute L2 errors on Omega for these species only.
-            If None, use self.spec_to_plot.
-        x_window : tuple[float, float] | None
-            Optional spatial window [x_min, x_max] over which to compute the
-            L2 error. If None, use the full flame domain.
-
-        Returns
-        -------
-        results : list[dict]
-            Per-case results (direct outputs from run_1D_premixed_case) with the
-            corresponding input parameters attached under key "params".
-        summary : dict
-            Aggregate metrics across all cases (means/stds of L2 errors for each
-            species and average solver call counts).
-        """
-
-        if species_for_error is None:
-            species_for_error = list(self.spec_to_plot)
-
-        results = []
-
-        # Per-species error accumulator: {spec -> [err_case_0, err_case_1, ...]}
-        species_err = {spec: [] for spec in species_for_error}
-        ann_calls_list = []
-        cvode_calls_list = []
-
-        for case in cases:
-
-            res = self.run_1D_premixed_case(**case)
-            f = res["flame"]
-            Omega_exact = res["Omega_exact"]
-            Omega_ann = res["Omega_ann"]
-            ann_calls_list.append(res["ann_calls"])
-            cvode_calls_list.append(res["cvode_calls"])
-
-            # L2 error in physical units over x-window
-            for spec in species_for_error:
-                k = self.gas.species_index(spec)
-                species_err[spec].append(metrics.l2_error(f.grid, Omega_ann[k], Omega_exact[k], x_window))
-
-            res_with_params = {"params": dict(case), **res}
-            results.append(res_with_params)
-
-        ann_calls_arr = np.array(ann_calls_list)
-        cvode_calls_arr = np.array(cvode_calls_list)
-
-        species_err_mean = {}
-        species_err_std = {}
-        for spec, errs in species_err.items():
-            species_err_mean[spec], species_err_std[spec] = metrics.mean_std(errs)
-
-        summary = {
-            "n_cases": len(results),
-            "species_l2_error_mean": species_err_mean,
-            "species_l2_error_std": species_err_std,
-            "ann_calls_mean": float(ann_calls_arr.mean()) if ann_calls_arr.size > 0 else 0.0,
-            "cvode_calls_mean": float(cvode_calls_arr.mean()) if cvode_calls_arr.size > 0 else 0.0,
-        }
-
-        return results, summary
 
     # 1D PREMIXED (wrapper with plotting)
-    def test_1D_premixed(self, phi, T0, pressure, dt, T_threshold=0.0):
+    def test_1D_premixed(self, phi, T0, pressure, dt, T_threshold=0.0, x_window=None):
+        """One 1D premixed flame case with printed errors and plots (see run_case)."""
 
-        print(f"Computing Cantera 1D flame with T0 = {T0} K and phi = {phi}")
+        return self.test_case("1D_premixed", {"phi": phi, "T0": T0, "pressure": pressure, "dt": dt,
+                                              "T_threshold": T_threshold}, x_window)
 
-        result = self.run_1D_premixed_case(phi, T0, pressure, dt, T_threshold)
 
-        f = result["flame"]
-        Omega_exact = result["Omega_exact"]
-        Omega_ann = result["Omega_ann"]
-        ann_calls = result["ann_calls"]
-        cvode_calls = result["cvode_calls"]
+    # 1D DIFFUSION (wrapper with plotting)
+    def test_1D_diffusion(self, strain, T_ox, T_fuel, pressure, dt, width=0.02, T_threshold=0.0, x_window=None):
+        """One 1D counterflow diffusion flame case with printed errors and plots (see run_case)."""
 
-        print("\n NUMBER OF CALLS TO SOLVERS:")
-        print(f"   >>> Number of ANN calls: {ann_calls}")
-        print(f"   >>> Number of CVODE calls: {cvode_calls}")
+        return self.test_case("1D_diffusion", {"strain": strain, "T_ox": T_ox, "T_fuel": T_fuel, "pressure": pressure,
+                                               "dt": dt, "width": width, "T_threshold": T_threshold}, x_window)
 
-        # Plots
-        plots.plot_1D_reaction_rates(f.grid, Omega_exact, Omega_ann, self.spec_to_plot, self.spec_list_ref, f'./plots_1D_prem_T0#{T0}_phi#{phi}')
+#-----------------------------------------------------------------------
+#   SERIES OF TEST CASES (nn_testing.yaml)
+#-----------------------------------------------------------------------
+
+    def run_testing(self):
+        """Run the series of test cases of the testing parameters (nn_testing.yaml) with run: true,
+        then the evaluation on the validation set if selected. Returns the summaries of the series."""
+
+        summaries = {}
+        for case_type in CASE_TYPES:
+            series = self.testing_parameters[case_type]
+            if series["run"]:
+                summaries[case_type] = self.run_series(case_type, series)
+
+        validation = self.testing_parameters["validation_set"]
+        if validation["run"]:
+            self.evaluate_on_validation_set(max_points_scatter=validation["max_points_scatter"])
+
+        return summaries
+
+
+    def run_series(self, case_type, series):
+        """Run all the cases of a series and write their errors in TESTING_<model>/summary_<case_type>.yaml.
+
+        series: section of nn_testing.yaml: parameters of run_case (a list of values is swept, all
+        combinations are run), plots (plots of each case) and x_window ([x_min, x_max] [m] of the
+        1D errors and plots, full domain if null).
+        Returns the summary: errors of each case, mean and standard deviation over the cases.
+        """
+
+        x_window = series.get("x_window")
+        cases = series_cases(series)
+
+        print(f"\n>> Series {case_type}: {len(cases)} cases")
+
+        entries = []
+        for case in cases:
+
+            print(f"\n>> {case_type}: {case}")
+            result = self.run_case(case_type, case)
+            errors = self.case_errors(case_type, result, x_window)
+            print_errors(errors)
+
+            if series["plots"]:
+                self.plot_case(case_type, case, result, x_window)
+                plt.close("all")
+
+            entries.append({"params": case, "errors": errors})
+
+        # Mean and standard deviation over the cases (cases without value, e.g. no ignition, are skipped)
+        mean, std = {}, {}
+        for key in entries[0]["errors"]:
+            values = [entry["errors"][key] for entry in entries if entry["errors"][key] is not None]
+            mean[key], std[key] = metrics.mean_std(values)
+
+        summary = {"n_cases": len(entries), "mean": mean, "std": std, "cases": entries}
+
+        with open(os.path.join(self.output_folder, f"summary_{case_type}.yaml"), "w") as file:
+            yaml.dump(summary, file, default_flow_style=False, sort_keys=False)
+
+        return summary
+
+
+    def test_case(self, case_type, case, x_window=None):
+        """Run one case, print its errors and write its plots. Returns the errors."""
+
+        result = self.run_case(case_type, case)
+        errors = self.case_errors(case_type, result, x_window)
+        print_errors(errors)
+        self.plot_case(case_type, case, result, x_window)
+
+        return errors
+
+
+    def run_case(self, case_type, case):
+        """Result of one case of type case_type ("0D_ignition", "0D_pyrolysis", "1D_premixed" or
+        "1D_diffusion"), case: dict of the parameters of the corresponding run_*_case method."""
+
+        if case_type == "0D_ignition":
+            return self.run_0D_ignition_case(**case)
+
+        elif case_type == "0D_pyrolysis":
+            return self.run_0D_pyrolysis_case(**case)
+
+        elif case_type == "1D_premixed":
+            return self.run_1D_premixed_case(**case)
+
+        elif case_type == "1D_diffusion":
+            return self.run_1D_diffusion_case(**case)
+
+        raise ValueError(f"Unknown case type {case_type}, expected one of {CASE_TYPES}")
+
+
+    def case_errors(self, case_type, result, x_window=None):
+        """Errors of the ANN compared to CVODE for the result of one case (dict of floats, None if not defined).
+
+        0D: error on the final temperature [%], ignition delays [s] (time at which T exceeds T0 + 200 K)
+        and their error [%] (ignition only), numbers of ANN and CVODE calls.
+        1D: L2 error of the reaction rates of spec_to_plot over x_window (see NN_testing_metrics.l2_error),
+        numbers of ANN and CVODE calls.
+        """
+
+        errors = {}
+
+        # 0D reactors
+        if case_type.startswith("0D"):
+            errors["T_final_error_percent"] = float(metrics.relative_error_percent(result["Teq_ref"], result["Teq_ann"]))
+
+            # Ignition delays (no delay if CVODE does not ignite)
+            if case_type == "0D_ignition":
+                errors["tau_ign_cvode"] = float(result["tau_ign_cvode"])
+                errors["tau_ign_ann"] = float(result["tau_ign_ann"])
+                errors["tau_ign_error_percent"] = None
+                if result["tau_ign_cvode"] > 0.0:
+                    errors["tau_ign_error_percent"] = float(metrics.relative_error_percent(result["tau_ign_cvode"], result["tau_ign_ann"]))
+
+        # 1D flames
+        else:
+            grid = result["flame"].grid
+            for spec in self.spec_to_plot:
+                k = self.spec_list_ref.index(spec)
+                errors[f"L2_error_omega_{spec}"] = metrics.l2_error(grid, result["Omega_ann"][k], result["Omega_exact"][k], x_window)
+
+        errors["ann_calls"] = result["ann_calls"]
+        errors["cvode_calls"] = result["cvode_calls"]
+
+        return errors
+
+
+    def plot_case(self, case_type, case, result, x_window=None):
+        """Plots of one case in TESTING_<model>/<case_type>_<parameters>/."""
+
+        folder = os.path.join(self.output_folder, case_type + "_" + "_".join(f"{key}#{value}" for key, value in case.items()))
+
+        # 0D reactors: time evolutions
+        if case_type.startswith("0D"):
+            plots.plot_0D_case(result, folder, self.spec_to_plot, self.spec_list_ref, self.remove_N2)
+
+        # 1D flames: reaction rates along the flame
+        else:
+            plots.plot_1D_reaction_rates(result["flame"].grid, result["Omega_exact"], result["Omega_ann"],
+                                         self.spec_to_plot, self.spec_list_ref, folder, x_window)
 
 #-----------------------------------------------------------------------
 #   ANN AND CVODE ADVANCEMENT OF ONE STATE
@@ -872,7 +938,7 @@ class NNTesting():
         self._val_data_loaded = True
 
 
-    def evaluate_on_validation_set(self, scatter_folder="./plots_validation", max_points_scatter=50000):
+    def evaluate_on_validation_set(self, scatter_folder=None, max_points_scatter=50000):
         """Evaluate ANN predictions against Y_val stored in training_data.h5.
 
         For each cluster:
@@ -885,9 +951,9 @@ class NNTesting():
 
         Parameters
         ----------
-        scatter_folder : str
-            Directory where scatter plots are written. Existing folder is
-            removed.
+        scatter_folder : str or None
+            Directory where scatter plots are written (default
+            TESTING_<model>/plots_validation). Existing folder is removed.
         max_points_scatter : int
             Maximum number of validation points plotted per cluster for
             scatter plots (random subsampling if larger).
@@ -896,7 +962,9 @@ class NNTesting():
         # Load validation data from training_data.h5
         self._load_validation_data()
 
-        # Prepare output folder
+        # Prepare output folder (default: TESTING_<model>/plots_validation)
+        if scatter_folder is None:
+            scatter_folder = os.path.join(self.output_folder, "plots_validation")
         plots.new_folder(scatter_folder)
 
         all_stats = []

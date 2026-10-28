@@ -5,22 +5,38 @@ Builds a small H2 learning database (N2 removed) and trains a model for one epoc
 Check:
 - error metrics (NN_testing_metrics.py): relative error, L2 error over a window, validation errors
   in unscaled space equal to the difference of the unscaled outputs.
-- test_0D_ignition and test_0D_pyrolysis write their plots, including N2 when it is removed
-  from the network species (the pyrolysis plots used to fail in this case).
-- run_0D_series summary and evaluate_on_validation_set statistics and plots.
+- test_0D_ignition and test_0D_pyrolysis write their plots in TESTING_<model>/, including N2 when
+  it is removed from the network species (the pyrolysis plots used to fail in this case).
+- series_cases gives all combinations of the parameters given as lists.
+- run_testing (sections of nn_testing.yaml) runs the selected series, including 1D premixed and
+  diffusion flames, and writes their summaries (errors of each case, mean); evaluate_on_validation_set
+  statistics and plots.
 
 Independent of the other tests.
 """
 import os
 import numpy as np
+import oyaml as yaml
 from ai_reacting_flows.ann_model_generation.NN_manager import NN_manager
-from ai_reacting_flows.ann_model_generation.NN_testing import NNTesting
+from ai_reacting_flows.ann_model_generation.NN_testing import NNTesting, series_cases
 import ai_reacting_flows.ann_model_generation.NN_testing_metrics as metrics
 import ai_reacting_flows.tools.transforms as transforms
 from h2_learning_database import write_h2_learning_database, dt, pressure
 
 testing_parameters = {"models_folder": "MODEL_TEST", "spec_to_plot": ["H2", "N2"], "yk_renormalization": False,
                       "hybrid_ann_cvode": False, "hybrid_ann_cvode_tol": 5.0e-05}
+
+# Series as in nn_testing.yaml: 2 ignition cases, 1 premixed flame, 1 diffusion flame, validation set
+series_parameters = {
+    "0D_ignition": {"run": True, "plots": False, "phi": [0.5, 0.7], "T0": [1200.0], "pressure": [pressure],
+                    "dt": [dt], "simulation_time": 3 * dt},
+    "0D_pyrolysis": {"run": False},
+    "1D_premixed": {"run": True, "plots": False, "phi": [0.6], "T0": [300.0], "pressure": [pressure], "dt": [dt],
+                    "T_threshold": 600.0, "x_window": None},
+    "1D_diffusion": {"run": True, "plots": True, "strain": [1000.0], "T_ox": [1000.0], "T_fuel": [300.0],
+                     "pressure": [pressure], "dt": [dt], "width": 0.02, "T_threshold": 600.0, "x_window": None},
+    "validation_set": {"run": True, "max_points_scatter": 50000},
+}
 
 
 def test_metrics():
@@ -45,6 +61,14 @@ def test_metrics():
     assert np.allclose(errors["rmse_scaled"], np.sqrt(np.mean((Y_pred - Y_val)**2, axis=0)))
 
 
+def test_series_cases():
+    cases = series_cases({"run": True, "plots": False, "x_window": None, "phi": [0.5, 0.7], "T0": [1000.0, 1200.0],
+                          "simulation_time": 1.0e-3, "diluent": None})
+
+    assert len(cases) == 4
+    assert {"phi": 0.7, "T0": 1000.0, "simulation_time": 1.0e-3, "diluent": None} in cases
+
+
 def test_nn_testing_outputs(tmp_path):
     os.chdir(tmp_path)
     write_h2_learning_database(tmp_path)
@@ -52,24 +76,41 @@ def test_nn_testing_outputs(tmp_path):
     test = NNTesting(testing_parameters)
 
     # 0D plots, N2 plotted while removed from the network species
-    test.test_0D_ignition(phi=0.6, T0=1200.0, pressure=pressure, dt=dt, nb_ite=3)
-    test.test_0D_pyrolysis(T0=1200.0, pressure=pressure, dt=dt, nb_ite=3, diluent="N2", X_diluent=0.5)
+    test.test_0D_ignition(phi=0.6, T0=1200.0, pressure=pressure, dt=dt, simulation_time=3 * dt)
+    test.test_0D_pyrolysis(T0=1200.0, pressure=pressure, dt=dt, simulation_time=3 * dt, diluent="N2", X_diluent=0.5)
 
-    for folder in [f"plots_0D_T0#1200.0_phi#0.6", f"plots_0D_pyro_P#{pressure}_T0#1200.0_dt#{dt}"]:
+    output = "TESTING_MODEL_TEST"
+    for folder in [f"0D_ignition_phi#0.6_T0#1200.0_pressure#{pressure}_dt#{dt}_simulation_time#{3 * dt}",
+                   f"0D_pyrolysis_T0#1200.0_pressure#{pressure}_dt#{dt}_simulation_time#{3 * dt}_diluent#N2_X_diluent#0.5"]:
         for name in ["Temperature", "YH2", "YN2", "SumYs", "AtomCons"]:
-            assert os.path.isfile(os.path.join(folder, f"{name}.png"))
+            assert os.path.isfile(os.path.join(output, folder, f"{name}.png"))
 
-    # Series of 0D cases
-    cases = [{"phi": phi, "T0": 1200.0, "pressure": pressure, "dt": dt, "nb_ite": 3} for phi in [0.5, 0.7]]
-    results, summary = test.run_0D_series(cases)
-    errors = [metrics.relative_error_percent(r["Teq_ref"], r["Teq_ann"]) for r in results]
+    # Series of nn_testing.yaml
+    test = NNTesting({**testing_parameters, **series_parameters})
+    summaries = test.run_testing()
+
+    assert set(summaries) == {"0D_ignition", "1D_premixed", "1D_diffusion"}
+
+    with open(os.path.join(output, "summary_0D_ignition.yaml"), "r") as file:
+        summary = yaml.safe_load(file)
+    errors = [case["errors"]["T_final_error_percent"] for case in summary["cases"]]
 
     assert summary["n_cases"] == 2
-    assert np.isclose(summary["Teq_error_mean_percent"], np.mean(errors))
+    assert [case["params"]["phi"] for case in summary["cases"]] == [0.5, 0.7]
+    assert np.isclose(summary["mean"]["T_final_error_percent"], np.mean(errors))
+
+    # 1D flames: errors on the reaction rates, and plots
+    assert summaries["1D_premixed"]["cases"][0]["errors"]["L2_error_omega_H2"] >= 0.0
+
+    errors = summaries["1D_diffusion"]["cases"][0]["errors"]
+    assert errors["L2_error_omega_H2"] >= 0.0
+    assert errors["ann_calls"] > 0
+    folder = f"1D_diffusion_strain#1000.0_T_ox#1000.0_T_fuel#300.0_pressure#{pressure}_dt#{dt}_width#0.02_T_threshold#600.0"
+    assert os.path.isfile(os.path.join(output, folder, "YH2.png"))
 
     # Validation set: statistics per output and scatter plot per cluster
-    stats = test.evaluate_on_validation_set(scatter_folder="plots_validation")
+    stats = test.evaluate_on_validation_set()
 
     assert len(stats) == test.inference.nb_clusters
     assert stats[0]["mse_phys"].shape == (test.nb_species_ANN,)
-    assert os.path.isfile("plots_validation/cluster_0_errors.png")
+    assert os.path.isfile(os.path.join(output, "plots_validation", "cluster_0_errors.png"))

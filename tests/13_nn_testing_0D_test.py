@@ -40,7 +40,7 @@ def test_nn_testing_0D(tmp_path):
     assert np.isclose(test.compute_progvar(state_eq, pressure, Yc_u), 1.0, rtol=1.0e-6)
 
     # 0D ignition with N2 removed from the network species
-    result = test.run_0D_ignition_case(phi=0.6, T0=1200.0, pressure=pressure, dt=dt, nb_ite=3)
+    result = test.run_0D_ignition_case(phi=0.6, T0=1200.0, pressure=pressure, dt=dt, simulation_time=3 * dt)
     assert result["states_ann"].shape == (4, 1 + gas.n_species)
 
     # Progress variable clustering (2 clusters with the same network), states advanced with CVODE
@@ -60,7 +60,7 @@ def test_nn_testing_0D(tmp_path):
         clusters.append(test.cluster)
     test.attribute_cluster = spy
 
-    result = test.run_0D_ignition_case(phi=0.6, T0=1200.0, pressure=pressure, dt=dt, nb_ite=64)
+    result = test.run_0D_ignition_case(phi=0.6, T0=1200.0, pressure=pressure, dt=dt, simulation_time=64 * dt)
     progvar = result["progvar"][:-1]   # progress variable of the state before each step
 
     assert progvar.max() > 0.9

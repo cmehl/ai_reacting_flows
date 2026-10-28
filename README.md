@@ -50,7 +50,7 @@ Each case is a folder `scripts/<CASE>/` containing YAML inputs and short launche
 mpirun -n X python generate_stoch_dtb.py   # 1. database generation      (dtb_params.yaml)
 python dtb_processing.py                   # 2. learning database        (dtb_processing.yaml)
 python ann_model_learning.py               # 3. training                 (networks_params.yaml)
-python ann_model_testing.py                # 4. testing on simple cases
+python ann_model_testing.py                # 4. testing on simple cases  (nn_testing.yaml)
 ```
 
 ## 1. Database generation
@@ -169,7 +169,21 @@ The class `NNTesting` compares the ANN to CVODE on:
 
 + 0-D homogeneous ignition or pyrolysis
 + 1-D premixed flame reaction rates
++ 1-D counterflow diffusion flame reaction rates
 + the validation dataset (scatter plots)
+
+The script `ann_model_testing.py` reads `nn_testing.yaml` and runs the selected series of cases (`NNTesting.run_testing`): for each case type, all combinations of the parameters given as lists (e.g. several `phi` and `T0`). Outputs are written in `TESTING_<models_folder>/`:
+
+```
+TESTING_<models_folder>/
+├── nn_testing.yaml                       copy of the inputs
+├── <case type>_<parameters>/             plots of each case (if plots: true)
+├── summary_<case type>.yaml              errors of each case, mean and std over the series
+├── plots_validation/                     scatter plots of validation errors
+└── nn_testing_<timestamp>.log
+```
+
+Errors: 0-D cases give the error on the final temperature [%], and for ignition the ignition delays (time at which $T$ exceeds $T_0 + 200$ K) and their error [%]; 1-D flames give the L2 error of the reaction rates of `spec_to_plot`. Single cases can also be run from Python (`test_0D_ignition`, `test_0D_pyrolysis`, `test_1D_premixed`, `test_1D_diffusion`), as in `notebooks/ann_model_testing.py`.
 
 `NNTesting` (`NN_testing.py`) runs the reference and ANN cases; the error metrics are in `NN_testing_metrics.py` and the plots in `NN_testing_plots.py`. The ANN chemistry step itself (clustering, transforms, networks) is in `NN_inference.py` (`NNInference`), shared with the stochastic reactors.
 
@@ -281,6 +295,23 @@ An MLP definition contains:
 + `layers_type`: type of each layer, including output (`dense` or `resnet`)
 
 For `DeepONet`, these three keys are dicts with `branch` and `trunk` entries (plus `shift` for `DeepONetShift`), and `n_neurons` is added. The trunk takes $dt$ as input.
+
+## `nn_testing.yaml` (testing)
+
+| Key | Description |
+|-----|-------------|
+| `models_folder` | Model folder in `MODELS/` (e.g. `MODEL_H2_POF_2023`) |
+| `spec_to_plot` | Species plotted, and on which 1-D errors are computed |
+| `yk_renormalization` | If `true`, ANN mass fractions are corrected to conserve the elements |
+| `hybrid_ann_cvode` | If `true`, CVODE is used when the ANN mass fractions sum differs from 1 by more than `hybrid_ann_cvode_tol` |
+| `hybrid_ann_cvode_tol` | Tolerance on the sum of mass fractions [-] |
+| `0D_ignition` | Series of 0-D ignitions of fuel/air: `phi`, `T0` [K], `pressure` [Pa], `dt` [s], `simulation_time` [s] (end time, the same for any `dt`) |
+| `0D_pyrolysis` | Series of 0-D pyrolysis: `T0` [K], `pressure` [Pa], `dt` [s], `simulation_time` [s], `diluent` (species or `null`), `X_diluent` [-] |
+| `1D_premixed` | Series of 1-D premixed flames: `phi`, `T0` [K], `pressure` [Pa], `dt` [s], `T_threshold` [K] (ANN not applied below), `x_window` |
+| `1D_diffusion` | Series of 1-D counterflow flames of pure fuel against air: `strain` [1/s], `T_ox` [K], `T_fuel` [K], `pressure` [Pa], `dt` [s], `width` [m], `T_threshold` [K], `x_window` |
+| `validation_set` | `run`, `max_points_scatter` (maximum number of points plotted per cluster) |
+
+Each series section has `run` (run the series or not) and `plots` (plots of each case). Parameters given as lists are swept (all combinations are run), others are the same for all cases. `x_window` is `[x_min, x_max]` [m] for the 1-D errors and plots, or `null` for the whole flame. The 1-D diffusion flame has the setup of the flamelets database (mixture-averaged transport).
 
 # Tests
 

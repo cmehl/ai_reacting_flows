@@ -16,6 +16,6 @@ phi = 0.4
 T0 = 1200.0
 pressure = 101325.0
 dt = 0.5e-6
-nb_ite = 1000
+simulation_time = 5.0e-4   # End time [s]
 
-test.test_0D_ignition(phi, T0, pressure, dt, nb_ite)
+test.test_0D_ignition(phi, T0, pressure, dt, simulation_time)
