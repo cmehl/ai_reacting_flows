@@ -17,6 +17,7 @@ import torch.nn as nn
 import torch.optim as optim
 
 import ai_reacting_flows.tools.utilities as utils
+import ai_reacting_flows.tools.transforms as transforms
 from ai_reacting_flows.ann_model_generation.NN_models import MLPModel, DeepONet, DeepONet_shift
 
 torch.set_default_dtype(torch.float64)
@@ -143,13 +144,12 @@ class NN_manager():
         # Check if nb_clusters is consistent with the number of groups in training_data.h5
         self._check_nb_clusters()
 
-        # Column names for X/Y training data (same across clusters), used to
-        # apply per-species inverse log/BCT when reconstructing physical
-        # states for conservation diagnostics.
+        # Species of the networks (same across clusters), from the Y columns "<species>_Y"
+        # (X columns are "Temperature_X", the same species with "_X", and "dt_X" with multiple dt).
+        # Used to apply the per-species inverse log/BCT in conservation diagnostics.
         with h5py.File(f"{self.dataset_path:s}/training_data.h5", 'r') as h5file_r:
             grp0 = h5file_r["CLUSTER_0"]
-            self.X_cols_all = grp0['X_train'].attrs['cols']
-            self.Y_cols_all = grp0['Y_train'].attrs['cols']
+            self.species_ANN = [str(col)[:-2] for col in grp0['Y_train'].attrs['cols']]
 
         print("CLUSTERING:")
         print(f">> Number of clusters is: {self.nb_clusters}")
@@ -239,81 +239,22 @@ class NN_manager():
         return model
     
 
-    def _inverse_scale(self, scaled_tensor, mean, std, log_transform: int, cols=None):
-        """Inverse scaling helper with per-column log/BCT control.
-
-        scaled_tensor: tensor in scaled space
-        mean, std: scaling statistics (tensors on same device)
-        log_transform: global transform code used at database-processing time
-            (0: none, 1: plain log, 2: Box-Cox-type transform with self.lambda_bct).
-            Passing a bool here is still supported for backward compatibility,
-            with True treated as log_transform==1.
-        cols: optional iterable of column names (X_train/Y_train) used to
-            decide which variables actually had log/BCT applied. Species
-            listed in self.log_excluded_species are kept on their original
-            (linear) scale even when log_transform > 0.
-        """
-        y_t = mean + std * scaled_tensor
-
-        return self._inverse_transform(y_t, log_transform, cols)
-
-
-    def _inverse_transform(self, y_t, log_transform: int, cols=None):
-        """Inverse log/BCT transform with per-column control (see _inverse_scale).
-
-        y_t: tensor in transformed (log/BCT) space, not scaled
-        """
-        # Normalize bool -> int for backward compatibility with old call sites.
-        if isinstance(log_transform, bool):
-            log_transform = 1 if log_transform else 0
-
-        # No log/BCT at preprocessing time or no column metadata: just
-        # return unscaled values.
-        if log_transform == 0 or cols is None:
-            return y_t
-
-        y = y_t.clone()
-
-        # Per-column inverse transform, aligned with database_processing.
-        for j, name in enumerate(cols):
-            base = str(name)
-            if base.endswith('_X') or base.endswith('_Y'):
-                base = base[:-2]
-
-            # Skip variables explicitly excluded from log/BCT
-            if base in self.log_excluded_species:
-                continue
-
-            if log_transform == 1:
-                y[:, j] = torch.exp(y_t[:, j])
-            elif log_transform == 2:
-                # Inverse of: y_t = (y**lambda - 1)/lambda
-                y[:, j] = (y_t[:, j] * self.lambda_bct + 1.0) ** (1.0 / self.lambda_bct)
-
-        return y
-
-
     def _physical_Yk(self, X, Y, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std):
         """Mass fractions [-] at t and t+dt from scaled network inputs X and outputs Y.
 
-        Species part of X only (temperature and dt removed). With output_omegas and log/BCT
-        outputs, Y is a difference in transformed space: Y(t+dt) = f^-1( f(Y(t)) + Y ).
+        Species part of X only (temperature and dt removed). Transforms in tools/transforms.py,
+        shared with database processing and inference.
         """
-        # Species columns of X (time step excluded when dt_var is used)
+        # Species columns of X (temperature first, time step last when dt_var is used)
         sl = slice(1, -1) if self.dt_var else slice(1, None)
-        cols_x = self.X_cols_all[sl]
 
-        Yk_in = self._inverse_scale(X[:, sl], Xscaler_mean[sl], Xscaler_std[sl], self.log_transform_X, cols=cols_x)
+        # Unscaled input (transformed mass fractions at t) and output
+        x_species_t = transforms.unscale(X[:, sl], Xscaler_mean[sl], Xscaler_std[sl])
+        y_t = transforms.unscale(Y, Yscaler_mean, Yscaler_std)
 
-        if self.output_omegas and self.log_transform_Y > 0:
-            # Unscale only (log_transform=0): input and output are added in log/BCT space
-            x_t = self._inverse_scale(X[:, sl], Xscaler_mean[sl], Xscaler_std[sl], log_transform=0)
-            y_t = self._inverse_scale(Y, Yscaler_mean, Yscaler_std, log_transform=0)
-            Yk_out = self._inverse_transform(x_t + y_t, self.log_transform_Y, cols=self.Y_cols_all)
-        else:
-            Yk_out = self._inverse_scale(Y, Yscaler_mean, Yscaler_std, self.log_transform_Y, cols=self.Y_cols_all)
-            if self.output_omegas:
-                Yk_out = Yk_in + Yk_out
+        Yk_in = transforms.inverse_species(x_species_t, self.species_ANN, self.log_transform_X, self.lambda_bct, self.log_excluded_species)
+        Yk_out = transforms.output_to_Yk(x_species_t, y_t, self.species_ANN, self.output_omegas, self.log_transform_X,
+                                         self.log_transform_Y, self.lambda_bct, self.log_excluded_species)
 
         return Yk_in, Yk_out
 
@@ -534,7 +475,7 @@ class NN_manager():
                 raise ValueError("Only scheduler implemented yet is ExpLR, ReduceLROnPlateau or None")
             
             # Perform training
-            epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements = self.train_model(i_cluster, model, loss_fn, optimizer, scheduler, X_train, X_val, Y_train, Y_val, Xscaler_mean, utils.scaler_std(Xscaler_var), Yscaler_mean, utils.scaler_std(Yscaler_var))
+            epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements = self.train_model(i_cluster, model, loss_fn, optimizer, scheduler, X_train, X_val, Y_train, Y_val, Xscaler_mean, transforms.scaler_std(Xscaler_var), Yscaler_mean, transforms.scaler_std(Yscaler_var))
 
             # Plot training monitoring data (loss, conservation,etc...)
             self.plot_losses_conservation(i_cluster, epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements)

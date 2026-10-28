@@ -18,6 +18,7 @@ from torchinfo import summary
 from ai_reacting_flows.ann_model_generation.NN_models import MLPModel, DeepONet, DeepONet_shift
 
 import ai_reacting_flows.tools.utilities as utils
+import ai_reacting_flows.tools.transforms as transforms
 
 
 class NNTesting():
@@ -280,22 +281,9 @@ class NNTesting():
             T_old = state[0]
             Y_old = state[1:]
 
-            # Build clustering feature vector consistent with dtb_processing
-            # configuration (clusterize_on: "phys", "all", or "dt").
-            if self.dt_var and self.clusterize_on == "dt":
-                # Clustering purely on dt: k-means was trained on a single
-                # time-step feature.
-                state_for_cluster = np.array([dt], dtype=float)
-            elif self.dt_var and self.clusterize_on == "all":
-                # Clustering on physical state + dt: append dt as last entry.
-                state_for_cluster = np.append(state, dt)
-            else:
-                # Physical-only clustering (no dt in k-means features).
-                state_for_cluster = state
-
             # Attribute cluster for current state before ANN advancement.
             if self.nb_clusters > 0:
-                self.attribute_cluster(state_for_cluster, progvar)
+                self.attribute_cluster(state, dt, progvar)
             else:
                 self.cluster = 0
 
@@ -842,21 +830,9 @@ class NNTesting():
             state_phys = np.append(Tt[i_reac], Yt_ann[:, i_reac])
             progvar = self.compute_progvar(state_phys, pressure, Yc_u)
 
-            # Build clustering feature vector consistent with dtb_processing
-            # configuration.
-            if self.dt_var and self.clusterize_on == "dt":
-                # Clustering purely on dt
-                state_for_cluster = np.array([dt], dtype=float)
-            elif self.dt_var and self.clusterize_on == "all":
-                # Physical state + dt
-                state_for_cluster = np.append(state_phys, dt)
-            else:
-                # Physical-only clustering
-                state_for_cluster = state_phys
-
             # Attribute cluster
             if self.nb_clusters > 0:
-                self.attribute_cluster(state_for_cluster, progvar)
+                self.attribute_cluster(state_phys, dt, progvar)
             else:
                 self.cluster = 0
 
@@ -1068,8 +1044,8 @@ class NNTesting():
                 Yscaler_mean = Yscaler_array[:, 0]
                 Yscaler_var = Yscaler_array[:, 1]
 
-                Xscaler_std = utils.scaler_std(Xscaler_var)
-                Yscaler_std = utils.scaler_std(Yscaler_var)
+                Xscaler_std = transforms.scaler_std(Xscaler_var)
+                Yscaler_std = transforms.scaler_std(Yscaler_var)
 
                 # shape (n_features, 2): column 0 = mean, column 1 = std
                 Xscaler_mean_std = np.column_stack((Xscaler_mean, Xscaler_std))
@@ -1091,91 +1067,23 @@ class NNTesting():
                 self.c_bounds = pickle.load(input_file)
 
 
-    def attribute_cluster(self, state_vector=None, progvar=None):
-        
-        log_state = state_vector.copy()
+    def attribute_cluster(self, state, dt, progvar):
+        """Cluster of the state [T [K], Y_k [-]] (all species) advanced by dt [s], with progress variable progvar [-].
+
+        k-means features built as in LearningDatabase.clusterize_dataset (tools/transforms.py).
+        """
 
         if self.clustering_method=="kmeans":
 
-            # We remove N2 from the physical-state part if necessary
-            if self.remove_N2:
-                n2_index = self.spec_list_ref.index("N2")
-                log_state = np.delete(log_state, n2_index+1)
+            # Species of the network (N2 removed if necessary)
+            Y = np.array([state[1 + self.spec_list_ref.index(spec)] for spec in self.spec_list_ANN])
 
-            # --------------------------------------------------------------
-            # Build feature vector exactly as in LearningDatabase.clusterize_dataset
-            # --------------------------------------------------------------
+            # Clustering on the time step only makes sense with multiple dt
+            clusterize_on = self.clusterize_on if self.dt_var else "phys"
 
-            # Build the feature vector exactly as in LearningDatabase.clusterize_dataset:
-            # - clusterize_on == "phys":  [T, species...] (no dt)
-            # - clusterize_on == "all" :  [T, species..., dt]
-            # - clusterize_on == "dt"  :  [dt] only
-            #
-            # Here, state_vector always encodes [T, species...]; dt is provided
-            # separately by the caller when needed.
-
-            if self.clusterize_on == "dt":
-                # Clustering purely on dt: the k-means model was trained on
-                # a single feature (possibly log-transformed). The caller must
-                # pass state_vector as [dt] here.
-                feat = np.array(log_state, copy=True)
-                if self.log_transform_X > 0:
-                    # dt has its own log transform in database_processing,
-                    # unclipped by species threshold. Use a tiny epsilon guard.
-                    dt_eps = 1e-300
-                    feat[0] = np.log(max(feat[0], dt_eps))
-
-            elif self.clusterize_on == "all":
-                # dt_all clustering: k-means was trained on [T, species..., dt].
-                # state_vector is [T, species...] and the caller must append dt
-                # as the last entry before calling attribute_cluster.
-                feat = np.array(log_state, copy=True)
-
-                # Apply species/temperature log transform (excluding trailing dt)
-                if self.log_transform_X > 0:
-
-                    # Transform species (excluding trailing dt)
-                    for i, spec in enumerate(self.spec_list_ANN):
-                        col = 1 + i  # T is column 0
-
-                        if spec in self.log_excluded_species:
-                            continue
-
-                        val = feat[col]
-
-                        if self.log_transform_X == 1:
-                            val = max(val, self.threshold)
-                            feat[col] = np.log(val)
-
-                        elif self.log_transform_X == 2:
-                            val = max(val, 0.0)
-                            feat[col] = (val**self.lambda_bct - 1.0) / self.lambda_bct
-
-
-                    # dt gets its own log transform, with a dedicated epsilon
-                    dt_eps = 1e-300
-                    feat[-1] = np.log(max(feat[-1], dt_eps))
-
-            else:  # "phys" or any other value treated as physical-only
-                # Clustering on physical state only: [T, species...] without dt.
-                feat = np.array(log_state, copy=True)
-                
-                for i, spec in enumerate(self.spec_list_ANN):
-                    col = 1 + i
-
-                    if spec in self.log_excluded_species:
-                        continue
-
-                    val = feat[col]
-
-                    if self.log_transform_X == 1:
-                        val = max(val, self.threshold)
-                        feat[col] = np.log(val)
-
-                    elif self.log_transform_X == 2:
-                        val = max(val, 0.0)
-                        feat[col] = (val**self.lambda_bct - 1.0) / self.lambda_bct
-
+            feat = transforms.kmeans_features(np.array([state[0]]), Y.reshape(1, -1), np.array([dt]), self.spec_list_ANN,
+                                              clusterize_on, self.log_transform_X, self.threshold, self.lambda_bct,
+                                              self.log_excluded_species)
 
             # --------------------------------------------------------------
             # Scale and predict cluster
@@ -1197,27 +1105,6 @@ class NNTesting():
         else:
             self.cluster = 0
 
-
-    def _inverse_scale(self, scaled_y, mean, std):
-        """Inverse scaling helper for mass fractions (numpy version).
-
-        scaled_y: array in scaled space
-        mean, std: scaling statistics (numpy arrays)
-        """
-        y = mean + std * scaled_y
-
-        return y
-
-    def _scale(self, x, mean, std):
-        """Scaling helper for mass fractions (numpy version).
-
-        x: array in physical (original) space
-        mean, std: scaling statistics (numpy arrays)
-        """
-
-        scaled_array = (x - mean) / std
-
-        return scaled_array
 
 #-----------------------------------------------------------------------
 #   TIME ADVANCEMENT FUNTIONS 
@@ -1261,58 +1148,18 @@ class NNTesting():
             n2_value = state_vector[n2_index+1]
             state_vector = np.delete(state_vector, n2_index+1)
         
-        # NN update for Yk's: basic clipping before log/BCT
-        # Only species not listed in self.log_excluded_species are subject to
-        # threshold-based clipping, mirroring LearningDatabase.log_excluded_species.
-        if self.log_transform_X > 0:
-            # Species indices shift by +1 in state_vector: spec i -> state_vector[1 + i].
-            for i, spec in enumerate(self.spec_list_ANN):
-                if spec in self.log_excluded_species:
-                    continue
-                if self.log_transform_X == 1:
-                    if state_vector[i+1] < self.threshold:
-                        state_vector[i+1] = self.threshold
-                elif self.log_transform_X == 2:
-                    if state_vector[i+1] < 0.0:
-                        state_vector[i+1] = 0.0
-
-        # Build log_state input vector.
-        # For dt_var=False: [T, species...]
-        # For dt_var=True:  [T, species..., dt] with dt transformed consistently
-        # with database_processing. Species listed in log_excluded_species are
-        # kept on the original (linear) scale even when log/Box–Cox is active.
+        # Network input: [T, transformed species, (transformed dt)], as in LearningDatabase.process_database
+        # (tools/transforms.py). Species of log_excluded_species stay on a linear scale.
+        x_species_t = transforms.transform_species(state_vector[1:].reshape(1, -1), self.spec_list_ANN, self.log_transform_X,
+                                                   self.threshold, self.lambda_bct, self.log_excluded_species)
+        log_state = np.column_stack([[[state_vector[0]]], x_species_t])
         if self.dt_var:
-            log_state = np.zeros(self.nb_species_ANN + 2)
-        else:
-            log_state = np.zeros(self.nb_species_ANN + 1)
-
-        # Applying transform
-        log_state[0] = state_vector[0]
-        for i, spec in enumerate(self.spec_list_ANN):
-            val = state_vector[1 + i]
-            if spec in self.log_excluded_species or self.log_transform_X == 0:
-                log_state[1 + i] = val
-            else:
-                if self.log_transform_X == 1:
-                    log_state[1 + i] = np.log(val)
-                elif self.log_transform_X == 2:
-                    log_state[1 + i] = (val**self.lambda_bct - 1.0)/self.lambda_bct
-
-        if self.dt_var:
-            # state_vector currently contains [T, species...], dt comes from the argument.
-            # We do NOT clip dt by species threshold; apply its own log transform with a small epsilon.
-            dt_eps = 1e-300
-            dt_logged = np.log(max(dt, dt_eps)) if self.log_transform_X > 0 else dt
-
-            # Last entry is dt (optionally logged)
-            log_state[-1] = dt_logged
-
+            log_state = np.column_stack([log_state, [[transforms.transform_dt(dt, self.log_transform_X)]]])
 
         # input of NN
-        log_state = log_state.reshape(1, -1)
         mean_X = self.Xscaler_list[self.cluster][:, 0]
         std_X = self.Xscaler_list[self.cluster][:, 1]
-        NN_input = self._scale(log_state, mean_X, std_X)
+        NN_input = transforms.scale(log_state, mean_X, std_X)
         
         # New state predicted by ANN
         NN_input = torch.tensor(NN_input, dtype=torch.float64).to(self.device)
@@ -1322,43 +1169,11 @@ class NNTesting():
         # Getting Y and inverse scaling (numpy version)
         mean_Y = self.Yscaler_list[self.cluster][:, 0]
         std_Y = self.Yscaler_list[self.cluster][:, 1]
-        Y_new = self._inverse_scale(state_new, mean_Y, std_Y)
+        y_t = transforms.unscale(state_new, mean_Y, std_Y)
 
-        # Log/Box-Cox transform of species (for error metrics). Apply thresholding
-        # only to species not in log_excluded_species, keeping excluded species on
-        # their original linear scale.
-        if self.log_transform_Y>0:
-
-            if self.output_omegas:
-
-                if self.dt_var:
-                    Y_ini = log_state[0,1:-1]
-                else:
-                    Y_ini = log_state[0,1:]
-                #
-                state_updated = Y_ini + Y_new
-                #
-                for i, spec in enumerate(self.spec_list_ANN):
-                    if spec in self.log_excluded_species:
-                        # Kept on linear scale: state_updated is already Y(t+dt)
-                        Y_new[0,i] = state_updated[0,i]
-                    else:
-                        # Inverse of the log / Box-Cox transform
-                        if self.log_transform_Y==1:
-                            Y_new[0,i] = np.exp(state_updated[0,i])
-                        elif self.log_transform_Y==2:
-                            Y_new[0,i] = (self.lambda_bct*state_updated[0,i]+1.0)**(1./self.lambda_bct)
-            else:
-                for i, spec in enumerate(self.spec_list_ANN):
-                    if spec not in self.log_excluded_species:
-                        if self.log_transform_Y==1:
-                            Y_new[0,i] = np.exp(Y_new[0,i])
-                        elif self.log_transform_Y==2:
-                            Y_new[0,i] = (self.lambda_bct*Y_new[0,i]+1.0)**(1./self.lambda_bct)
-        
-        # If reaction rate outputs from network
-        if self.output_omegas and self.log_transform_Y==0:
-            Y_new += state_vector[1:]   # Remark: state vector already contains information about N2 removal
+        # Mass fractions at t+dt (outputs as differences or not, in transformed space or not)
+        Y_new = transforms.output_to_Yk(x_species_t, y_t, self.spec_list_ANN, self.output_omegas, self.log_transform_X,
+                                        self.log_transform_Y, self.lambda_bct, self.log_excluded_species)
 
         # Adding back N2 before computing temperature
         if self.remove_N2:
@@ -1409,17 +1224,8 @@ class NNTesting():
         progvar = self.compute_progvar(state_phys, pressure, self.mechanism_type)
         self.progvar = progvar
 
-        # Build clustering feature vector consistent with dtb_processing
-        # configuration (clusterize_on: "phys", "all", or "dt").
-        if self.dt_var and self.clusterize_on == "dt":
-            state_for_cluster = np.array([dt], dtype=float)
-        elif self.dt_var and self.clusterize_on == "all":
-            state_for_cluster = np.append(state_phys, dt)
-        else:
-            state_for_cluster = state_phys
-
         if self.nb_clusters > 0:
-            self.attribute_cluster(state_for_cluster, progvar)
+            self.attribute_cluster(state_phys, dt, progvar)
         else:
             self.cluster = 0
 
@@ -1489,8 +1295,8 @@ class NNTesting():
         # Normalized differences in log space (using scaler statistics)
         mean_Y = self.Yscaler_list[self.cluster][:, 0]
         std_Y = self.Yscaler_list[self.cluster][:, 1]
-        diff_log_Y_cvode_norm = self._scale(diff_log_Y_cvode, mean_Y, std_Y)
-        diff_log_Y_ann_norm = self._scale(diff_log_Y_ann, mean_Y, std_Y)
+        diff_log_Y_cvode_norm = transforms.scale(diff_log_Y_cvode, mean_Y, std_Y)
+        diff_log_Y_ann_norm = transforms.scale(diff_log_Y_ann, mean_Y, std_Y)
 
         # Error in normalized log-space (MSE per species)
         err_Yk = (diff_log_Y_cvode_norm - diff_log_Y_ann_norm) ** 2
@@ -1583,7 +1389,7 @@ class NNTesting():
             # Unscale inputs back to log/physical space to mimic runtime
             # convention, then rescale using local helper to be fully
             # consistent. This keeps this routine aligned with advance_state_NN.
-            X_unscaled = self._inverse_scale(X_val_t, mean_X, std_X)
+            X_unscaled = transforms.unscale(X_val_t, mean_X, std_X)
 
             # Forward pass
             with torch.no_grad():
@@ -1596,8 +1402,8 @@ class NNTesting():
             rmse_scaled = np.sqrt(mse_scaled)
 
             # Approximate physical-space outputs by inverse scaling
-            Y_val_phys = self._inverse_scale(Y_val_t, mean_Y, std_Y)
-            Y_pred_phys = self._inverse_scale(Y_pred_t, mean_Y, std_Y)
+            Y_val_phys = transforms.unscale(Y_val_t, mean_Y, std_Y)
+            Y_pred_phys = transforms.unscale(Y_pred_t, mean_Y, std_Y)
             diff_phys = (Y_pred_phys - Y_val_phys).detach().cpu().numpy()
             mse_phys = np.mean(diff_phys**2, axis=0)
             mae_phys = np.mean(np.abs(diff_phys), axis=0)

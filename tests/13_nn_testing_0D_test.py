@@ -55,8 +55,8 @@ def test_nn_testing_0D(tmp_path):
 
     clusters = []
     attribute_cluster = test.attribute_cluster
-    def spy(state, progvar):
-        attribute_cluster(state, progvar)
+    def spy(state, dt, progvar):
+        attribute_cluster(state, dt, progvar)
         clusters.append(test.cluster)
     test.attribute_cluster = spy
 
