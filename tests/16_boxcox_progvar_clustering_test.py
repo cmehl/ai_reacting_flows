@@ -17,6 +17,7 @@ import h5py
 import numpy as np
 import oyaml as yaml
 from ai_reacting_flows.databases_processing.database_processing import LearningDatabase
+import ai_reacting_flows.tools.transforms as transforms
 
 # Mechanism file (only copied by LearningDatabase)
 mech_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../data/chemical_mechanisms/mech_H2.yaml")
@@ -67,8 +68,10 @@ def test_boxcox_progvar_clustering(tmp_path):
 
     database = LearningDatabase()
 
-    # k-means features: negative values clipped to 0 for Box-Cox
-    assert np.allclose(database._compute_log(np.array([-1.0e-20, 0.25])), [-1.0/lambda_bct, (0.25**lambda_bct - 1.0)/lambda_bct])
+    # k-means features [T, Box-Cox of H2]: negative values clipped to 0
+    features = transforms.kmeans_features(np.array([300.0, 300.0]), np.array([[-1.0e-20], [0.25]]), None, ["H2"], "phys",
+                                          2, database.threshold, database.lambda_bct, [])
+    assert np.allclose(features[:, 1], [-1.0/lambda_bct, (0.25**lambda_bct - 1.0)/lambda_bct])
 
     database.clusterize_dataset(c_bounds=[0.0, 0.5, 1.0])
     database.process_database()

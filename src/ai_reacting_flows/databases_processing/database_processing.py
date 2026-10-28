@@ -33,6 +33,7 @@ from sklearn.preprocessing import StandardScaler #, MinMaxScaler
 from sklearn.model_selection import train_test_split
 
 import ai_reacting_flows.tools.utilities as utils
+import ai_reacting_flows.tools.transforms as transforms
 
 sns.set_style("darkgrid")
 
@@ -281,64 +282,29 @@ class LearningDatabase(object):
 
         elif self.clustering_method=="kmeans":
             
-            spec_list = self.species_names.to_list()
-            spec_list.insert(0,"Temperature")
+            # Species used as features (N2 removed without N chemistry)
+            species = [spec for spec in self.species_names if self.with_N_chemistry or spec != "N2"]
 
-
-            if self.with_N_chemistry is False:
-                spec_list.remove("N2")
+            # Clustering on the time step only makes sense with multiple dt
+            clusterize_on = self.clusterize_on if self.dt_var else "phys"
 
             # ------------------------------------------------------------------
-            # Build data matrix for clustering
+            # Build data matrix for clustering (transforms in tools/transforms.py, shared with inference)
             # ------------------------------------------------------------------
-            if self.dt_var:
-                if self.clusterize_on=="all":
-                    spec_list.append("dt")
-                    X_flat, _, _ = self._flatten_multi_dt_arrays(self.X, self.Y, self.dt_array)
-                    data_kmeans = X_flat[spec_list].values.copy()
-                elif self.clusterize_on=="dt":
-                    _, _, data_kmeans = self._flatten_multi_dt_arrays(self.X, self.Y, self.dt_array)
-                    data_kmeans = data_kmeans.reshape(-1, 1)
-                elif self.clusterize_on=="phys":
-                    data_kmeans = self.X[spec_list].values.copy()
-                # elif self.clusterize_on=="double":
-                #     data_kmeans_phys = self.X[spec_list].values.copy()
-                #     data_kmeans_time = self.dt_array.copy()
+
+            # Flattened (state, dt) points with multiple dt
+            if clusterize_on in ["dt", "all"]:
+                X_kmeans, _, _ = self._flatten_multi_dt_arrays(self.X, self.Y, self.dt_array)
+                dt_kmeans = X_kmeans["dt"].values
+
+            # Physical states
             else:
-                data_kmeans = self.X[spec_list].values.copy()
+                X_kmeans = self.X
+                dt_kmeans = None
 
-            # ------------------------------------------------------------------
-            # Apply log / Box-Cox transform
-            # ------------------------------------------------------------------
-
-            # Applying log transform
-            if self.log_transform_X>0:
-
-                # dt always has a plain log transform (as in process_database and NNTesting.attribute_cluster)
-                if self.dt_var and self.clusterize_on=="dt":
-                    data_kmeans = np.log(np.clip(data_kmeans, 1e-300, None))
-                # elif self.dt_var and self.clusterize_on=="double":
-                #     data_kmeans_phys[:, 1:] = self._compute_log(data_kmeans_phys[:, 1:])
-                #     data_kmeans_time = self._compute_log(data_kmeans_time)
-                else:
-                    # Build list of columns to transform
-                    cols_to_log = []
-                    dt_col = None
-
-                    # Temperature is column 0 -> never transformed
-                    for i, name in enumerate(spec_list[1:], start=1):
-                        if name == "dt":
-                            dt_col = i
-                        elif name not in self.log_excluded_species:
-                            cols_to_log.append(i)
-
-                    if cols_to_log:
-                        data_kmeans[:, cols_to_log] = self._compute_log(data_kmeans[:, cols_to_log])
-
-                    # dt handled separately
-                    if dt_col is not None:
-                        if self.log_transform_X > 0:
-                            data_kmeans[:, dt_col] = np.log(np.clip(data_kmeans[:, dt_col], 1e-300, None))
+            data_kmeans = transforms.kmeans_features(X_kmeans["Temperature"].values, X_kmeans[species].values, dt_kmeans,
+                                                     species, clusterize_on, self.log_transform_X, self.threshold,
+                                                     self.lambda_bct, self.log_excluded_species)
 
             # ------------------------------------------------------------------
             # Normalize before k-means
@@ -434,23 +400,6 @@ class LearningDatabase(object):
             # else:
             np.savetxt(self.dtb_folder + "/" + self.database_name + '/km_centroids.dat', kmeans.cluster_centers_.T)
 
-
-
-    def _compute_log(self, data):
-
-        data_log = data.copy()
-
-        # Log: clipped to threshold to avoid log(0)
-        if self.log_transform_X==1:
-            data_log[data_log < self.threshold] = self.threshold
-            data_log = np.log(data_log)
-
-        # Box-Cox: defined at 0, only negative values are clipped
-        elif self.log_transform_X==2:
-            data_log[data_log < 0.0] = 0.0
-            data_log = (data_log**self.lambda_bct - 1.0)/self.lambda_bct
-
-        return data_log
 
 
     def visualize_clusters(self, var1, var2):
@@ -946,17 +895,10 @@ class LearningDatabase(object):
             cols_to_log_X = [c for c in clip_cols[1:] if c not in self.log_excluded_species]
             cols_to_log_Y = [c for c in Y_cols if c not in self.log_excluded_species]
 
-            # Clip if logarithm transformation (species/Temperature only): threshold for log, 0 for Box-Cox
-            # (negative mass fractions would give NaN). log_excluded_species are kept on their original scales.
-            if self.log_transform_X==1:
-                X_p[cols_to_log_X] = X_p[cols_to_log_X].clip(lower=self.threshold)
-            elif self.log_transform_X==2:
-                X_p[cols_to_log_X] = X_p[cols_to_log_X].clip(lower=0.0)
-
-            if self.log_transform_Y==1:
-                Y_p[cols_to_log_Y] = Y_p[cols_to_log_Y].clip(lower=self.threshold)
-            elif self.log_transform_Y==2:
-                Y_p[cols_to_log_Y] = Y_p[cols_to_log_Y].clip(lower=0.0)
+            # Clip before transformation (threshold for log, 0 for Box-Cox), as in tools/transforms.py
+            # shared with training and inference. log_excluded_species are kept on their original scales.
+            X_p[cols_to_log_X] = transforms.clip(X_p[cols_to_log_X], self.log_transform_X, self.threshold)
+            Y_p[cols_to_log_Y] = transforms.clip(Y_p[cols_to_log_Y], self.log_transform_Y, self.threshold)
 
             # If log transform at input and not at output and output_omega, we need to save un-transformed data
             if self.log_transform_X>0 and self.log_transform_Y==0 and self.output_omegas:
@@ -965,23 +907,13 @@ class LearningDatabase(object):
                 else:
                     X_p_save = X_p.loc[:, X_cols[1:]]
 
-            if self.log_transform_X==1 and cols_to_log_X:
-                X_p.loc[:, cols_to_log_X] = np.log(X_p[cols_to_log_X])
-            elif self.log_transform_X==2 and cols_to_log_X:
-                X_p.loc[:, cols_to_log_X] = (X_p[cols_to_log_X]**self.lambda_bct - 1.0)/self.lambda_bct
+            # Log or Box-Cox transform
+            X_p[cols_to_log_X] = transforms.forward(X_p[cols_to_log_X], self.log_transform_X, self.lambda_bct)
+            Y_p[cols_to_log_Y] = transforms.forward(Y_p[cols_to_log_Y], self.log_transform_Y, self.lambda_bct)
 
-            if self.log_transform_Y==1 and cols_to_log_Y:
-                Y_p.loc[:, cols_to_log_Y] = np.log(Y_p[cols_to_log_Y])
-            elif self.log_transform_Y==2 and cols_to_log_Y:
-                Y_p.loc[:, cols_to_log_Y] = (Y_p[cols_to_log_Y]**self.lambda_bct - 1.0)/self.lambda_bct
-
-
-            # dt gets its own log transform, unclipped by the species threshold.
-            # A tiny epsilon guard is still needed to avoid log(0)/log(negative) if dt can be 0,
-            # but this should NOT be self.threshold (a species-scale quantity).
-            if self.dt_var and self.log_transform_X>0:
-                dt_eps = 1e-300  # or a physically meaningful floor for your smallest real timestep
-                X_p["dt"] = np.log(X_p["dt"].clip(lower=dt_eps))
+            # dt gets its own log transform, unclipped by the species threshold
+            if self.dt_var:
+                X_p["dt"] = transforms.transform_dt(X_p["dt"], self.log_transform_X)
 
 
             # If differences are considered

@@ -85,7 +85,7 @@ Post-processing of a stochastic database is shown in `post_processing_stoch_reac
 
 ## 2. Learning database
 
-The class `LearningDatabase` builds the training data: temperature threshold, undersampling based on the heat release rate, transformation (log or Box-Cox), output as $Y_k(t+dt)-Y_k(t)$ if `output_omegas: true`, clustering (k-means or progress variable), train/validation split and standardization.
+The class `LearningDatabase` builds the training data: temperature threshold, undersampling based on the heat release rate, transformation (log or Box-Cox), output as $Y_k(t+dt)-Y_k(t)$ if `output_omegas: true`, clustering (k-means or progress variable), train/validation split and standardization. The transforms and the network and k-means features are defined once in `tools/transforms.py`, shared by processing, training and inference.
 
 The script `dtb_processing.py` creates a `LearningDatabase` (which reads `dtb_processing.yaml` and the h5 database) and calls its methods. Typical order:
 
@@ -278,4 +278,4 @@ For `DeepONet`, these three keys are dicts with `branch` and `trunk` entries (pl
 pytest tests/
 ```
 
-Tests 01 to 04 must run in order: the first one generates `tests/STOCH_DTB_TEST`, reused by the others, and results are compared to reference histograms. Tests 05 to 19 are independent and run on small cases in temporary folders (test 19 runs `mpiexec -n 2` and is skipped without `mpiexec`) (`h2_learning_database.py` builds a small H2 learning database for tests 08, 09 and 13). Each test file starts with a description of what it tests.
+Tests 01 to 04 must run in order: the first one generates `tests/STOCH_DTB_TEST`, reused by the others, and results are compared to reference histograms. Tests 05 to 20 are independent and run on small cases in temporary folders (test 19 runs `mpiexec -n 2` and is skipped without `mpiexec`) (`h2_learning_database.py` builds a small H2 learning database for tests 08, 09 and 13). Each test file starts with a description of what it tests.

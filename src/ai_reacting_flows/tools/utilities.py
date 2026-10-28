@@ -358,16 +358,6 @@ def compute_pdf(x, samples):
 
     return pdf
 
-# Standard deviation used for scaling, from the variance saved by database processing
-def scaler_std(var):
-    """Standard deviations sqrt(var) with zeros replaced by 1, as in sklearn StandardScaler,
-    which was used to scale the training data (LearningDatabase.process_database)."""
-
-    std = np.sqrt(var)
-    std[std == 0.0] = 1.0
-
-    return std
-
 #==============================================================================
 # MISC
 #==============================================================================
