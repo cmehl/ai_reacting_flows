@@ -60,7 +60,6 @@ data_gen_parameters["calc_mean_traj"] = False              # Flag to decide if m
 
 # ML inference
 data_gen_parameters["ML_inference_flag"] = False
-data_gen_parameters["ML_models"] = ("")
 data_gen_parameters["prog_var_thresholds"] = (0.25, 0.95)
 
 def test_h2_multi_dt_dtb_computation():

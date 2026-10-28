@@ -140,6 +140,31 @@ class Particle(object):
         self.mass_k = self.mass * self.Y
         self.Hs = self.mass * self.hs
 
+
+    def set_state_from_T_Y(self, T, Y, parent : 'ParticlesCloud'):
+        """Set the particle state from temperature T [K] and mass fractions Y [-] at the particle
+        pressure, e.g. after an ANN chemistry step. Y is clipped to positive values and normalized
+        by Cantera."""
+
+        # Cantera sets negative mass fractions to 0 and normalizes them to sum 1
+        parent.gas.TPY = T, self.P, Y
+        self.T = T
+        self.Y = parent.gas.Y
+        self.X = parent.gas.X
+
+        # Enthalpy from temperature
+        self.compute_hs_from_T(parent)
+
+        state_new = np.empty(self.nb_state_vars)
+        state_new[0] = self.hs
+        state_new[1] = self.P
+        state_new[2:] = self.Y
+        self.state = state_new
+
+        # We need to update masses of species and enthalpies (total mass in reactor is preserved)
+        self.mass_k = self.mass * self.Y
+        self.Hs = self.mass * self.hs
+
     
 # =============================================================================
 #     FUNCTIONS TO COMPUTE COMPOSITION-DERIVED QUANTITIES

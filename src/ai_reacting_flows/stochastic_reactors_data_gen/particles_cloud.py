@@ -19,6 +19,7 @@ from ai_reacting_flows.stochastic_reactors_data_gen.particle import Particle
 from ai_reacting_flows.stochastic_reactors_data_gen.pre_processing import Inlet
 import ai_reacting_flows.tools.utilities as utils
 from ai_reacting_flows.tools.utilities import PRINT
+from ai_reacting_flows.ann_model_generation.NN_inference import NNInference
 
 matplotlib.use('Agg')
 sns.set()
@@ -48,9 +49,6 @@ class ParticlesCloud(object):
         
         # Methodology to solve chemistry: Cantera or NN
         self.ML_inference_flag = data_gen_parameters["ML_inference_flag"]
-        if self.ML_inference_flag:
-            self.ML_models = data_gen_parameters["ML_models"]
-            self.pg_thresholds = data_gen_parameters["pg_thresholds"]
         
         # Initialize time and general parameters
         self.time_max = float(data_gen_parameters["time_max"])
@@ -80,6 +78,21 @@ class ParticlesCloud(object):
         # Progress variables species
         self.pv_species = data_gen_parameters["pv_species"]
         self.pv_ind = [self.gas.species_index(spec) for spec in self.pv_species]
+
+        # ANN chemistry: networks of MODELS/<ML_model_folder> in the run folder (see NN_inference.py)
+        if self.ML_inference_flag:
+            self.ML_yk_renormalization = data_gen_parameters["ML_yk_renormalization"]
+            self.ML_hybrid_ann_cvode = data_gen_parameters["ML_hybrid_ann_cvode"]
+            self.ML_hybrid_ann_cvode_tol = data_gen_parameters["ML_hybrid_ann_cvode_tol"]
+
+            models_folder = f"{self.run_folder}/MODELS/{data_gen_parameters['ML_model_folder']}"
+            self.nn_inference = NNInference(models_folder, self.run_folder)
+
+            # Same species and progress variable (used for clustering) as the model
+            if self.nn_inference.spec_list_ref != self.species_names:
+                raise ValueError(f"Species of {models_folder} differ from those of mech_file")
+            if self.nn_inference.pv_species != self.pv_species:
+                raise ValueError(f"pv_species of {models_folder} ({self.nn_inference.pv_species}) differ from pv_species")
 
         # Setting the time-step array (it is an array to account for possible different values of dt in user-presribed time windows)
         # This is useful in cases where slow chemistry takes places first and more reactive particles are added later
@@ -480,10 +493,16 @@ class ParticlesCloud(object):
         # We scatter the chunks on each processors. Remark: rank=root also takes a chunk.
         lists_particles = self.comm.scatter(lists_particles, root=0)
 
+        # Reaction only if time is larger than activation time
+        active_particles = [part for part in lists_particles if self.time >= part.activation_time]
+
         # We perform chemical reactions -> each processor computes on its chunks
-        for part in lists_particles:
-            # Reaction only if time is larger than activation time
-            if self.time >= part.activation_time:
+        if self.ML_inference_flag:
+            # Chemistry with the ANN
+            self._react_ANN(active_particles, dt)
+        else:
+            # Chemistry with Cantera (CVODE)
+            for part in active_particles:
                 part.react(dt, self)
 
         # Allgather regroups the chunks and give the whole list to all the processors (<=> gather + broadcast)
@@ -491,6 +510,35 @@ class ParticlesCloud(object):
 
         # As we have a list of lists of particles we need to concatenate
         self.particles_list = list(itertools.chain.from_iterable(result))
+
+    # Apply reaction rate to particles with the ANN
+    def _react_ANN(self, particles, dt):
+        """Advance the chemistry of particles by dt [s] with the ANN (one batch, see NNInference).
+
+        Particles at T <= T_threshold are frozen, as in Particle.react. With ML_hybrid_ann_cvode,
+        particles whose predicted mass fractions sum differs from 1 by more than ML_hybrid_ann_cvode_tol
+        are advanced with Cantera instead.
+        """
+
+        particles = [part for part in particles if part.T > self.T_threshold]
+        if len(particles) == 0:
+            return
+
+        T = np.array([part.T for part in particles])
+        Y = np.array([part.Y for part in particles])
+        P = np.array([part.P for part in particles])
+        progvar = np.array([part.prog_var for part in particles])
+
+        clusters = self.nn_inference.attribute_clusters(T, Y, dt, progvar)
+        T_new, Y_new, sum_Yk = self.nn_inference.advance(T, Y, P, dt, clusters, self.ML_yk_renormalization)
+
+        for i, part in enumerate(particles):
+
+            # Hybrid: Cantera if the ANN does not conserve mass
+            if self.ML_hybrid_ann_cvode and np.abs(sum_Yk[i] - 1.0) > self.ML_hybrid_ann_cvode_tol:
+                part.react(dt, self)
+            else:
+                part.set_state_from_T_Y(T_new[i], Y_new[i], self)
 
     # Apply diffusion to particles
     def _apply_diffusion(self):
