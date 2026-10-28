@@ -171,6 +171,8 @@ The class `NNTesting` compares the ANN to CVODE on:
 + 1-D premixed flame reaction rates
 + the validation dataset (scatter plots)
 
+`NNTesting` (`NN_testing.py`) runs the reference and ANN cases; the error metrics are in `NN_testing_metrics.py` and the plots in `NN_testing_plots.py`.
+
 # Input YAML files
 
 Examples of all files can be found in `scripts/<CASE>/`. Units are SI.

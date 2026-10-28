@@ -3,12 +3,10 @@ import sys
 from pathlib import Path
 import joblib
 import pickle
-import shutil
 import oyaml as yaml
 import h5py
 
 import numpy as np
-import matplotlib.pyplot as plt
 
 import cantera as ct
 
@@ -16,6 +14,8 @@ import torch
 from datetime import datetime
 from torchinfo import summary
 from ai_reacting_flows.ann_model_generation.NN_models import MLPModel, DeepONet, DeepONet_shift
+import ai_reacting_flows.ann_model_generation.NN_testing_metrics as metrics
+import ai_reacting_flows.ann_model_generation.NN_testing_plots as plots
 
 import ai_reacting_flows.tools.utilities as utils
 import ai_reacting_flows.tools.transforms as transforms
@@ -461,14 +461,12 @@ class NNTesting():
             results.append(res_with_params)
 
             # equilibrium temperature error (percent)
-            Teq_ref = res["Teq_ref"]
-            Teq_ann = res["Teq_ann"]
-            err_Teq_list.append(100.0 * abs(Teq_ref - Teq_ann) / Teq_ref)
+            err_Teq_list.append(metrics.relative_error_percent(res["Teq_ref"], res["Teq_ann"]))
 
             ann_calls_list.append(res["ann_calls"])
             cvode_calls_list.append(res["cvode_calls"])
 
-        err_Teq_arr = np.array(err_Teq_list)
+        err_Teq_mean, err_Teq_std = metrics.mean_std(err_Teq_list)
         ann_calls_arr = np.array(ann_calls_list)
         cvode_calls_arr = np.array(cvode_calls_list)
 
@@ -476,8 +474,8 @@ class NNTesting():
         summary = {
             "n_cases": len(results),
             # Equilibrium temperature error stats (percent)
-            "Teq_error_mean_percent": float(err_Teq_arr.mean()) if err_Teq_arr.size > 0 else 0.0,
-            "Teq_error_std_percent": float(err_Teq_arr.std()) if err_Teq_arr.size > 0 else 0.0,
+            "Teq_error_mean_percent": err_Teq_mean,
+            "Teq_error_std_percent": err_Teq_std,
             "mode": mode,
         }
 
@@ -489,20 +487,13 @@ class NNTesting():
 
         result = self.run_0D_ignition_case(phi, T0, pressure, dt, nb_ite)
 
-        time_vect = result["time_vect"]
-        states_cvode = result["states_ref"]
-        states_ann = result["states_ann"]
         tau_ign_CVODE = result["tau_ign_cvode"]
         tau_ign_ANN = result["tau_ign_ann"]
-        Teq_ref = result["Teq_ref"]
-        Teq_ann = result["Teq_ann"]
-        atomic_cons = result["atomic_cons"]
-        sumYs = result["sumYs"]
         ann_calls = result["ann_calls"]
         cvode_calls = result["cvode_calls"]
 
         # Error on equilibrium temperature
-        error_Teq = 100.0*abs(Teq_ref - Teq_ann)/Teq_ref
+        error_Teq = metrics.relative_error_percent(result["Teq_ref"], result["Teq_ann"])
 
         if self.verbose:
             print(f"\nError on equilibrium flame temperature is: {error_Teq} % \n")
@@ -511,79 +502,8 @@ class NNTesting():
         print(f"   >>> Number of ANN calls: {ann_calls}")
         print(f"   >>> Number of CVODE calls: {cvode_calls}")
 
-        #-------------------- PLOTTING --------------------------- 
-        ftsize = 14
-
-        # Create directory with plots
-        folder = f'./plots_0D_T0#{T0}_phi#{phi}'
-        if os.path.isdir(folder):
-            shutil.rmtree(folder)
-        os.makedirs(folder)
-
-        fig, ax = plt.subplots(1, 1)
-        ax.plot(time_vect, states_cvode[:,0], ls="--", color = "k", lw=2, label="CVODE")
-        ax.plot(time_vect, states_ann[:,0], ls="-", color = "b", lw=2, marker='x', label="NN")
-        ax.set_xlabel('$t$ $[ms]$', fontsize=ftsize)
-        ax.set_ylabel('$T$ $[K]$', fontsize=ftsize)
-        ax.legend()
-        fig.tight_layout()
-
-        fig.savefig(folder +  "/Temperature.png", dpi=500)
-
-        for spec in self.spec_to_plot:
-            fig, ax = plt.subplots(1, 1)
-            ax.plot(time_vect, states_cvode[:,self.spec_list_ref.index(spec)+1], ls="--", color = "k", lw=2, label="CVODE")
-            ax.plot(time_vect, states_ann[:,self.spec_list_ref.index(spec)+1], ls="-", color = "b", lw=2, marker='x', label="NN")
-            ax.set_xlabel('$t$ $[ms]$', fontsize=ftsize)
-            ax.set_ylabel(f'{spec} mass fraction $[-]$', fontsize=ftsize)
-            if spec=="N2" and self.remove_N2: #because N2 is often constant
-                ax.set_ylim([states_cvode[0,self.gas.species_index(spec)+1]*0.95, states_cvode[0,self.gas.species_index(spec)+1]*1.05])
-            ax.legend()
-            fig.tight_layout()
-
-            fig.savefig(folder + f"/Y{spec}.png", dpi=500)
-
-        # Mass conservation
-        fig2, ax2 = plt.subplots(1, 1)
-        ax2.plot(time_vect, sumYs, ls="-", color = "b", lw=2)
-        ax2.plot(time_vect, np.ones(len(time_vect)), ls="--", color = "k", lw=2)
-        ax2.plot(time_vect, np.ones(len(time_vect))+0.01, ls="--", color = "k", lw=2, alpha=0.5)
-        ax2.plot(time_vect, np.ones(len(time_vect))-0.01, ls="--", color = "k", lw=2, alpha=0.5)
-        ax2.set_xlabel('$t$ $[ms]$', fontsize=ftsize)
-        ax2.set_ylabel(r'$\sum_{k} Y_k$ $[-]$', fontsize=ftsize)
-        ax2.set_ylim([0.95,1.05])
-        fig2.tight_layout()
-
-        fig2.savefig(folder + "/SumYs.png", dpi=500)
-
-        # Atomic conservation
-        fig3, axs3 = plt.subplots(2, 2)
-
-        ratio_scale_down = 0.9
-        ratio_scale_up = 1.1
-
-        axs3[0,0].plot(time_vect, atomic_cons[:,0], lw=2, color="purple")
-        axs3[0,0].set_ylabel('$Y_C$ $[-]$', fontsize=ftsize)
-        axs3[0,0].set_ylim([atomic_cons[0,0]*ratio_scale_down,atomic_cons[0,0]*ratio_scale_up])
-        axs3[0,0].xaxis.set_major_formatter(plt.NullFormatter())
-
-        axs3[0,1].plot(time_vect, atomic_cons[:,1], lw=2, color="purple")
-        axs3[0,1].set_ylabel('$Y_H$ $[-]$', fontsize=ftsize)
-        axs3[0,1].set_ylim([atomic_cons[0,1]*ratio_scale_down,atomic_cons[0,1]*ratio_scale_up])
-        axs3[0,1].xaxis.set_major_formatter(plt.NullFormatter())
-
-        axs3[1,0].plot(time_vect, atomic_cons[:,2], lw=2, color="purple")
-        axs3[1,0].set_xlabel('$t$ $[ms]$', fontsize=ftsize)
-        axs3[1,0].set_ylabel('$Y_O$ $[-]$', fontsize=ftsize)
-        axs3[1,0].set_ylim([atomic_cons[0,2]*ratio_scale_down,atomic_cons[0,2]*ratio_scale_up])
-
-        axs3[1,1].plot(time_vect, atomic_cons[:,3], lw=2, color="purple")
-        axs3[1,1].set_xlabel('$t$ $[ms]$', fontsize=ftsize)
-        axs3[1,1].set_ylabel('$Y_N$ $[-]$', fontsize=ftsize)
-        axs3[1,1].set_ylim([atomic_cons[0,3]*ratio_scale_down,atomic_cons[0,3]*ratio_scale_up])
-
-        fig3.tight_layout()
-        fig3.savefig(folder + "/AtomCons.png", dpi=500)
+        # Plots
+        plots.plot_0D_case(result, f'./plots_0D_T0#{T0}_phi#{phi}', self.spec_to_plot, self.spec_list_ref, self.remove_N2)
 
         # Ignition delays comparison
         print(f" >> CVODE ignition delay: {tau_ign_CVODE}")
@@ -593,24 +513,17 @@ class NNTesting():
     def test_0D_pyrolysis(self, T0, pressure, dt, nb_ite=100, diluent=None, X_diluent=0.0):
         """Wrapper around run_0D_pyrolysis_case with plotting.
 
-        The plotting logic mirrors test_0D_ignition but folder naming and
-        printed labels reflect the pyrolysis case and do not include phi.
+        Same plots as test_0D_ignition, but folder naming and printed labels
+        reflect the pyrolysis case and do not include phi.
         """
 
         result = self.run_0D_pyrolysis_case(T0, pressure, dt, nb_ite, diluent=diluent, X_diluent=X_diluent)
 
-        time_vect = result["time_vect"]
-        states_cvode = result["states_ref"]
-        states_ann = result["states_ann"]
-        Teq_ref = result["Teq_ref"]
-        Teq_ann = result["Teq_ann"]
-        atomic_cons = result["atomic_cons"]
-        sumYs = result["sumYs"]
         ann_calls = result["ann_calls"]
         cvode_calls = result["cvode_calls"]
 
         # Error on equilibrium temperature
-        error_Teq = 100.0*abs(Teq_ref - Teq_ann)/Teq_ref
+        error_Teq = metrics.relative_error_percent(result["Teq_ref"], result["Teq_ann"])
 
         if self.verbose:
             print(f"\nError on equilibrium temperature (pyrolysis case) is: {error_Teq} % \n")
@@ -619,94 +532,8 @@ class NNTesting():
         print(f"   >>> Number of ANN calls: {ann_calls}")
         print(f"   >>> Number of CVODE calls: {cvode_calls}")
 
-        #-------------------- PLOTTING ---------------------------
-        ftsize = 14
-
-        # Create directory with plots (no phi in naming)
-        folder = f'./plots_0D_pyro_P#{pressure}_T0#{T0}_dt#{dt}'
-        if os.path.isdir(folder):
-            shutil.rmtree(folder)
-        os.makedirs(folder)
-
-        fig, ax = plt.subplots(1, 1)
-        ax.plot(time_vect, states_cvode[:, 0], ls="--", color="k", lw=2, label="CVODE")
-        ax.plot(time_vect, states_ann[:, 0], ls="-", color="b", lw=2, marker='x', label="NN")
-        ax.set_xlabel('$t$ $[ms]$', fontsize=ftsize)
-        ax.set_ylabel('$T$ $[K]$', fontsize=ftsize)
-        ax.legend()
-        fig.tight_layout()
-
-        fig.savefig(folder + "/Temperature.png", dpi=500)
-
-        for spec in self.spec_to_plot:
-            fig, ax = plt.subplots(1, 1)
-            ax.plot(time_vect, states_cvode[:, self.spec_list_ref.index(spec) + 1], ls="--", color="k", lw=2, label="CVODE")
-            ax.plot(time_vect, states_ann[:, self.spec_list_ref.index(spec) + 1], ls="-", color="b", lw=2, marker='x', label="NN")
-            ax.set_xlabel('$t$ $[ms]$', fontsize=ftsize)
-            ax.set_ylabel(f'{spec} mass fraction $[-]$', fontsize=ftsize)
-            if spec == "N2" and self.remove_N2:
-                ax.set_ylim([
-                    states_cvode.Y[0, self.gas.species_index(spec)+1] * 0.95,
-                    states_cvode.Y[0, self.gas.species_index(spec)+1] * 1.05,
-                ])
-            ax.legend()
-            fig.tight_layout()
-
-            fig.savefig(folder + f"/Y{spec}.png", dpi=500)
-
-        # Mass conservation
-        fig2, ax2 = plt.subplots(1, 1)
-        ax2.plot(time_vect, sumYs, ls="-", color="b", lw=2)
-        ax2.plot(time_vect, np.ones(len(time_vect)), ls="--", color="k", lw=2)
-        ax2.plot(time_vect, np.ones(len(time_vect)) + 0.01, ls="--", color="k", lw=2, alpha=0.5)
-        ax2.plot(time_vect, np.ones(len(time_vect)) - 0.01, ls="--", color="k", lw=2, alpha=0.5)
-        ax2.set_xlabel('$t$ $[ms]$', fontsize=ftsize)
-        ax2.set_ylabel(r'$\sum_{k} Y_k$ $[-]$', fontsize=ftsize)
-        ax2.set_ylim([0.95, 1.05])
-        fig2.tight_layout()
-
-        fig2.savefig(folder + "/SumYs.png", dpi=500)
-
-        # Atomic conservation
-        fig3, axs3 = plt.subplots(2, 2)
-
-        ratio_scale_down = 0.9
-        ratio_scale_up = 1.1
-
-        axs3[0, 0].plot(time_vect, atomic_cons[:, 0], lw=2, color="purple")
-        axs3[0, 0].set_ylabel('$Y_C$ $[-]$', fontsize=ftsize)
-        axs3[0, 0].set_ylim([
-            atomic_cons[0, 0] * ratio_scale_down,
-            atomic_cons[0, 0] * ratio_scale_up,
-        ])
-        axs3[0, 0].xaxis.set_major_formatter(plt.NullFormatter())
-
-        axs3[0, 1].plot(time_vect, atomic_cons[:, 1], lw=2, color="purple")
-        axs3[0, 1].set_ylabel('$Y_H$ $[-]$', fontsize=ftsize)
-        axs3[0, 1].set_ylim([
-            atomic_cons[0, 1] * ratio_scale_down,
-            atomic_cons[0, 1] * ratio_scale_up,
-        ])
-        axs3[0, 1].xaxis.set_major_formatter(plt.NullFormatter())
-
-        axs3[1, 0].plot(time_vect, atomic_cons[:, 2], lw=2, color="purple")
-        axs3[1, 0].set_xlabel('$t$ $[ms]$', fontsize=ftsize)
-        axs3[1, 0].set_ylabel('$Y_O$ $[-]$', fontsize=ftsize)
-        axs3[1, 0].set_ylim([
-            atomic_cons[0, 2] * ratio_scale_down,
-            atomic_cons[0, 2] * ratio_scale_up,
-        ])
-
-        axs3[1, 1].plot(time_vect, atomic_cons[:, 3], lw=2, color="purple")
-        axs3[1, 1].set_xlabel('$t$ $[ms]$', fontsize=ftsize)
-        axs3[1, 1].set_ylabel('$Y_N$ $[-]$', fontsize=ftsize)
-        axs3[1, 1].set_ylim([
-            atomic_cons[0, 3] * ratio_scale_down,
-            atomic_cons[0, 3] * ratio_scale_up,
-        ])
-
-        fig3.tight_layout()
-        fig3.savefig(folder + "/AtomCons.png", dpi=500)
+        # Plots (no phi in folder naming)
+        plots.plot_0D_case(result, f'./plots_0D_pyro_P#{pressure}_T0#{T0}_dt#{dt}', self.spec_to_plot, self.spec_list_ref, self.remove_N2)
 
 #-----------------------------------------------------------------------
 #   1D PREMIXED TEST CASE
@@ -902,24 +729,10 @@ class NNTesting():
             ann_calls_list.append(res["ann_calls"])
             cvode_calls_list.append(res["cvode_calls"])
 
-            # Spatial window selection
-            x = f.grid
-            if x_window is not None:
-                x_min, x_max = x_window
-                mask = (x >= x_min) & (x <= x_max)
-            else:
-                mask = slice(None)
-
-            dx = np.gradient(x[mask]) if not isinstance(mask, slice) else np.gradient(x)
-
+            # L2 error in physical units over x-window
             for spec in species_for_error:
                 k = self.gas.species_index(spec)
-                omega_ex = Omega_exact[k, mask]
-                omega_nn = Omega_ann[k, mask]
-                # L2 error in physical units over x-window
-                diff = omega_nn - omega_ex
-                l2_err = float(np.sqrt(np.sum(diff**2 * dx)))
-                species_err[spec].append(l2_err)
+                species_err[spec].append(metrics.l2_error(f.grid, Omega_ann[k], Omega_exact[k], x_window))
 
             res_with_params = {"params": dict(case), **res}
             results.append(res_with_params)
@@ -930,9 +743,7 @@ class NNTesting():
         species_err_mean = {}
         species_err_std = {}
         for spec, errs in species_err.items():
-            arr = np.array(errs)
-            species_err_mean[spec] = float(arr.mean()) if arr.size > 0 else 0.0
-            species_err_std[spec] = float(arr.std()) if arr.size > 0 else 0.0
+            species_err_mean[spec], species_err_std[spec] = metrics.mean_std(errs)
 
         summary = {
             "n_cases": len(results),
@@ -961,25 +772,8 @@ class NNTesting():
         print(f"   >>> Number of ANN calls: {ann_calls}")
         print(f"   >>> Number of CVODE calls: {cvode_calls}")
 
-        #-------------------- PLOTTING --------------------------- 
-        folder = f'./plots_1D_prem_T0#{T0}_phi#{phi}'
-        if os.path.isdir(folder):
-            shutil.rmtree(folder)
-        os.makedirs(folder)
-
-        for spec in self.spec_to_plot:
-            fig, ax = plt.subplots(1, 1)
-            ax.plot(f.grid, Omega_exact[self.gas.species_index(spec),:], ls="-", color = "b", lw=2, label="Exact")
-            ax.plot(f.grid, Omega_ann[self.gas.species_index(spec),:], ls="--", color = "purple", lw=2, label="Neural network")
-            ax.set_xlabel('$x$ [m]')
-            ax.set_ylabel(f'{spec} Reaction rate')
-            ax.set_xlim([0.008, 0.014])
-            ax.legend()
-            fig.tight_layout()
-
-            fig.savefig(folder + f"/Y{spec}.png", dpi=700)
-
-            plt.show()
+        # Plots
+        plots.plot_1D_reaction_rates(f.grid, Omega_exact, Omega_ann, self.spec_to_plot, self.spec_list_ref, f'./plots_1D_prem_T0#{T0}_phi#{phi}')
 
 #-----------------------------------------------------------------------
 #   IA MODEL HANDLING FUNCTIONS
@@ -1333,9 +1127,7 @@ class NNTesting():
         self._load_validation_data()
 
         # Prepare output folder
-        if os.path.isdir(scatter_folder):
-            shutil.rmtree(scatter_folder)
-        os.makedirs(scatter_folder)
+        plots.new_folder(scatter_folder)
 
         all_stats = []
 
@@ -1352,57 +1144,20 @@ class NNTesting():
             model.to(self.device)
             model.eval()
 
-            mean_Y = torch.from_numpy(self.Yscaler_list[i_cluster][:, 0]).to(self.device).to(torch.float64)
-            std_Y = torch.from_numpy(self.Yscaler_list[i_cluster][:, 1]).to(self.device).to(torch.float64)
+            std_Y = self.Yscaler_list[i_cluster][:, 1]
 
             # Forward pass
             with torch.no_grad():
                 Y_pred_t = model(X_val_t)
 
-            # Error metrics in scaled space
+            # Prediction errors in scaled space
             diff_scaled = (Y_pred_t - Y_val_t).detach().cpu().numpy()
-            mse_scaled = np.mean(diff_scaled**2, axis=0)
-            mae_scaled = np.mean(np.abs(diff_scaled), axis=0)
-            rmse_scaled = np.sqrt(mse_scaled)
 
-            # Approximate physical-space outputs by inverse scaling
-            Y_val_phys = transforms.unscale(Y_val_t, mean_Y, std_Y)
-            Y_pred_phys = transforms.unscale(Y_pred_t, mean_Y, std_Y)
-            diff_phys = (Y_pred_phys - Y_val_phys).detach().cpu().numpy()
-            mse_phys = np.mean(diff_phys**2, axis=0)
-            mae_phys = np.mean(np.abs(diff_phys), axis=0)
-            rmse_phys = np.sqrt(mse_phys)
+            # Statistics for this cluster, in scaled and unscaled spaces
+            all_stats.append({"cluster": i_cluster, **metrics.validation_errors(diff_scaled, std_Y)})
 
-            # Aggregate statistics for this cluster
-            stats_cluster = {
-                "cluster": i_cluster,
-                "mse_scaled": mse_scaled,
-                "mae_scaled": mae_scaled,
-                "rmse_scaled": rmse_scaled,
-                "mse_phys": mse_phys,
-                "mae_phys": mae_phys,
-                "rmse_phys": rmse_phys,
-            }
-            all_stats.append(stats_cluster)
-
-            # Scatter plot of physical-space errors (subsample if needed)
-            n_pts = diff_phys.shape[0]
-            if n_pts > max_points_scatter:
-                idx = np.random.choice(n_pts, size=max_points_scatter, replace=False)
-                diff_plot = diff_phys[idx, :]
-            else:
-                diff_plot = diff_phys
-
-            fig, ax = plt.subplots(1, 1)
-            # Flatten over species/output dimensions
-            ax.scatter(np.arange(diff_plot.size), diff_plot.ravel(), s=1, alpha=0.5)
-            ax.set_xlabel("Sample index (flattened)")
-            ax.set_ylabel("Prediction error (physical units)")
-            ax.set_title(f"Cluster {i_cluster} validation errors")
-            fig.tight_layout()
-
-            fig.savefig(os.path.join(scatter_folder, f"cluster_{i_cluster}_errors.png"), dpi=400)
-            plt.close(fig)
+            # Scatter plot of unscaled errors (the mean of the scaler cancels in the difference)
+            plots.plot_validation_errors(diff_scaled * std_Y, i_cluster, scatter_folder, max_points_scatter)
 
         # Simple console summary
         for stats in all_stats:
