@@ -232,20 +232,21 @@ class NNTesting():
         # Until equilibrium (or max_simulation_time if not reached)
         equilibrium_reached = False
         time_cvode = 0.0   # CPU time of the chemistry integration (reactor creation and advance) [s]
+        T_cvode, Y_cvode = T_ini[0], Y_ini[0]   # Current state (states.T, states.Y rebuild the whole array at each access)
         while not equilibrium_reached and simtime < max_simulation_time - 0.5 * dt:
             simtime += dt
 
             # New reactor at each step, as in a CFD code (CVODE restarted from the current state)
             start = perf_counter()
-            T_cvode, Y_cvode = self.advance_state_CVODE(states.T[-1], states.Y[-1], pressure, dt)
+            T_cvode, Y_cvode = self.advance_state_CVODE(T_cvode, Y_cvode, pressure, dt)
             time_cvode += perf_counter() - start
 
             states.append(TPY=(T_cvode, pressure, Y_cvode), t=simtime*1.0e3)
 
-            if reactor_type=="ignition" and states.T[-1] > T0+200.0 and tau_ign_CVODE==0.0:
+            if reactor_type=="ignition" and T_cvode > T0+200.0 and tau_ign_CVODE==0.0:
                 tau_ign_CVODE = simtime
 
-            equilibrium_reached = abs(states.T[-1] - T_eq) <= T_eq_tolerance
+            equilibrium_reached = abs(T_cvode - T_eq) <= T_eq_tolerance
 
         # Number of time steps, the same for the ANN
         nb_ite = len(states.T) - 1
