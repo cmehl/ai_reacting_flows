@@ -6,7 +6,7 @@
 models_folder: MODEL_NH3_0D            # Model folder in MODELS/
 spec_to_plot: [NH3, H2, O2, H2O, NO]   # Species plotted, and 1D errors computed on
 
-yk_renormalization: false              # Correct ANN mass fractions to conserve the elements
+yk_renormalization: 0                  # Element conservation: 0 none, 1 one species per element, 2 Wan et al. 2020, 3 same with O on all its species
 hybrid_ann_cvode: false                # CVODE instead of ANN when mass is not conserved (sum of Y_k)
 hybrid_ann_cvode_tol: 5.0e-05          # Tolerance on |sum(Y_k) - 1| [-]
 
