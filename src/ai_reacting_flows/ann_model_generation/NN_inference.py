@@ -28,11 +28,15 @@ from ai_reacting_flows.databases_processing.processing_parameters import read_pr
 
 class NNInference():
 
-    def __init__(self, models_folder, run_folder):
+    def __init__(self, models_folder, run_folder, device=None):
         """Networks, scalers and clustering of models_folder (MODELS/MODEL_<suffix>), trained on the
-        learning database given by its networks_params.yaml, relative to run_folder."""
+        learning database given by its networks_params.yaml, relative to run_folder.
+        device: torch device of the networks ("cpu", "cuda"), None for cuda:0 if available, else cpu."""
 
-        self.device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+        # Device of the networks: GPU if available, unless given
+        if device is None:
+            device = "cuda:0" if torch.cuda.is_available() else "cpu"
+        self.device = torch.device(device)
 
         self.models_folder = models_folder
         with open(os.path.join(self.models_folder, "networks_params.yaml"), "r") as file:
@@ -122,7 +126,7 @@ class NNInference():
         self.models_list = []
 
         for i_cluster in range(self.nb_clusters):
-            model = torch.load(os.path.join(self.models_folder, f"cluster{i_cluster}_model.pth"), weights_only=False)
+            model = torch.load(os.path.join(self.models_folder, f"cluster{i_cluster}_model.pth"), map_location=self.device, weights_only=False)
             model.to(self.device)
             model.eval()
             # Add to list

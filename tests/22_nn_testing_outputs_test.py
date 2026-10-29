@@ -10,7 +10,7 @@ Check:
   it is removed from the network species (the pyrolysis plots used to fail in this case).
 - series_cases gives all combinations of the parameters given as lists, and with a conditions file
   (sim_test_*.csv of a flamelets database) one case per row of the file and per value of the other lists.
-- run_testing (sections of nn_testing.yaml) runs the selected series, including 1D premixed and
+- run_testing (sections of nn_testing.yaml, networks on CPU) runs the selected series, including 1D premixed and
   diffusion flames, and writes their summaries (errors of each case, mean); evaluate_on_validation_set
   statistics and plots; the 0D simulation errors E_sim per case and per dt in CSV tables, with the
   training standard deviations as normalization, the contribution of each variable and the speed-up,
@@ -120,7 +120,8 @@ def test_nn_testing_outputs(tmp_path):
             assert os.path.isfile(os.path.join(output, folder, f"{name}.png"))
 
     # Series of nn_testing.yaml
-    test = NNTesting({**testing_parameters, **series_parameters})
+    test = NNTesting({**testing_parameters, **series_parameters, "device": "cpu"})
+    assert test.inference.device.type == "cpu"
     summaries = test.run_testing()
 
     assert set(summaries) == {"0D_ignition", "1D_premixed", "1D_diffusion"}

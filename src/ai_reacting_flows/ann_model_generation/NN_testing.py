@@ -84,7 +84,8 @@ class NNTesting():
 
     def __init__(self, testing_parameters):
         """testing_parameters: content of nn_testing.yaml (see README). Only models_folder, spec_to_plot,
-        yk_renormalization, hybrid_ann_cvode and hybrid_ann_cvode_tol are needed to run single cases."""
+        yk_renormalization, hybrid_ann_cvode and hybrid_ann_cvode_tol are needed to run single cases
+        (device optional: cuda if available, else cpu)."""
 
         self.testing_parameters = testing_parameters
 
@@ -114,7 +115,7 @@ class NNTesting():
         self.models_folder = f"{self.run_folder}/MODELS/{testing_parameters['models_folder']}"
 
         # ANN chemistry: networks, scalers, clustering and processing parameters (shared with the stochastic reactors)
-        self.inference = NNInference(self.models_folder, self.run_folder)
+        self.inference = NNInference(self.models_folder, self.run_folder, testing_parameters.get("device"))
 
         # Chemistry of the model, used by the reference (CVODE) computations
         self.fuel = self.inference.fuel
