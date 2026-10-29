@@ -75,6 +75,15 @@ class ParticlesCloud(object):
         # Dabatase building
         self.build_ml_dtb = data_gen_parameters["build_ml_dtb"]
 
+        # Output stride: only write the full solution / X / Y every write_stride iterations
+        # (default 1 = every iteration, i.e. unchanged behaviour). Useful for very long runs
+        # where most iterations sit at equilibrium and add no information. Written snapshots
+        # are numbered contiguously (ITERATION_00000, ITERATION_00001, ...) regardless of the
+        # stride, so downstream readers that assume contiguous indices keep working; the true
+        # physical time of each snapshot is stored in its own "time" column.
+        self.write_stride = int(data_gen_parameters.get("write_stride", 1))
+        self.n_written = 0
+
         # Species names
         self.species_names = self.gas.species_names
         self.nb_species = len(self.species_names)
@@ -82,21 +91,6 @@ class ParticlesCloud(object):
         # Progress variables species
         self.pv_species = data_gen_parameters["pv_species"]
         self.pv_ind = [self.gas.species_index(spec) for spec in self.pv_species]
-
-        # Multi-step rollout database: for every particle and iteration, the chemistry-only chain
-        # of nb_steps sub-steps of size rollout_dt is stored (Y_multi) next to X/Y. rollout_dt is
-        # decoupled from the marching time step, so the marching dt can vary (time windows) while the
-        # database samples keep the fixed dt the network is trained (and used in the CFD) with.
-        self.rollout_steps = int(data_gen_parameters.get("rollout_steps", 0))
-        rollout_dt = data_gen_parameters.get("rollout_dt", None)
-        self.rollout_dt = None if rollout_dt is None else float(rollout_dt)
-        if self.rollout_steps > 0:
-            if not self.build_ml_dtb:
-                raise ValueError("rollout_steps > 0 requires build_ml_dtb: true")
-            if self.rollout_dt is None:
-                if isinstance(self.dt_input, dict):
-                    raise ValueError("rollout_dt must be set when time_step is a dict (variable marching dt)")
-                self.rollout_dt = float(self.dt_input)
 
         # Setting the time-step array (it is an array to account for possible different values of dt in user-presribed time windows)
         # This is useful in cases where slow chemistry takes places first and more reactive particles are added later
@@ -255,7 +249,7 @@ class ParticlesCloud(object):
 
         
 
-        if self.mixing_model!="CURL_MODIFIED_DD" and self.mixing_model!="EMST":  
+        if self.mixing_model!="CURL_MODIFIED_DD" and self.mixing_model!="EMST" and self.mixing_model!="EMST_SIMPLE":
             # Do or read mixing
             read_mixing = data_gen_parameters["read_mixing"]
             do_CURL_rate = True if "CURL_MODIFIED" in self.mixing_model else False
@@ -442,12 +436,18 @@ class ParticlesCloud(object):
         # Counting number of active particles
         self._count_active_particles()
 
+        # Only persist the full solution / X / Y on strided iterations (write_stride, default 1)
+        self._write_this_iteration = (self.iteration % self.write_stride == 0)
+        if self._write_this_iteration:
+            self._current_write_idx = self.n_written
+            self.n_written += 1
+
         # Write current iteration solution
-        if self.rank==0:
+        if self.rank==0 and self._write_this_iteration:
             self._write_solution()
-        
+
         # Store state before chemistry to build X.csv
-        if self.build_ml_dtb and self.rank==0:
+        if self.build_ml_dtb and self.rank==0 and self._write_this_iteration:
             self._update_dtb_states("X")
 
         t1 = perf_counter()
@@ -460,7 +460,7 @@ class ParticlesCloud(object):
         self._update_vars()
 
         # Store state after chemistry to build Y.csv
-        if self.build_ml_dtb and self.rank==0:
+        if self.build_ml_dtb and self.rank==0 and self._write_this_iteration:
             self._update_dtb_states("Y")
         
         # Advance molecular diffusion
@@ -521,10 +521,6 @@ class ParticlesCloud(object):
 
         # We perform chemical reactions -> each processor computes on its chunks
         for part in lists_particles:
-            # Rollout ground truth, computed from the pre-reaction state (particle untouched)
-            if self.rollout_steps > 0:
-                part.chain = part.react_chain(self.rollout_dt, self.rollout_steps, self)
-
             # if self.ML_inference_flag:
             #     part.react_NN_wrapper(self)
             # else:
@@ -556,6 +552,10 @@ class ParticlesCloud(object):
         elif self.mixing_model=="EMST":
 
             self._mix_EMST()
+
+        elif self.mixing_model=="EMST_SIMPLE":
+
+            self._mix_emst()
 
 
 
@@ -841,100 +841,100 @@ class ParticlesCloud(object):
     #         p.recompute_Yc_eq = True
 
 
-    # EMST mixing model
-    # def _mix_emst(self):
-    #     """Perform one EMST micro-mixing.
+    # EMST_SIMPLE mixing model (Cedric's original placeholder, reactivated 2026-09-01)
+    def _mix_emst(self):
+        """Perform one EMST micro-mixing step using Pope's EMST model.
 
-    #     The implementation follows the Euclidean Minimum Spanning Tree (EMST)
-    #     approach:
-    #       - build an MST in normalized composition space,
-    #       - compute an exponential pairwise relaxation coefficient,
-    #       - distribute mixing conservatively along tree edges.
-    #     """
+        The implementation follows the Euclidean Minimum Spanning Tree (EMST)
+        approach:
+          - build an MST in normalized composition/enthalpy space,
+          - compute an exponential pairwise relaxation coefficient,
+          - distribute mixing conservatively along tree edges.
+        """
 
-    #     # --------------------------------------------------------------
-    #     # Gather particle properties
-    #     # --------------------------------------------------------------
-    #     active_particles = [p for p in self.particles_list if p.is_active]
-    #     Y_all = np.array([p.Y for p in active_particles])
-    #     #
-    #     hs_all = np.array([p.hs for p in active_particles])
-    #     Yc_u_all = np.array([p.Yc_u for p in active_particles])
+        # --------------------------------------------------------------
+        # Gather particle properties
+        # --------------------------------------------------------------
+        active_particles = [p for p in self.particles_list if p.is_active]
+        Y_all = np.array([p.Y for p in active_particles])
+        #
+        hs_all = np.array([p.hs for p in active_particles])
+        Yc_u_all = np.array([p.Yc_u for p in active_particles])
 
-    #     # Question: should we inlude enthalpy in tree construction ?
+        # Question: should we inlude enthalpy in tree construction ?
 
-    #     # --------------------------------------------------------------
-    #     # Phase-space used to build the EMST (normalized)
-    #     # --------------------------------------------------------------
-    #     # Question: do we need to normalize ?
-    #     # phi_tree_raw = np.column_stack((Y_all))
+        # --------------------------------------------------------------
+        # Phase-space used to build the EMST (normalized)
+        # --------------------------------------------------------------
+        # Question: do we need to normalize ?
+        # phi_tree_raw = np.column_stack((Y_all))
 
-    #     # sigma = phi_tree_raw.std(axis=0)
-    #     # sigma[sigma < 1e-30] = 1.0
+        # sigma = phi_tree_raw.std(axis=0)
+        # sigma[sigma < 1e-30] = 1.0
 
-    #     # phi_tree = phi_tree_raw  / sigma
-    #     # phi_tree = phi_tree_raw.copy()
+        # phi_tree = phi_tree_raw  / sigma
+        # phi_tree = phi_tree_raw.copy()
 
-    #     phi_tree = Y_all.copy()
+        phi_tree = Y_all.copy()
 
-    #     # Variables actually mixed (can include extra scalars such as Yc_u)
-    #     phi_old = np.column_stack((Y_all, hs_all, Yc_u_all))
+        # Variables actually mixed (can include extra scalars such as Yc_u)
+        phi_old = np.column_stack((Y_all, hs_all, Yc_u_all))
 
-    #     # --------------------------------------------------------------
-    #     # Compute Euclidean MST
-    #     # --------------------------------------------------------------
-    #     distances = squareform(pdist(phi_tree))
-    #     mst = minimum_spanning_tree(distances)
-    #     mst = mst.toarray()
+        # --------------------------------------------------------------
+        # Compute Euclidean MST
+        # --------------------------------------------------------------
+        distances = squareform(pdist(phi_tree))
+        mst = minimum_spanning_tree(distances)
+        mst = mst.toarray()
 
-    #     # ------------------------------------------------------------------
-    #     # Extract tree edges
-    #     # ------------------------------------------------------------------
-    #     edges = np.transpose(np.nonzero(mst))
+        # ------------------------------------------------------------------
+        # Extract tree edges
+        # ------------------------------------------------------------------
+        edges = np.transpose(np.nonzero(mst))
 
-    #     # ------------------------------------------------------------------
-    #     # Conservative pairwise mixing along each edge
-    #     # ------------------------------------------------------------------
+        # ------------------------------------------------------------------
+        # Conservative pairwise mixing along each edge
+        # ------------------------------------------------------------------
 
-    #     mixing_coeff = self.dt[self.iteration] / self.mixing_time
-        
-    #     # Stability safeguard (prevents overshooting on a single edge)
-    #     mixing_coeff = min(mixing_coeff, 0.5)
+        mixing_coeff = self.dt[self.iteration] / self.mixing_time
 
-    #     phi_new = phi_old.copy()
+        # Stability safeguard (prevents overshooting on a single edge)
+        mixing_coeff = min(mixing_coeff, 0.5)
 
-    #     # Randomize edge order
-    #     rng = np.random.default_rng(seed=42)
-    #     edge_order = rng.permutation(len(edges))
+        phi_new = phi_old.copy()
 
-    #     for idx in edge_order:
-            
-    #         i, j = edges[idx]
-    #         delta = phi_new[i] - phi_new[j]
+        # Randomize edge order
+        rng = np.random.default_rng(seed=42)
+        edge_order = rng.permutation(len(edges))
 
-    #         phi_new[i] -= mixing_coeff * delta
-    #         phi_new[j] += mixing_coeff * delta
+        for idx in edge_order:
 
-    #     # --------------------------------------------------------------
-    #     # Write back particle states
-    #     # --------------------------------------------------------------
-    #     for k, p in enumerate(active_particles):
+            i, j = edges[idx]
+            delta = phi_new[i] - phi_new[j]
 
-    #         p.Y = phi_new[k, :self.nb_species]
-    #         p.hs = phi_new[k, self.nb_species]
-    #         p.Yc_u = phi_new[k, self.nb_species + 1]
+            phi_new[i] -= mixing_coeff * delta
+            phi_new[j] += mixing_coeff * delta
 
-    #         # For safety
-    #         # p.Y = np.clip(p.Y, 0.0, None)
-    #         # p.Y /= p.Y.sum() + 1e-30
+        # --------------------------------------------------------------
+        # Write back particle states
+        # --------------------------------------------------------------
+        for k, p in enumerate(active_particles):
 
-    #         p.state[0] = p.hs
-    #         p.state[2:] = p.Y
+            p.Y = phi_new[k, :self.nb_species]
+            p.hs = phi_new[k, self.nb_species]
+            p.Yc_u = phi_new[k, self.nb_species + 1]
 
-    #         p.update_ThermoStates(self)
+            # For safety
+            # p.Y = np.clip(p.Y, 0.0, None)
+            # p.Y /= p.Y.sum() + 1e-30
 
-    #         # EMST requires recomputation of equilibrium progress variable
-    #         p.recompute_Yc_eq = True
+            p.state[0] = p.hs
+            p.state[2:] = p.Y
+
+            p.update_ThermoStates(self)
+
+            # EMST requires recomputation of equilibrium progress variable
+            p.recompute_Yc_eq = True
 
 
 
@@ -1137,7 +1137,7 @@ class ParticlesCloud(object):
 
         # Store initial solution in h5 file
         f = h5py.File(f"{self.results_folder}/{self.solution_file}","a")
-        grp = f.create_group(f"ITERATION_{self.iteration:05d}")    # Group created because this function is called first
+        grp = f.create_group(f"ITERATION_{self._current_write_idx:05d}")    # Group created because this function is called first
         dset = grp.create_dataset("all_states",data=arr)
         dset.attrs["cols"] = self.cols_all_states
         f.close()
@@ -1163,20 +1163,6 @@ class ParticlesCloud(object):
         grp = f.get(f"ITERATION_{self._current_write_idx:05d}")
         dset = grp.create_dataset(which_state,data=arr)
         dset.attrs["cols"] = cols
-
-        # Rollout: Y is the first chain step (chemistry-only, at rollout_dt), Y_multi the whole chain.
-        # Prog_var and HRR are not tracked along the chain (zeros); they are not used by the pipeline.
-        if which_state == "Y" and self.rollout_steps > 0:
-            arr_multi = np.zeros((nb_active, self.rollout_steps, len(cols)))
-            for i, part in enumerate(active_particles):
-                arr_multi[i, :, 0:2 + part.nb_species] = part.chain
-            arr[:, 0:2 + self.nb_species] = arr_multi[:, 0, 0:2 + self.nb_species]
-            del grp["Y"]
-            dset = grp.create_dataset("Y", data=arr)
-            dset.attrs["cols"] = cols
-            dset_m = grp.create_dataset("Y_multi", data=arr_multi)
-            dset_m.attrs["cols"] = cols
-            dset_m.attrs["dt"] = self.rollout_dt
         f.close()
 
 # =============================================================================

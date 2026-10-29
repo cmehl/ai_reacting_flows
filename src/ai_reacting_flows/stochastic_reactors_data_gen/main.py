@@ -36,7 +36,7 @@ def generate_stochastic_database(comm : 'MPI.Comm'):
 
     if rank==0:
 
-        if (data_gen_parameters["mixing_model"] not in ["CURL","CURL_MODIFIED","CURL_MODIFIED_DD","EMST"]):
+        if (data_gen_parameters["mixing_model"] not in ["CURL","CURL_MODIFIED","CURL_MODIFIED_DD","EMST","EMST_SIMPLE"]):
             # Mixing model choice
             try:
                 raise ValueError("Input error.")
@@ -47,6 +47,7 @@ def generate_stochastic_database(comm : 'MPI.Comm'):
                 print("     - CURL_MODIFIED")
                 print("     - CURL_MODIFIED_DD")
                 print("     - EMST")
+                print("     - EMST_SIMPLE")
                 print("")
                 raise
 

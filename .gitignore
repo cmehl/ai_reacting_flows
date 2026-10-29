@@ -149,10 +149,12 @@ dmypy.json
 /articles/*/*.xlsx
 /articles/*/plots_*
 /graphify-out
+
+
 # VSCode
 *.code-workspace
 .vscode
-
+.claude
 testing*
 
 pip_download/

@@ -17,12 +17,12 @@ import torch.nn as nn
 import torch.optim as optim
 
 import ai_reacting_flows.tools.utilities as utils
-from ai_reacting_flows.ann_model_generation.NN_models import MLPModel, DeepONet, DeepONet_shift, PerSpeciesMLP, PerSpeciesMLPSized, ReactionGraphGNN
+from ai_reacting_flows.ann_model_generation.NN_models import MLPModel, DeepONet, DeepONet_shift, PerSpeciesMLP, PerSpeciesMLPSized
 
 torch.set_default_dtype(torch.float64)
 
 activation_functions = {"relu": nn.ReLU, "gelu" : nn.GELU, "tanh" : nn.Tanh, "id" : nn.Identity}
-model_type = {"MLP": MLPModel, "DeepONet": DeepONet, "DeepONetShift": DeepONet_shift, "PerSpeciesMLP": PerSpeciesMLP, "PerSpeciesMLPSized": PerSpeciesMLPSized, "GNN": ReactionGraphGNN}
+model_type = {"MLP": MLPModel, "DeepONet": DeepONet, "DeepONetShift": DeepONet_shift, "PerSpeciesMLP": PerSpeciesMLP, "PerSpeciesMLPSized": PerSpeciesMLPSized}
 
 class NN_manager():
     def __init__(self, run_folder: str | None = None):
@@ -180,21 +180,6 @@ class NN_manager():
         gas = ct.Solution(self.mechanism)
         self.A_element = utils.get_molar_mass_atomic_matrix(gas.species_names, self.fuel, not self.remove_N2)
 
-        # Reaction-graph adjacency for ReactionGraphGNN (built lazily, only
-        # if a cluster actually uses it -- adjacency row/column order must
-        # match Y_cols_all, and the GNN forward pass assumes X_cols_all is
-        # [Temperature, <species in the same order as Y_cols_all>].
-        self.reaction_adjacency = None
-        if "GNN" in self.networks_types:
-            y_species = [str(c)[:-2] if str(c).endswith("_Y") else str(c) for c in self.Y_cols_all]
-            x_species = [str(c)[:-2] if str(c).endswith("_X") else str(c) for c in self.X_cols_all[1:]]
-            if x_species != y_species:
-                raise ValueError(
-                    "GNN network type requires X_cols_all species (after Temperature) to be "
-                    f"in the same order as Y_cols_all; got X species={x_species}, Y species={y_species}"
-                )
-            self.reaction_adjacency = utils.build_reaction_adjacency(ct.Solution(self.mechanism), y_species)
-
         # Training stats
         if self.new_model_folder:
             os.mkdir(self.directory + "/training")
@@ -315,16 +300,7 @@ class NN_manager():
                 nb_units_in_layers_list["shift"].insert(0,n_in)
                 nb_units_in_layers_list["shift"].append(1)
                 model = model_type[network_type](self.device, nb_units_in_layers_list, layers_type, layers_activation_list, n_out, n_neurons)
-            elif (network_type == "GNN"):
-                assert self.reaction_adjacency is not None
-                assert self.reaction_adjacency.shape[0] == n_out, (
-                    f"GNN: adjacency size ({self.reaction_adjacency.shape[0]}) does not match n_out ({n_out})"
-                )
-                hidden_layers = copy.deepcopy(network_parameters["nb_units_in_layers_list"])
-                layers_activation_list = [activation_functions[str(act).lower()] for act in network_parameters["layers_activation_list"]]
-
-                model = model_type[network_type](self.device, hidden_layers, layers_activation_list, self.reaction_adjacency)
-
+        
         return model
     
 
@@ -523,11 +499,10 @@ class NN_manager():
 
         for epoch in range(n_epochs):
 
-            # Shuffling training data before each epoch
+            # Shuffling training data before each epoch: draw a new permutation and gather
+            # each batch through it, instead of materialising a permuted copy of the whole
+            # training set (that copy doubled peak GPU memory and OOM-ed on ~170M-row sets).
             perm = torch.randperm(len(X_train), device=self.device)
-            X_train, Y_train = X_train[perm], Y_train[perm]
-            if self.rollout:
-                Ymulti_train, Tmulti_train = Ymulti_train[perm], Tmulti_train[perm]
 
             # Training parameters
             epoch_loss = 0.0
@@ -536,8 +511,9 @@ class NN_manager():
                 epoch_loss_per_species = np.zeros(n_out_species)
             for i in range(0, len(X_train), self.batch_size):
 
-                Xbatch = X_train[i:i+self.batch_size]
-                ybatch = Y_train[i:i+self.batch_size]
+                bidx = perm[i:i+self.batch_size]
+                Xbatch = X_train[bidx]
+                ybatch = Y_train[bidx]
 
                 if self.rollout:
                     # Autoregressive unroll over nb_steps: predict, reconstruct
@@ -549,8 +525,8 @@ class NN_manager():
                     # whole chain. Loss is the mean over steps; step 1's
                     # prediction is what per-species tracking below uses, so
                     # its semantics stay comparable to the non-rollout path.
-                    Ymulti_batch = Ymulti_train[i:i+self.batch_size]
-                    Tmulti_batch = Tmulti_train[i:i+self.batch_size]
+                    Ymulti_batch = Ymulti_train[bidx]
+                    Tmulti_batch = Tmulti_train[bidx]
 
                     current_X = Xbatch
                     loss = 0.0
@@ -602,14 +578,17 @@ class NN_manager():
                 model.eval()  # evaluation mode
                 with torch.no_grad():
 
-                    # VALIDATION LOSS
-                    y_val_pred = model(X_val)
-                    val_loss = loss_fn(y_val_pred, Y_val)
-
-                    if per_species_model:
-                        val_loss_per_species_list[epoch // val_every] = (
-                            ((y_val_pred - Y_val) ** 2).mean(dim=0).detach().cpu().numpy()
-                        )
+                    # Validation is evaluated in chunks of VAL_CHUNK rows and accumulated (loss weighted by
+                    # chunk size, per-species squared error, sum-of-Yk and element-conservation mean/min/max):
+                    # a single full-set forward pass (and its full-size intermediates) OOM-ed the GPU on
+                    # ~57M-row validation sets. Results are the same as the one-shot version up to fp rounding.
+                    VAL_CHUNK = int(os.environ.get("ARF_VAL_CHUNK", 1_000_000))
+                    n_val = X_val.shape[0]
+                    n_el = A_element.shape[0]
+                    val_loss_sum = 0.0
+                    sq_err_sum = torch.zeros(n_out_species, dtype=torch.float64, device=self.device) if per_species_model else None
+                    sum_yk_tot, sum_yk_min, sum_yk_max = 0.0, np.inf, -np.inf
+                    dye_tot, dye_min, dye_max = np.zeros(n_el), np.full(n_el, np.inf), np.full(n_el, -np.inf)
 
                     # Inverse-scale the model's input state (species part of X),
                     # excluding the time-step column when dt_var is used. We apply
@@ -617,65 +596,80 @@ class NN_manager():
                     # database_processing.log_excluded_species.
                     if self.dt_var:  # Time needs to be removed from X here
                         cols_x_slice = self.X_cols_all[1:-1]
-                        X_val_species = X_val[:,1:-1]
                         Xscaler_mean_sp, Xscaler_std_sp = Xscaler_mean[1:-1], Xscaler_std[1:-1]
                     else:
                         cols_x_slice = self.X_cols_all[1:]
-                        X_val_species = X_val[:,1:]
                         Xscaler_mean_sp, Xscaler_std_sp = Xscaler_mean[1:], Xscaler_std[1:]
 
-                    yval_in = self._inverse_scale(X_val_species, Xscaler_mean_sp, Xscaler_std_sp, self.log_transform_X, cols=cols_x_slice)
+                    for c0 in range(0, n_val, VAL_CHUNK):
+                        X_val_c = X_val[c0:c0 + VAL_CHUNK]
+                        Y_val_c = Y_val[c0:c0 + VAL_CHUNK]
+                        n_c = X_val_c.shape[0]
 
-                    # SUM OF MASS FRACTION
-                    if self.output_omegas and self.log_transform_Y > 0:
-                        # When output_omegas + log/BCT-transformed Y, database_processing
-                        # builds the target as a *transformed-space* difference
-                        # (log(Y)-log(X) or BCT(Y)-BCT(X)), not a physical delta. It must be
-                        # recombined in transformed space BEFORE exponentiating/BCT-inverting
-                        # (same approach as NN_testing.py/model_testing.py "FIX PB3"). Naively
-                        # calling _inverse_scale on the omega (which exponentiates first) and
-                        # then adding physical X, as this used to do, computes X + Y/X instead
-                        # of X * (Y/X), producing wildly non-physical states for trace species.
-                        x_transformed = Xscaler_mean_sp + (Xscaler_std_sp + 1e-7) * X_val_species
-                        omega_transformed = Yscaler_mean + (Yscaler_std + 1e-7) * y_val_pred
-                        combined = x_transformed + omega_transformed
+                        # VALIDATION LOSS
+                        y_val_pred = model(X_val_c)
+                        val_loss_sum += loss_fn(y_val_pred, Y_val_c).item() * n_c
+                        if per_species_model:
+                            sq_err_sum += ((y_val_pred - Y_val_c) ** 2).sum(dim=0)
 
-                        yk_abs = combined.clone()
-                        for j, name in enumerate(self.Y_cols_all):
-                            base = str(name)
-                            if base.endswith('_Y'):
-                                base = base[:-2]
-                            if base in self.log_excluded_species:
-                                continue
-                            if self.log_transform_Y == 1:
-                                yk_abs[:, j] = torch.exp(combined[:, j])
-                            elif self.log_transform_Y == 2:
-                                yk_abs[:, j] = (combined[:, j] * self.lambda_bct + 1.0) ** (1.0 / self.lambda_bct)
-                    else:
-                        # Inverse scale done per species to stay consistent with
-                        # database_processing (some species may be kept linear).
-                        yk = self._inverse_scale(y_val_pred, Yscaler_mean, Yscaler_std, self.log_transform_Y, cols=self.Y_cols_all)
+                        X_val_species = X_val_c[:, 1:-1] if self.dt_var else X_val_c[:, 1:]
+                        yval_in = self._inverse_scale(X_val_species, Xscaler_mean_sp, Xscaler_std_sp, self.log_transform_X, cols=cols_x_slice)
 
-                        if self.output_omegas:
-                            yk_abs = yval_in + yk
+                        # SUM OF MASS FRACTION
+                        if self.output_omegas and self.log_transform_Y > 0:
+                            # When output_omegas + log/BCT-transformed Y, database_processing
+                            # builds the target as a *transformed-space* difference
+                            # (log(Y)-log(X) or BCT(Y)-BCT(X)), not a physical delta. It must be
+                            # recombined in transformed space BEFORE exponentiating/BCT-inverting
+                            # (same approach as NN_testing.py/model_testing.py "FIX PB3").
+                            x_transformed = Xscaler_mean_sp + (Xscaler_std_sp + 1e-7) * X_val_species
+                            omega_transformed = Yscaler_mean + (Yscaler_std + 1e-7) * y_val_pred
+                            combined = x_transformed + omega_transformed
+
+                            yk_abs = combined.clone()
+                            for j, name in enumerate(self.Y_cols_all):
+                                base = str(name)
+                                if base.endswith('_Y'):
+                                    base = base[:-2]
+                                if base in self.log_excluded_species:
+                                    continue
+                                if self.log_transform_Y == 1:
+                                    yk_abs[:, j] = torch.exp(combined[:, j])
+                                elif self.log_transform_Y == 2:
+                                    yk_abs[:, j] = (combined[:, j] * self.lambda_bct + 1.0) ** (1.0 / self.lambda_bct)
                         else:
-                            yk_abs = yk
+                            # Inverse scale done per species to stay consistent with
+                            # database_processing (some species may be kept linear).
+                            yk = self._inverse_scale(y_val_pred, Yscaler_mean, Yscaler_std, self.log_transform_Y, cols=self.Y_cols_all)
 
-                    sum_yk = yk_abs.sum(axis=1)
-                    sum_yk = sum_yk.detach().cpu().numpy()
+                            if self.output_omegas:
+                                yk_abs = yval_in + yk
+                            else:
+                                yk_abs = yk
+
+                        sum_yk = yk_abs.sum(axis=1).detach().cpu().numpy()
+                        sum_yk_tot += sum_yk.sum()
+                        sum_yk_min = min(sum_yk_min, sum_yk.min())
+                        sum_yk_max = max(sum_yk_max, sum_yk.max())
+
+                        # ELEMENTS CONSERVATION
+                        ye_in = torch.matmul(A_element, torch.transpose(yval_in, 0, 1))
+                        ye_out = torch.matmul(A_element, torch.transpose(yk_abs, 0, 1))
+                        delta_ye = ((ye_out - ye_in)/(ye_in+1e-10)).detach().cpu().numpy()
+                        dye_tot += delta_ye.sum(axis=1)
+                        dye_min = np.minimum(dye_min, delta_ye.min(axis=1))
+                        dye_max = np.maximum(dye_max, delta_ye.max(axis=1))
+
+                    val_loss = torch.tensor(val_loss_sum / n_val, dtype=torch.float64)
+                    if per_species_model:
+                        val_loss_per_species_list[epoch // val_every] = (sq_err_sum / n_val).cpu().numpy()
                     idx = epoch // val_every
-                    stats_sum_yk[idx,0] = sum_yk.mean() 
-                    stats_sum_yk[idx,1] = sum_yk.min()
-                    stats_sum_yk[idx,2] = sum_yk.max()
-
-                    # ELEMENTS CONSERVATION
-                    ye_in = torch.matmul(A_element, torch.transpose(yval_in, 0, 1))
-                    ye_out = torch.matmul(A_element, torch.transpose(yk_abs, 0, 1))
-                    delta_ye = (ye_out - ye_in)/(ye_in+1e-10)
-                    delta_ye = delta_ye.detach().cpu().numpy()
-                    stats_A_elements[idx, :, 0] = delta_ye.mean(axis=1)
-                    stats_A_elements[idx, :, 1] = delta_ye.min(axis=1)
-                    stats_A_elements[idx, :, 2] = delta_ye.max(axis=1)
+                    stats_sum_yk[idx,0] = sum_yk_tot / n_val
+                    stats_sum_yk[idx,1] = sum_yk_min
+                    stats_sum_yk[idx,2] = sum_yk_max
+                    stats_A_elements[idx, :, 0] = dye_tot / n_val
+                    stats_A_elements[idx, :, 1] = dye_min
+                    stats_A_elements[idx, :, 2] = dye_max
 
                 model.train()   # Back to training mode
 
@@ -970,18 +964,6 @@ class NN_manager():
         expected dense layer formats.
         """
         model.eval()
-
-        if isinstance(model, ReactionGraphGNN):
-            # Graph-conv layers don't fit the flat dense-layer 'kernel:0'/
-            # 'bias:0' layout this export targets (that layout is consumed
-            # by the C++/CONVERGE ANN chemistry inference, which has no
-            # graph-conv support yet). The .pth checkpoint (saved separately
-            # right before this call) is still the source of truth for
-            # offline testing (NN_testing.py, cfd_snapshot_testing.py both
-            # load it directly via torch.load), so skip rather than write a
-            # misleading/broken .h5.
-            self._log(f"SKIP h5 export for GNN model (not yet supported by the CFD inference format): {h5_path}")
-            return
 
         def save_module(group, module, module_name, parent_activation_map):
             """
