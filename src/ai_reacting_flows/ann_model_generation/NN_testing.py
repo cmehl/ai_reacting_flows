@@ -1064,11 +1064,9 @@ class NNTesting():
         self._Y_val = []
 
         with h5py.File(f"{self.inference.dataset_path:s}/training_data.h5", 'r') as h5file_r:
-            # Infer number of clusters from file (robust to future changes)
-            top_level_groups = [k for k in h5file_r.keys() if isinstance(h5file_r[k], h5py.Group)]
-
-            for grp_name in sorted(top_level_groups):
-                grp = h5file_r[grp_name]
+            # In the order of the clusters (a sort of the names would put CLUSTER_10 before CLUSTER_2)
+            for i_cluster in range(self.inference.nb_clusters):
+                grp = h5file_r[f"CLUSTER_{i_cluster}"]
                 X_val = grp['X_val'][:]
                 Y_val = grp['Y_val'][:]
                 self._X_val.append(X_val)
