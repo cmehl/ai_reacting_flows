@@ -10,6 +10,7 @@ yk_renormalization: true               # Correct ANN mass fractions to conserve 
 hybrid_ann_cvode: false                # CVODE instead of ANN when mass is not conserved (sum of Y_k)
 hybrid_ann_cvode_tol: 5.0e-05          # Tolerance on |sum(Y_k) - 1| [-]
 device: cpu                            # Device of the networks: cpu or cuda (null: cuda if available, else cpu)
+torch_threads: 1                       # CPU threads of torch, 1 as one MPI rank per core in CFD (null: torch default)
 
 # 0D constant-pressure ignition of fuel/air
 0D_ignition:

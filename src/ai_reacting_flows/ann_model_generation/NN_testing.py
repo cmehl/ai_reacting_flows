@@ -85,7 +85,7 @@ class NNTesting():
     def __init__(self, testing_parameters):
         """testing_parameters: content of nn_testing.yaml (see README). Only models_folder, spec_to_plot,
         yk_renormalization, hybrid_ann_cvode and hybrid_ann_cvode_tol are needed to run single cases
-        (device optional: cuda if available, else cpu)."""
+        (device optional: cuda if available, else cpu; torch_threads optional: torch default)."""
 
         self.testing_parameters = testing_parameters
 
@@ -116,6 +116,10 @@ class NNTesting():
 
         # ANN chemistry: networks, scalers, clustering and processing parameters (shared with the stochastic reactors)
         self.inference = NNInference(self.models_folder, self.run_folder, testing_parameters.get("device"))
+
+        # Number of CPU threads of torch (1 as one MPI rank per core in a CFD code), torch default if not given
+        if testing_parameters.get("torch_threads") is not None:
+            torch.set_num_threads(testing_parameters["torch_threads"])
 
         # Chemistry of the model, used by the reference (CVODE) computations
         self.fuel = self.inference.fuel
@@ -831,7 +835,7 @@ class NNTesting():
 
         table = pd.DataFrame(rows)
         table.to_csv(os.path.join(self.output_folder, "speedup_benchmark.csv"), index=False)
-        print(f"\n>> Speed-up benchmark ({inf.device}):\n{table.to_string(index=False)}")
+        print(f"\n>> Speed-up benchmark ({inf.device}, {torch.get_num_threads()} torch threads):\n{table.to_string(index=False)}")
 
         return table
 

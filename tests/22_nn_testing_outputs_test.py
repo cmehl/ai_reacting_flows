@@ -10,7 +10,7 @@ Check:
   it is removed from the network species (the pyrolysis plots used to fail in this case).
 - series_cases gives all combinations of the parameters given as lists, and with a conditions file
   (sim_test_*.csv of a flamelets database) one case per row of the file and per value of the other lists.
-- run_testing (sections of nn_testing.yaml, networks on CPU) runs the selected series, including 1D premixed and
+- run_testing (sections of nn_testing.yaml, networks on CPU with 1 thread) runs the selected series, including 1D premixed and
   diffusion flames, and writes their summaries (errors of each case, mean); evaluate_on_validation_set
   statistics and plots; the 0D simulation errors E_sim per case and per dt in CSV tables, with the
   training standard deviations as normalization, the contribution of each variable and the speed-up,
@@ -23,6 +23,7 @@ import h5py
 import numpy as np
 import pandas as pd
 import oyaml as yaml
+import torch
 from ai_reacting_flows.ann_model_generation.NN_manager import NN_manager
 from ai_reacting_flows.ann_model_generation.NN_testing import NNTesting, series_cases, read_conditions_file
 import ai_reacting_flows.ann_model_generation.NN_testing_metrics as metrics
@@ -120,8 +121,10 @@ def test_nn_testing_outputs(tmp_path):
             assert os.path.isfile(os.path.join(output, folder, f"{name}.png"))
 
     # Series of nn_testing.yaml
-    test = NNTesting({**testing_parameters, **series_parameters, "device": "cpu"})
-    assert test.inference.device.type == "cpu"
+    torch_threads = torch.get_num_threads()
+    test = NNTesting({**testing_parameters, **series_parameters, "device": "cpu", "torch_threads": 1})
+    assert test.inference.device.type == "cpu" and torch.get_num_threads() == 1
+    torch.set_num_threads(torch_threads)   # Back to the default for the other tests
     summaries = test.run_testing()
 
     assert set(summaries) == {"0D_ignition", "1D_premixed", "1D_diffusion"}
