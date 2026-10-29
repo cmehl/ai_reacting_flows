@@ -201,7 +201,7 @@ The speed-up benchmark (`speedup_benchmark`) draws states from the validation se
 
 Single cases can also be run from Python (`test_0D_ignition`, `test_0D_pyrolysis`, `test_1D_premixed`, `test_1D_diffusion`), as in `notebooks/ann_model_testing.py`.
 
-`NNTesting` (`NN_testing.py`) runs the reference and ANN cases; the error metrics are in `NN_testing_metrics.py` and the plots in `NN_testing_plots.py`. The ANN chemistry step itself (clustering, transforms, networks) is in `NN_inference.py` (`NNInference`), shared with the stochastic reactors.
+`NNTesting` (`NN_testing.py`) runs the reference and ANN cases; the error metrics are in `NN_testing_metrics.py` and the plots in `NN_testing_plots.py`. The ANN chemistry step itself (clustering, transforms, networks) is in `NN_inference.py` (`NNInference`), shared with the stochastic reactors. The new temperature follows from enthalpy conservation, with the species enthalpies and heat capacities computed from the NASA polynomials of the mechanism, vectorized over the states (`utilities.species_h_cp`).
 
 The stochastic reactors can also be run with the ANN instead of CVODE for the chemistry (`ML_inference_flag: true` in `dtb_params.yaml`), to test the networks in mixing conditions. The model is read from `MODELS/<ML_model_folder>` in the case folder; use another `results_folder_suffix` than the database used for training, as the results folder is overwritten.
 

@@ -118,6 +118,9 @@ class NNInference():
         self.atomic_array = utils.get_atomic_array(self.gas)
         self.W_atoms = utils.get_atomic_weights()
 
+        # NASA polynomials of the species (T_mid, a_low, a_high), for the temperature update of advance
+        self.nasa7 = utils.get_nasa7_coefficients(self.gas)
+
 #-----------------------------------------------------------------------
 #   LOADING
 #-----------------------------------------------------------------------
@@ -222,7 +225,8 @@ class NNInference():
         """Advance n states by dt with the networks of their clusters, at constant pressure.
 
         T: temperatures [K] (n), Y: mass fractions [-] (n, n_species) of all species of the mechanism,
-        P: pressure [Pa] (scalar or n), dt: time step [s] (scalar or n), clusters: clusters (n)
+        P: pressure [Pa] (scalar or n, not used: ideal gas enthalpies depend only on T),
+        dt: time step [s] (scalar or n), clusters: clusters (n)
         from attribute_clusters, yk_renormalization: correct Y to conserve the elements.
 
         Returns T_new [K] (n), Y_new [-] (n, n_species) and the sum of the predicted mass fractions
@@ -282,10 +286,10 @@ class NNInference():
             Y_new = self.enforce_elements_balance(Y, Y_new)
 
         # Deducing T from energy conservation: sum_k h_k Y_k constant, with cp [J/kg/K] and h_k [J/kg] at t
-        states = ct.SolutionArray(self.gas, n)
-        states.TPY = T, P, Y
-        h_k = states.partial_molar_enthalpies / self.gas.molecular_weights
-        T_new = T - np.sum(h_k * (Y_new - Y), axis=1) / states.cp_mass
+        # (NASA polynomials, vectorized: a Cantera SolutionArray loops over the states)
+        h_k, cp_k = utils.species_h_cp(T, self.gas.molecular_weights, *self.nasa7)
+        cp = np.sum(cp_k * Y, axis=1)
+        T_new = T - np.sum(h_k * (Y_new - Y), axis=1) / cp
 
         return T_new, Y_new, sum_Yk
 

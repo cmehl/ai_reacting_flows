@@ -202,6 +202,53 @@ def compute_X_element(gas, Yk):
 
     return X_el
 
+
+def get_nasa7_coefficients(gas):
+    """NASA 7-coefficient polynomials of the species of the Cantera Solution gas (2 temperature ranges):
+    T_mid [K] (n_species), a_low and a_high (n_species, 7), coefficients below and above T_mid.
+    Only species with NASA 7-coefficient polynomials (NasaPoly2) are handled."""
+
+    for spec in gas.species():
+        if not isinstance(spec.thermo, ct.NasaPoly2):
+            raise ValueError(f"Species {spec.name}: only NASA 7-coefficient polynomials are handled")
+
+    # Cantera order of coefficients: T_mid, 7 coefficients above T_mid, 7 coefficients below T_mid
+    coeffs = np.array([spec.thermo.coeffs for spec in gas.species()])
+
+    return coeffs[:, 0], coeffs[:, 8:15], coeffs[:, 1:8]
+
+
+def species_h_cp(T, W_k, T_mid, a_low, a_high):
+    """Mass enthalpies h_k [J/kg] and heat capacities cp_k [J/kg/K] (n, n_species) of the species at
+    temperatures T [K] (n), from their NASA 7-coefficient polynomials (see get_nasa7_coefficients), with
+    W_k: molar masses [kg/kmol] (n_species). Ideal gas: they do not depend on pressure. Vectorized
+    equivalent of the Cantera properties of a SolutionArray, which loops over the states.
+
+        cp_k / r_k = a0 + a1 T + a2 T^2 + a3 T^3 + a4 T^4
+        h_k / r_k = a0 T + a1 T^2/2 + a2 T^3/3 + a3 T^4/4 + a4 T^5/5 + a5,     r_k = R / W_k
+
+    (McBride, Gordon & Reno, NASA TM-4513, 1993, https://ntrs.nasa.gov/citations/19940013151)
+    """
+
+    T = np.asarray(T, dtype=float)[:, None]
+    r_k = ct.gas_constant / W_k
+
+    # Polynomials of one temperature range, for all states and species
+    def polynomials(a):
+        cp = a[:, 0] + T * (a[:, 1] + T * (a[:, 2] + T * (a[:, 3] + T * a[:, 4])))
+        h = T * (a[:, 0] + T * (a[:, 1] / 2.0 + T * (a[:, 2] / 3.0 + T * (a[:, 3] / 4.0 + T * a[:, 4] / 5.0)))) + a[:, 5]
+        return cp, h
+
+    cp_low, h_low = polynomials(a_low)
+    cp_high, h_high = polynomials(a_high)
+
+    # Range of each species at each temperature (as in Cantera: low range up to T_mid included)
+    high = T > T_mid
+    h_k = r_k * np.where(high, h_high, h_low)
+    cp_k = r_k * np.where(high, cp_high, cp_low)
+
+    return h_k, cp_k
+
 #==============================================================================
 # CANONICAL FLAMES COMPUTATION
 # =============================================================================
