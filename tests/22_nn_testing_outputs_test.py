@@ -10,7 +10,6 @@ Check:
   it is removed from the network species (the pyrolysis plots used to fail in this case).
 - series_cases gives all combinations of the parameters given as lists, and with a conditions file
   (sim_test_*.csv of a flamelets database) one case per row of the file and per value of the other lists.
-- compute_ann_errors gives one error per network species and the error on T.
 - run_testing (sections of nn_testing.yaml) runs the selected series, including 1D premixed and
   diffusion flames, and writes their summaries (errors of each case, mean); evaluate_on_validation_set
   statistics and plots; the 0D simulation errors E_sim per case and per dt in CSV tables, with the
@@ -189,12 +188,6 @@ def test_nn_testing_outputs(tmp_path):
     # Errors per cluster: points of the fuel side below T_threshold are not advanced by a network (cluster -1)
     by_cluster = pd.read_csv(os.path.join(output, "simulation_errors_1D_diffusion_by_cluster.csv"))
     assert -1 in list(by_cluster["cluster"]) and 0 in list(by_cluster["cluster"])
-
-    # Errors of one ANN step: one value per network species (terms of the MSE loss), and on T [%]
-    test.gas.TPX = 1200.0, pressure, "H2:0.6, O2:1.0, N2:3.76"
-    T, Y = test.gas.T, test.gas.Y
-    err_Yk, err_T = test.compute_ann_errors(T, Y, pressure, dt, Yc_u=0.0)   # No H2O in the fresh mixture
-    assert err_Yk.shape == (test.nb_species_ANN,) and np.all(np.isfinite(err_Yk)) and err_T >= 0.0
 
     # Validation set: statistics per output and scatter plot per cluster
     stats = test.evaluate_on_validation_set()

@@ -1118,53 +1118,6 @@ class NNTesting():
 #   ANALYZING ERRORS
 #-----------------------------------------------------------------------
 
-    def compute_ann_errors(self, T, Y, pressure, dt, Yc_u):
-        """Errors of one ANN step of dt [s] from the state T [K], Y [-] (all species) at pressure [Pa],
-        compared to CVODE. Yc_u: progress variable species mass fraction of the unburnt mixture [-]
-        (progress variable for clustering).
-
-        Returns err_Yk: squared differences of the scaled network outputs per network species [-], i.e.
-        the terms of the MSE training loss (outputs as built by LearningDatabase, see
-        transforms.network_target), and err_T: relative error on the temperature [%].
-        """
-
-        # Assign to cluster from the progress variable of the state
-        state = np.append(T, Y)
-        progvar = self.compute_progvar(state, pressure, Yc_u)
-        self.attribute_cluster(state, dt, progvar)
-
-        # Log the parameters used in this error-computation call for
-        # debugging consistency with dtb_processing / NN_manager.
-        self._log(
-            "ERR_CLUSTER "
-            f"T={float(T):.6e}, "
-            f"dt={float(dt):.6e}, "
-            f"cluster={self.cluster}, "
-            f"clusterize_on={self.inference.clusterize_on}, "
-        )
-
-        # CVODE and ANN steps
-        T_cvode, Y_cvode = self.advance_state_CVODE(T, Y, pressure, dt)
-        T_ann, Y_ann = self.advance_state_NN(T, Y, pressure, dt)
-
-        # Network outputs of both steps (network species only), in the space of the training targets
-        inf = self.inference   # Short name for the transform parameters
-        cols_ANN = [self.spec_list_ref.index(spec) for spec in inf.spec_list_ANN]
-        y_cvode, y_ann = [transforms.network_target(Y[None, cols_ANN], np.reshape(Y_new, -1)[None, cols_ANN],
-                                                    inf.spec_list_ANN, inf.output_omegas, inf.log_transform_X,
-                                                    inf.log_transform_Y, inf.threshold, inf.lambda_bct,
-                                                    inf.log_excluded_species)[0]
-                          for Y_new in (Y_cvode, Y_ann)]
-
-        # Scaled with the output scaler of the cluster (the mean cancels in the difference)
-        std_Y = inf.Yscaler_list[self.cluster][:, 1]
-        err_Yk = ((y_ann - y_cvode) / std_Y) ** 2
-
-        err_T = 100.0 * np.abs((T_ann - T_cvode) / T_cvode)
-
-        return err_Yk, err_T
-
-
     def _training_std(self):
         """Standard deviations of [T, transformed Y_k of the network species] on the training inputs of all
         clusters, pooled from the scaler statistics of each cluster in training_data.h5."""

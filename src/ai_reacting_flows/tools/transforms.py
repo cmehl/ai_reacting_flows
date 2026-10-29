@@ -170,32 +170,6 @@ def output_to_Yk(x_species_t, y_t, species, output_omegas, log_transform_X, log_
     return inverse_species(y_t, species, log_transform_Y, lambda_bct, log_excluded_species)
 
 
-def network_target(Y_old, Y_new, species, output_omegas, log_transform_X, log_transform_Y, threshold, lambda_bct, log_excluded_species):
-    """Network output (unscaled) for a step from Y_old to Y_new [-] (n_points, n_species), as built in
-    LearningDatabase.process_database: the inverse of output_to_Yk.
-
-        - output_omegas, log_transform_Y > 0: f(Y(t+dt)) - f(Y(t)), with f the transform
-        - output_omegas, log_transform_Y = 0: Y(t+dt) - Y(t), with Y(t) clipped as in the input
-        - otherwise: f(Y(t+dt))
-    """
-
-    Y_new_t = transform_species(Y_new, species, log_transform_Y, threshold, lambda_bct, log_excluded_species)
-
-    # Differences of mass fractions, Y(t) clipped as in the input
-    if output_omegas and log_transform_X > 0 and log_transform_Y == 0:
-        Y_old_clipped = np.array(Y_old, dtype=float)
-        cols = transformed_columns(species, log_excluded_species)
-        Y_old_clipped[:, cols] = clip(Y_old_clipped[:, cols], log_transform_X, threshold)
-        return Y_new_t - Y_old_clipped
-
-    # Differences in transformed space (or of mass fractions without transform)
-    elif output_omegas:
-        return Y_new_t - transform_species(Y_old, species, log_transform_X, threshold, lambda_bct, log_excluded_species)
-
-    # Mass fractions at t+dt
-    return Y_new_t
-
-
 #==============================================================================
 # K-MEANS FEATURES
 #==============================================================================

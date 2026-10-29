@@ -5,8 +5,7 @@ Builds a small synthetic database where Y_k(t+dt) = c_k Y_k(t), processes it wit
 for every allowed combination of transforms (none, log, Box-Cox), outputs (differences or not)
 and with or without a species kept on a linear scale (log_excluded_species).
 Check: from the training data written by process_database, the shared functions of
-tools/transforms.py used at inference (inverse_species, output_to_Yk) give back Y_k(t) and Y_k(t+dt),
-and network_target gives back the network output from Y_k(t) and Y_k(t+dt).
+tools/transforms.py used at inference (inverse_species, output_to_Yk) give back Y_k(t) and Y_k(t+dt).
 The time step feature is log(dt), also without transform of the mass fractions.
 
 Independent of the other tests.
@@ -95,10 +94,6 @@ def test_transforms_consistency(tmp_path, log_transform_X, log_transform_Y, outp
 
     assert np.allclose(Yk_out, factors[:3] * Yk_in, rtol=1.0e-8, atol=1.0e-14)
 
-    # Network output rebuilt from Y_k(t) and Y_k(t+dt) (used by NNTesting.compute_ann_errors)
-    y_rebuilt = transforms.network_target(Yk_in, Yk_out, species_ann, output_omegas, log_transform_X, log_transform_Y,
-                                          1.0e-10, 0.2, log_excluded_species)
-    assert np.allclose(y_rebuilt, y_t, rtol=1.0e-8, atol=1.0e-12)
 
 
 def test_dt_always_logged():
