@@ -10,6 +10,8 @@ Check:
   of the current state (states advanced with CVODE through the hybrid mode, so that it ignites).
 - the 0D case stops at the first step where the CVODE temperature is within T_eq_tolerance of the
   equilibrium temperature, with the same number of ANN steps.
+- the cluster of each step is recorded (-1 for CVODE steps of the hybrid mode), and the ANN can be
+  continued after equilibrium (drifts of T and of the sum of Y_k).
 
 Independent of the other tests.
 """
@@ -67,6 +69,7 @@ def test_nn_testing_0D(tmp_path):
 
     assert progvar.max() > 0.9
     assert clusters == [0 if c < 0.5 else 1 for c in progvar]
+    assert np.all(result["clusters"] == -1)   # All steps done by CVODE (hybrid with negative tolerance)
 
     # Stop at CVODE equilibrium (max_simulation_time not reached), same number of ANN steps
     result = test.run_0D_ignition_case(phi=0.6, T0=1200.0, pressure=pressure, dt=dt, max_simulation_time=1.0, T_eq_tolerance=1.0)
@@ -76,3 +79,9 @@ def test_nn_testing_0D(tmp_path):
     assert abs(T_ref[-1] - result["T_eq"]) <= 1.0 and abs(T_ref[-2] - result["T_eq"]) > 1.0
     assert result["states_ann"].shape == result["states_ref"].shape
     assert len(T_ref) < 1.0 / dt
+
+    # Stability after equilibrium: ANN continued, drifts of T and sum(Y_k)
+    test.hybrid_ann_cvode = False
+    result = test.run_0D_ignition_case(phi=0.6, T0=1200.0, pressure=pressure, dt=dt, max_simulation_time=4 * dt, stability_factor=2.0)
+    assert result["T_drift"] >= 0.0 and result["sumYk_drift"] >= 0.0
+    assert len(result["clusters"]) == 4 and np.all(result["clusters"] >= 0)

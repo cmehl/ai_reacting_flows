@@ -14,7 +14,8 @@ Check:
 - run_testing (sections of nn_testing.yaml) runs the selected series, including 1D premixed and
   diffusion flames, and writes their summaries (errors of each case, mean); evaluate_on_validation_set
   statistics and plots; the 0D simulation errors E_sim per case and per dt in CSV tables, with the
-  training standard deviations as normalization, the contribution of each variable and the speed-up.
+  training standard deviations as normalization, the contribution of each variable and the speed-up,
+  the drifts after equilibrium, the errors per cluster, and the speed-up benchmark on batches.
 
 Independent of the other tests.
 """
@@ -35,13 +36,14 @@ testing_parameters = {"models_folder": "MODEL_TEST", "spec_to_plot": ["H2", "N2"
 # Series as in nn_testing.yaml: 2 ignition cases, 1 premixed flame, 1 diffusion flame, validation set
 series_parameters = {
     "0D_ignition": {"run": True, "plots": False, "phi": [0.5, 0.7], "T0": [1200.0], "pressure": [pressure],
-                    "dt": [dt], "max_simulation_time": 3 * dt, "T_eq_tolerance": 1.0},
+                    "dt": [dt], "max_simulation_time": 3 * dt, "T_eq_tolerance": 1.0, "stability_factor": 1.0},
     "0D_pyrolysis": {"run": False},
     "1D_premixed": {"run": True, "plots": False, "phi": [0.6], "T0": [300.0], "pressure": [pressure], "dt": [dt],
                     "T_threshold": 600.0, "x_window": None},
     "1D_diffusion": {"run": True, "plots": True, "strain": [1000.0], "T_ox": [1000.0], "T_fuel": [300.0],
                      "pressure": [pressure], "dt": [dt], "width": 0.02, "T_threshold": 600.0, "x_window": None},
     "validation_set": {"run": True, "max_points_scatter": 50000},
+    "speedup_benchmark": {"run": True, "batch_sizes": [1, 50], "dt": dt, "pressure": pressure, "nb_states_cvode": 5},
 }
 
 
@@ -113,8 +115,8 @@ def test_nn_testing_outputs(tmp_path):
     test.test_0D_pyrolysis(T0=1200.0, pressure=pressure, dt=dt, max_simulation_time=3 * dt, diluent="N2", X_diluent=0.5)
 
     output = "TESTING_MODEL_TEST"
-    for folder in [f"0D_ignition_phi#0.6_T0#1200.0_pressure#{pressure}_dt#{dt}_max_simulation_time#{3 * dt}_T_eq_tolerance#1.0",
-                   f"0D_pyrolysis_T0#1200.0_pressure#{pressure}_dt#{dt}_max_simulation_time#{3 * dt}_T_eq_tolerance#1.0_diluent#N2_X_diluent#0.5"]:
+    for folder in [f"0D_ignition_phi#0.6_T0#1200.0_pressure#{pressure}_dt#{dt}_max_simulation_time#{3 * dt}_T_eq_tolerance#1.0_stability_factor#0.0",
+                   f"0D_pyrolysis_T0#1200.0_pressure#{pressure}_dt#{dt}_max_simulation_time#{3 * dt}_T_eq_tolerance#1.0_stability_factor#0.0_diluent#N2_X_diluent#0.5"]:
         for name in ["Temperature", "YH2", "YN2", "SumYs", "AtomCons"]:
             assert os.path.isfile(os.path.join(output, folder, f"{name}.png"))
 
@@ -150,6 +152,18 @@ def test_nn_testing_outputs(tmp_path):
     assert np.isclose(by_dt["E_T"][0], table["E_T"].mean()) and np.isclose(by_dt["speedup_mean"][0], table["speedup"].mean())
     assert os.path.isfile(os.path.join(output, "simulation_errors_0D_ignition_by_variable.png"))
 
+    # Drifts after equilibrium (ANN continued for as many steps)
+    assert np.all(table["T_drift"] >= 0.0) and np.all(table["sumYk_drift"] >= 0.0)
+
+    # Errors per cluster: all the steps of the series, and their mean is the mean of E_sim (same number of steps per case)
+    by_cluster = pd.read_csv(os.path.join(output, "simulation_errors_0D_ignition_by_cluster.csv"))
+    assert by_cluster["nb_points"].sum() == table["equilibrium_steps"].sum()
+    assert np.isclose(np.average(by_cluster["E_mean"], weights=by_cluster["nb_points"]), table["E_sim"].mean())
+
+    # Speed-up of the ANN on batches of validation states
+    benchmark = pd.read_csv(os.path.join(output, "speedup_benchmark.csv"))
+    assert list(benchmark["batch_size"]) == [1, 50] and np.all(benchmark["speedup"] > 0.0)
+
     # Normalization: standard deviations of the training inputs (one cluster)
     with h5py.File("STOCH_DTB_TEST/dtb/training_data.h5", "r") as f:
         cols = [c.decode() if isinstance(c, bytes) else str(c) for c in f["CLUSTER_0/X_train"].attrs["cols"]]
@@ -171,6 +185,10 @@ def test_nn_testing_outputs(tmp_path):
     assert by_dt["nb_simulations"][0] == 1 and np.isclose(by_dt["E_mean"][0], errors["E_sim"])
     assert os.path.isfile(os.path.join(output, "simulation_errors_1D_diffusion_by_dt.png"))
     assert errors["speedup"] > 0.0 and "E_H2" in errors
+
+    # Errors per cluster: points of the fuel side below T_threshold are not advanced by a network (cluster -1)
+    by_cluster = pd.read_csv(os.path.join(output, "simulation_errors_1D_diffusion_by_cluster.csv"))
+    assert -1 in list(by_cluster["cluster"]) and 0 in list(by_cluster["cluster"])
 
     # Errors of one ANN step: one value per network species (terms of the MSE loss), and on T [%]
     test.gas.TPX = 1200.0, pressure, "H2:0.6, O2:1.0, N2:3.76"

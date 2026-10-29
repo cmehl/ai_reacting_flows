@@ -79,6 +79,13 @@ def pooled_mean_var(means, variances, counts):
     return mean, var
 
 
+def normalized_errors(x_ann, x_ref, std):
+    """Normalized absolute differences |x_ann - x_ref| / std [-] of each point and variable, (n_points, 1 + N_S)
+    (see normalized_errors_per_variable)."""
+
+    return np.abs(x_ann - x_ref) / std
+
+
 def normalized_errors_per_variable(x_ann, x_ref, std):
     """Error of a simulation for each variable: mean over the points of |x_ann - x_ref| / std, array (1 + N_S).
     The simulation error is their mean over the variables.
@@ -92,4 +99,4 @@ def normalized_errors_per_variable(x_ann, x_ref, std):
     (the means of the normalization cancel in the differences).
     """
 
-    return np.mean(np.abs(x_ann - x_ref) / std, axis=0)
+    return np.mean(normalized_errors(x_ann, x_ref, std), axis=0)

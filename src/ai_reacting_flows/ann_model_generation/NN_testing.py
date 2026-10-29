@@ -166,7 +166,7 @@ class NNTesting():
 #   0D TEST CASES
 #-----------------------------------------------------------------------
 
-    def _run_0D_case(self, T0, pressure, dt, max_simulation_time, T_eq_tolerance, gas_init_compo, reactor_type="ignition"):
+    def _run_0D_case(self, T0, pressure, dt, max_simulation_time, T_eq_tolerance, stability_factor, gas_init_compo, reactor_type="ignition"):
         """Internal helper to run one 0D constant-pressure reactor case.
 
         Parameters
@@ -182,6 +182,9 @@ class NNTesting():
         T_eq_tolerance : float
             CVODE stops when its temperature is within T_eq_tolerance [K] of the HP equilibrium
             temperature of the initial mixture. The ANN is run for the same number of steps.
+        stability_factor : float
+            After these steps, the ANN alone (no CVODE fallback) is continued for stability_factor times
+            as many steps, to check that it stays at equilibrium (drift of T and sum of Y_k). 0 to skip.
         gas_init_compo : str
             Cantera composition string used for the initial state (e.g. fuel+air
             for ignition, or pure fuel for pyrolysis).
@@ -278,6 +281,7 @@ class NNTesting():
         # NEURAL NETWORK COMPUTATION
         time = 0.0
         time_ann = 0.0   # CPU time of the chemistry steps (clustering, network, CVODE if hybrid) [s]
+        clusters = []    # Cluster of the network of each step, -1 for a CVODE step (hybrid)
         state = np.append(T_ann, Y_k_ann)
         for i in range(nb_ite):
             # Old state
@@ -314,6 +318,12 @@ class NNTesting():
                 ann_calls += 1
             time_ann += perf_counter() - start
 
+            # Cluster of the step (-1 if done by CVODE)
+            if self.hybrid_ann_cvode and self.ia_success is False:
+                clusters.append(-1)
+            else:
+                clusters.append(self.cluster)
+
             # Vector with all variable (T and Yks)
             state = np.append(T_new, Y_new)
 
@@ -340,6 +350,21 @@ class NNTesting():
         # ANN equilibrium (last temperature)
         Teq_ann = T_new
 
+        # Stability after equilibrium: ANN alone continued, drifts of T [K] from Teq_ann and of sum(Y_k) from 1
+        T_drift, sumYk_drift = None, None
+        nb_ite_stability = int(round(stability_factor * nb_ite))
+        if nb_ite_stability > 0:
+            T_drift, sumYk_drift = 0.0, 0.0
+            for _ in range(nb_ite_stability):
+                self.attribute_cluster(state, dt, progvar)
+                T_new, Y_new = self.advance_state_NN(state[0], state[1:], pressure, dt)
+
+                state = np.append(T_new, Y_new)
+                progvar = self.compute_progvar(state, pressure, Yc_u)
+
+                T_drift = max(T_drift, float(abs(T_new - Teq_ann)))
+                sumYk_drift = max(sumYk_drift, float(abs(np.sum(Y_new) - 1.0)))
+
         # Use configurable prefix to label ignition-like delays
         return {
             "time_vect": states.t,
@@ -358,9 +383,12 @@ class NNTesting():
             "cvode_calls": cvode_calls,
             "time_cvode": time_cvode,
             "time_ann": time_ann,
+            "clusters": np.array(clusters),
+            "T_drift": T_drift,
+            "sumYk_drift": sumYk_drift,
         }
 
-    def run_0D_ignition_case(self, phi, T0, pressure, dt, max_simulation_time, T_eq_tolerance=1.0):
+    def run_0D_ignition_case(self, phi, T0, pressure, dt, max_simulation_time, T_eq_tolerance=1.0, stability_factor=0.0):
         """Run one 0D ignition case (fuel+air, parametrized by phi).
 
         This is the core simulation routine for premixed ignition, without
@@ -381,6 +409,8 @@ class NNTesting():
             Maximum end time [s] if equilibrium is not reached before.
         T_eq_tolerance : float
             Equilibrium criterion [K] ending the simulation (see _run_0D_case).
+        stability_factor : float
+            ANN continued for stability_factor times the number of steps after equilibrium (see _run_0D_case).
 
         Returns
         -------
@@ -396,10 +426,10 @@ class NNTesting():
         )
         compo = f"{self.fuel}:{phi}, O2:{fuel_ox_ratio}, N2:{fuel_ox_ratio * 0.79 / 0.21}"
 
-        return self._run_0D_case(T0, pressure, dt, max_simulation_time, T_eq_tolerance, compo, reactor_type="ignition")
+        return self._run_0D_case(T0, pressure, dt, max_simulation_time, T_eq_tolerance, stability_factor, compo, reactor_type="ignition")
 
 
-    def run_0D_pyrolysis_case(self, T0, pressure, dt, max_simulation_time, T_eq_tolerance=1.0, diluent=None, X_diluent=0.0):
+    def run_0D_pyrolysis_case(self, T0, pressure, dt, max_simulation_time, T_eq_tolerance=1.0, stability_factor=0.0, diluent=None, X_diluent=0.0):
         """Run one 0D pyrolysis case (pure fuel or fuel+diluent).
 
         This uses the same CVODE/ANN integration as the ignition case but
@@ -418,6 +448,8 @@ class NNTesting():
             Maximum end time [s] if equilibrium is not reached before.
         T_eq_tolerance : float
             Equilibrium criterion [K] ending the simulation (see _run_0D_case).
+        stability_factor : float
+            ANN continued for stability_factor times the number of steps after equilibrium (see _run_0D_case).
         diluent : str or None, optional
             Optional inert species name (e.g. "N2", "Ar"). If None, a pure
             fuel case is used.
@@ -438,21 +470,23 @@ class NNTesting():
             X_fuel = max(0.0, 1.0 - X_diluent)
             compo = f"{self.fuel}:{X_fuel:3.2f}, {diluent}:{X_diluent:3.2f}"
 
-        return self._run_0D_case(T0, pressure, dt, max_simulation_time, T_eq_tolerance, compo, reactor_type="pyrolysis")
+        return self._run_0D_case(T0, pressure, dt, max_simulation_time, T_eq_tolerance, stability_factor, compo, reactor_type="pyrolysis")
 
     # OD IGNITION (wrapper with plotting)
-    def test_0D_ignition(self, phi, T0, pressure, dt, max_simulation_time, T_eq_tolerance=1.0):
+    def test_0D_ignition(self, phi, T0, pressure, dt, max_simulation_time, T_eq_tolerance=1.0, stability_factor=0.0):
         """One 0D ignition case with printed errors and plots (see run_case)."""
 
         return self.test_case("0D_ignition", {"phi": phi, "T0": T0, "pressure": pressure, "dt": dt,
-                                              "max_simulation_time": max_simulation_time, "T_eq_tolerance": T_eq_tolerance})
+                                              "max_simulation_time": max_simulation_time, "T_eq_tolerance": T_eq_tolerance,
+                                              "stability_factor": stability_factor})
 
 
-    def test_0D_pyrolysis(self, T0, pressure, dt, max_simulation_time, T_eq_tolerance=1.0, diluent=None, X_diluent=0.0):
+    def test_0D_pyrolysis(self, T0, pressure, dt, max_simulation_time, T_eq_tolerance=1.0, stability_factor=0.0, diluent=None, X_diluent=0.0):
         """One 0D pyrolysis case with printed errors and plots (see run_case)."""
 
         return self.test_case("0D_pyrolysis", {"T0": T0, "pressure": pressure, "dt": dt, "max_simulation_time": max_simulation_time,
-                                               "T_eq_tolerance": T_eq_tolerance, "diluent": diluent, "X_diluent": X_diluent})
+                                               "T_eq_tolerance": T_eq_tolerance, "stability_factor": stability_factor,
+                                               "diluent": diluent, "X_diluent": X_diluent})
 
 #-----------------------------------------------------------------------
 #   1D TEST CASES
@@ -620,6 +654,7 @@ class NNTesting():
         Yt_ann = Yt
 
         time_ann = 0.0   # CPU time of the chemistry steps (clustering, network, CVODE if hybrid) [s]
+        clusters = np.full(nb_0_reactors, -1)   # Cluster of the network of each point, -1 if not advanced by a network
         for i_reac in range(nb_0_reactors):
 
             # Computing current progress variable on physical state
@@ -656,8 +691,10 @@ class NNTesting():
                         cvode_calls += 1
                     else:
                         ann_calls +=1
+                        clusters[i_reac] = self.cluster
                 else:
                     ann_calls += 1
+                    clusters[i_reac] = self.cluster
             else:
                 T_new = Tt[i_reac]
                 Y_new = Yt_ann[:,i_reac]
@@ -682,6 +719,7 @@ class NNTesting():
             "cvode_calls": cvode_calls,
             "time_cvode": time_cvode,
             "time_ann": time_ann,
+            "clusters": clusters,
         }
 
 
@@ -718,7 +756,73 @@ class NNTesting():
         if validation["run"]:
             self.evaluate_on_validation_set(max_points_scatter=validation["max_points_scatter"])
 
+        benchmark = self.testing_parameters["speedup_benchmark"]
+        if benchmark["run"]:
+            self.benchmark_speedup(benchmark["batch_sizes"], benchmark["dt"], benchmark["pressure"], benchmark["nb_states_cvode"])
+
         return summaries
+
+
+    def benchmark_speedup(self, batch_sizes, dt, pressure, nb_states_cvode):
+        """Speed-up of the ANN on batches of states, as called in a CFD code, written in
+        TESTING_<model>/speedup_benchmark.csv. Returns the table.
+
+        States are drawn from the validation sets of training_data.h5 (with their clusters, so the
+        clustering time is not included). For each batch size, the ANN time is the minimum over 3 calls
+        of NNInference.advance on the whole batch. CVODE advances each state with a new reactor, as at
+        each time step of a CFD code: its time per state [s] is measured on nb_states_cvode states.
+        dt: time step [s] (the training time step for constant time step models), pressure [Pa].
+        """
+
+        inf = self.inference
+        self._load_validation_data()
+
+        # Validation states of all clusters: T [K], Y [-] of the network species, cluster
+        T_val, Y_val, clusters_val = [], [], []
+        for i_cluster, X_val in enumerate(self._X_val):
+            X = transforms.unscale(X_val, inf.Xscaler_list[i_cluster][:, 0], inf.Xscaler_list[i_cluster][:, 1])
+            T_val.append(X[:, 0])
+            Y_val.append(transforms.inverse_species(X[:, 1:1 + inf.nb_species_ANN], inf.spec_list_ANN, inf.log_transform_X,
+                                                    inf.lambda_bct, inf.log_excluded_species))
+            clusters_val.append(np.full(len(X), i_cluster))
+        T_val, Y_ANN_val, clusters_val = np.concatenate(T_val), np.concatenate(Y_val), np.concatenate(clusters_val)
+
+        # All species of the mechanism: N2 not predicted (without N chemistry) closes the sum of Y_k
+        Y_val = np.zeros((len(T_val), self.nb_species_ref))
+        Y_val[:, [self.spec_list_ref.index(spec) for spec in inf.spec_list_ANN]] = Y_ANN_val
+        if self.remove_N2:
+            Y_val[:, self.spec_list_ref.index("N2")] = np.maximum(1.0 - Y_ANN_val.sum(axis=1), 0.0)
+
+        # CVODE time per state [s]
+        rng = np.random.default_rng(0)
+        idx = rng.choice(len(T_val), size=nb_states_cvode)
+        start = perf_counter()
+        for i in idx:
+            self.advance_state_CVODE(T_val[i], Y_val[i], pressure, dt)
+        time_cvode_per_state = (perf_counter() - start) / nb_states_cvode
+
+        # ANN time of each batch [s] (first call excluded: initialization of the networks)
+        inf.advance(T_val[:1], Y_val[:1], pressure, dt, clusters_val[:1], self.yk_renormalization)
+        rows = []
+        for batch_size in batch_sizes:
+            idx = rng.choice(len(T_val), size=batch_size)
+
+            times = []
+            for _ in range(3):
+                start = perf_counter()
+                inf.advance(T_val[idx], Y_val[idx], pressure, dt, clusters_val[idx], self.yk_renormalization)
+                times.append(perf_counter() - start)
+
+            time_ann = min(times)
+            rows.append({"batch_size": batch_size, "time_ann": time_ann, "time_ann_per_state": time_ann / batch_size,
+                         "time_cvode_per_state": time_cvode_per_state,
+                         "speedup": time_cvode_per_state * batch_size / time_ann})
+
+        table = pd.DataFrame(rows)
+        table.to_csv(os.path.join(self.output_folder, "speedup_benchmark.csv"), index=False)
+        print(f"\n>> Speed-up benchmark ({inf.device}):\n{table.to_string(index=False)}")
+
+        return table
 
 
     def run_series(self, case_type, series):
@@ -732,7 +836,9 @@ class NNTesting():
         simulation error aggregated per dt (E(dt)). The errors of each case are also written in
         simulation_errors_<case_type>.csv, and E(dt) in simulation_errors_<case_type>_by_dt.csv (plotted in
         simulation_errors_<case_type>_by_dt.png), with the mean contribution of each variable (plotted in
-        simulation_errors_<case_type>_by_variable.png) and the mean speed-up.
+        simulation_errors_<case_type>_by_variable.png) and the mean speed-up. The errors per cluster and
+        dt (mean over the steps or grid points advanced by the network of each cluster) are written in
+        simulation_errors_<case_type>_by_cluster.csv.
         """
 
         x_window = series.get("x_window")
@@ -747,6 +853,7 @@ class NNTesting():
         print(f"\n>> Series {case_type}: {len(cases)} cases")
 
         entries = []
+        point_errors = []   # Errors of each step (0D) or grid point (1D), for the errors per cluster
         for case in cases:
 
             print(f"\n>> {case_type}: {case}")
@@ -760,6 +867,13 @@ class NNTesting():
 
             entries.append({"params": case, "errors": errors})
 
+            # Errors of each point, with the cluster of its network and the time step
+            x_ann, x_ref, clusters = self._error_points(case_type, result, x_window)
+            points = pd.DataFrame(metrics.normalized_errors(x_ann, x_ref, self.std_train), columns=self._error_names())
+            points.insert(0, "cluster", clusters)
+            points.insert(0, "dt", case["dt"])
+            point_errors.append(points)
+
         # Mean and standard deviation over the cases (cases without value, e.g. no ignition, are skipped)
         mean, std = {}, {}
         for key in entries[0]["errors"]:
@@ -772,19 +886,29 @@ class NNTesting():
         table = pd.DataFrame([{**entry["params"], **entry["errors"]} for entry in entries])
         table.to_csv(os.path.join(self.output_folder, f"simulation_errors_{case_type}.csv"), index=False)
 
-        # 0D: simulation error aggregated over the simulations of each dt, E(dt)
+        # Simulation error aggregated over the simulations of each dt, E(dt)
         if "E_sim" in table:
             grouped = table.groupby("dt")
             by_dt = grouped["E_sim"].agg(E_mean="mean", E_std=lambda e: e.std(ddof=0), nb_simulations="count")
 
             # Mean contribution of each variable (E_T, E_<species>) and mean speed-up
-            variables = ["E_T"] + [f"E_{spec}" for spec in self.inference.spec_list_ANN]
+            variables = self._error_names()
             by_dt = by_dt.join(grouped[variables].mean()).join(grouped["speedup"].mean().rename("speedup_mean"))
 
             by_dt.to_csv(os.path.join(self.output_folder, f"simulation_errors_{case_type}_by_dt.csv"))
             plots.plot_simulation_errors_by_dt(table, by_dt, case_type, self.output_folder)
             plots.plot_errors_per_variable(by_dt, variables, case_type, self.output_folder)
             summary["E_sim_by_dt"] = {float(dt): {key: float(value) for key, value in row.items()} for dt, row in by_dt.iterrows()}
+
+        # Errors per cluster and dt: mean over the steps (0D) or grid points (1D) advanced by the network of the cluster
+        # (cluster -1: steps done by CVODE in hybrid mode, or 1D points below T_threshold)
+        points = pd.concat(point_errors)
+        variables = self._error_names()
+        points["E_sim"] = points[variables].mean(axis=1)
+        by_cluster = points.groupby(["dt", "cluster"]).agg(nb_points=("E_sim", "size"), E_mean=("E_sim", "mean"),
+                                                           E_std=("E_sim", lambda e: e.std(ddof=0)),
+                                                           **{var: (var, "mean") for var in variables})
+        by_cluster.to_csv(os.path.join(self.output_folder, f"simulation_errors_{case_type}_by_cluster.csv"))
 
         with open(os.path.join(self.output_folder, f"summary_{case_type}.yaml"), "w") as file:
             yaml.dump(summary, file, default_flow_style=False, sort_keys=False)
@@ -827,7 +951,8 @@ class NNTesting():
 
         0D: simulation error E_sim [-] and its contributions E_<variable> (see _simulation_errors) over all the
         time steps, i.e. until CVODE equilibrium (equilibrium_steps, equilibrium_reached), error on the final temperature [%], ignition delays [s]
-        (time at which T exceeds T0 + 200 K) and their error [%] (ignition only), numbers of ANN and CVODE calls.
+        (time at which T exceeds T0 + 200 K) and their error [%] (ignition only), drifts after equilibrium (T_drift [K],
+        sumYk_drift [-], see _run_0D_case, None if not run).
         1D: a priori error E_sim [-], normalized as for 0D, on the states after one step dt from each grid
         point in x_window (mean over the points instead of the time steps), L2 error of the reaction
         rates of spec_to_plot over x_window (see NN_testing_metrics.l2_error), numbers of ANN and CVODE calls.
@@ -836,13 +961,13 @@ class NNTesting():
 
         errors = {}
 
+        # Simulation error, normalized with the training standard deviations
+        x_ann, x_ref, _ = self._error_points(case_type, result, x_window)
+        errors.update(self._simulation_errors(x_ann, x_ref))
+
         # 0D reactors
         if case_type.startswith("0D"):
 
-            # Simulation error, normalized with the training standard deviations, over the steps (initial state excluded)
-            x_ref = self._error_variables(result["states_ref"][1:])
-            x_ann = self._error_variables(result["states_ann"][1:])
-            errors.update(self._simulation_errors(x_ann, x_ref))
             errors["equilibrium_steps"] = len(result["states_ref"]) - 1
             errors["equilibrium_reached"] = bool(result["equilibrium_reached"])
 
@@ -856,20 +981,13 @@ class NNTesting():
                 if result["tau_ign_cvode"] > 0.0:
                     errors["tau_ign_error_percent"] = float(metrics.relative_error_percent(result["tau_ign_cvode"], result["tau_ign_ann"]))
 
+            # Stability after equilibrium (None if not run)
+            errors["T_drift"] = result["T_drift"]
+            errors["sumYk_drift"] = result["sumYk_drift"]
+
         # 1D flames
         else:
             grid = result["flame"].grid
-
-            # Grid points of x_window [m] (all points if None)
-            in_window = np.ones(len(grid), dtype=bool)
-            if x_window is not None:
-                in_window = (grid >= x_window[0]) & (grid <= x_window[1])
-
-            # A priori error, normalized with the training standard deviations, after one step dt
-            x_ref = self._error_variables(np.column_stack([result["T_dt_exact"], result["Yt_dt_exact"].T])[in_window])
-            x_ann = self._error_variables(np.column_stack([result["T_dt_ann"], result["Yt_dt_ann"].T])[in_window])
-            errors.update(self._simulation_errors(x_ann, x_ref))
-
             for spec in self.spec_to_plot:
                 k = self.spec_list_ref.index(spec)
                 errors[f"L2_error_omega_{spec}"] = metrics.l2_error(grid, result["Omega_ann"][k], result["Omega_exact"][k], x_window)
@@ -885,6 +1003,32 @@ class NNTesting():
         return errors
 
 
+    def _error_points(self, case_type, result, x_window=None):
+        """Variables of the simulation error (see _error_variables) of the ANN and the reference, (n, 1 + N_S),
+        and cluster of the network of each point (n), -1 if not advanced by a network.
+
+        0D: states after each time step (initial state excluded). 1D: states after one step dt from each
+        grid point in x_window [m] (all points if None).
+        """
+
+        # 0D reactors: time steps
+        if case_type.startswith("0D"):
+            x_ann = self._error_variables(result["states_ann"][1:])
+            x_ref = self._error_variables(result["states_ref"][1:])
+            return x_ann, x_ref, result["clusters"]
+
+        # 1D flames: grid points of x_window
+        grid = result["flame"].grid
+        in_window = np.ones(len(grid), dtype=bool)
+        if x_window is not None:
+            in_window = (grid >= x_window[0]) & (grid <= x_window[1])
+
+        x_ann = self._error_variables(np.column_stack([result["T_dt_ann"], result["Yt_dt_ann"].T])[in_window])
+        x_ref = self._error_variables(np.column_stack([result["T_dt_exact"], result["Yt_dt_exact"].T])[in_window])
+
+        return x_ann, x_ref, result["clusters"][in_window]
+
+
     def _simulation_errors(self, x_ann, x_ref):
         """Simulation error E_sim [-] and its contributions E_T, E_<species> [-] of each variable
         (see NN_testing_metrics.normalized_errors_per_variable): E_sim is their mean."""
@@ -892,10 +1036,16 @@ class NNTesting():
         per_variable = metrics.normalized_errors_per_variable(x_ann, x_ref, self.std_train)
 
         errors = {"E_sim": float(per_variable.mean())}
-        for name, value in zip(["T"] + self.inference.spec_list_ANN, per_variable):
-            errors[f"E_{name}"] = float(value)
+        for name, value in zip(self._error_names(), per_variable):
+            errors[name] = float(value)
 
         return errors
+
+
+    def _error_names(self):
+        """Names of the contributions of the variables to the simulation error: E_T, E_<species>."""
+
+        return ["E_T"] + [f"E_{spec}" for spec in self.inference.spec_list_ANN]
 
 
     def plot_case(self, case_type, case, result, x_window=None):
