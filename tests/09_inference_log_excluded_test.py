@@ -33,7 +33,7 @@ def test_inference_log_excluded_species(tmp_path):
     i = 40
     with h5py.File(tmp_path / "STOCH_DTB_TEST" / "dtb" / "training_data.h5", "r") as f:
         target = torch.tensor(f["CLUSTER_0/Y_val"][i:i+1])
-    test.models_list[0] = lambda x: target
+    test.inference.models_list[0] = lambda x: target
 
     T_new, Y_new = test.advance_state_NN(T_in[i], Y_in[i], pressure, dt)
 

@@ -7,6 +7,8 @@ Check:
   same elements mass fractions as Cantera.
 - an error is raised for a mechanism with species made of other atoms than C, H, O, N (Ar, He),
   also when creating a stochastic particle cloud.
+- species_h_cp (NASA polynomials, used by the ANN temperature update) gives the same enthalpies and
+  heat capacities as Cantera, on both sides of the mid temperature of the polynomials.
 
 Independent of the other tests.
 """
@@ -61,3 +63,17 @@ def test_error_on_inert_species():
               "calc_mean_traj": False, "build_ml_dtb": False, "pv_species": ["H2O"]}
     with pytest.raises(ValueError, match="AR"):
         ParticlesCloud(params, dc.DummyComm())
+
+
+@pytest.mark.parametrize("mech", ["mech_H2.yaml", "mech_nh3_noArHe.yaml"])
+def test_species_h_cp(mech):
+    gas = ct.Solution(os.path.join(mech_folder, mech))
+    T = np.array([300.0, 999.0, 1000.0, 1001.0, 2500.0])
+    Y = np.full(gas.n_species, 1.0 / gas.n_species)
+
+    h_k, cp_k = utils.species_h_cp(T, gas.molecular_weights, *utils.get_nasa7_coefficients(gas))
+
+    for i, T_i in enumerate(T):
+        gas.TPY = T_i, 101325.0, Y
+        assert np.allclose(h_k[i], gas.partial_molar_enthalpies / gas.molecular_weights, rtol=1.0e-12, atol=1.0e-6)
+        assert np.isclose(np.sum(cp_k[i] * Y), gas.cp_mass, rtol=1.0e-12)

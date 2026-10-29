@@ -6,6 +6,7 @@ for every allowed combination of transforms (none, log, Box-Cox), outputs (diffe
 and with or without a species kept on a linear scale (log_excluded_species).
 Check: from the training data written by process_database, the shared functions of
 tools/transforms.py used at inference (inverse_species, output_to_Yk) give back Y_k(t) and Y_k(t+dt).
+The time step feature is log(dt), also without transform of the mass fractions.
 
 Independent of the other tests.
 """
@@ -92,3 +93,14 @@ def test_transforms_consistency(tmp_path, log_transform_X, log_transform_Y, outp
                                      0.2, log_excluded_species)
 
     assert np.allclose(Yk_out, factors[:3] * Yk_in, rtol=1.0e-8, atol=1.0e-14)
+
+
+
+def test_dt_always_logged():
+    # Time step feature log(dt), also without transform of the mass fractions (log_transform_X = 0)
+    dt = np.array([1.0e-7, 1.0e-6])
+    T, Y = np.array([1000.0, 1500.0]), np.array([[0.1, 0.2], [0.3, 0.4]])
+
+    assert np.allclose(transforms.transform_dt(dt), np.log(dt))
+    features = transforms.kmeans_features(T, Y, dt, ["H2", "O2"], "all", 0, 1.0e-10, 0.2, [])
+    assert np.allclose(features, np.column_stack([T, Y, np.log(dt)]))

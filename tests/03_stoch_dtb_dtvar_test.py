@@ -1,14 +1,13 @@
 """
 Test 03: multi-dt database generation.
 
-Re-integrates the states of STOCH_DTB_TEST/solutions_resamp200K.h5 (from test 02) with 5 random
-time steps in [1e-7, 1e-6] s, and writes STOCH_DTB_TEST/mech_h2_5dt.h5.
+Re-integrates the states of STOCH_DTB_TEST/solutions_resamp200K.h5 (session fixture h2_resampled_dtb,
+see conftest.py) with 5 random time steps in [1e-7, 1e-6] s, and writes STOCH_DTB_TEST/mech_h2_5dt.h5.
 Check: histograms of the outputs are close to the references in H2_dtvar_TEST_histograms/.
-
-Requires tests 01 and 02.
 """
 from ai_reacting_flows.databases_processing.generate_var_dt_dtb import GenerateVariable_dt
 from misc import extract_h2_dtvar_dtb_histograms
+from h2_stoch_database import tests_dir, mech_file
 
 import DummyComm as dc
 import numpy as np
@@ -34,7 +33,7 @@ inlets = {'inlet_1':inlet_1,
 data_gen_parameters = {}
 
 # General parameters
-data_gen_parameters["mech_file"] = "/../data/chemical_mechanisms/mech_H2.yaml"      # Mechanism file
+data_gen_parameters["mech_file"] = mech_file      # Mechanism file
 data_gen_parameters["inlets"] = inlets      # dict defining the stochastic reactors inlets
 data_gen_parameters["results_folder_suffix"] = "TEST"    # Name of the resulting database (used as a suffix of "STOCH_DTB")
 data_gen_parameters["dtb_file"] = "solutions_resamp200K.h5" #
@@ -60,16 +59,12 @@ data_gen_parameters["calc_mean_traj"] = False              # Flag to decide if m
 
 # ML inference
 data_gen_parameters["ML_inference_flag"] = False
-data_gen_parameters["ML_models"] = ("")
 data_gen_parameters["prog_var_thresholds"] = (0.25, 0.95)
 
-def test_h2_multi_dt_dtb_computation():
-    # required for CI on GitHub
-    current_dir = os.path.dirname(__file__)
-    os.chdir(current_dir)
-    data_gen_parameters["mech_file"] = f"{current_dir:s}{data_gen_parameters['mech_file']:s}"
+def test_h2_multi_dt_dtb_computation(h2_resampled_dtb):
+    os.chdir(h2_resampled_dtb)
 
     GenerateVariable_dt("stoch", data_gen_parameters, dc.DummyComm())
 
     tol = np.array([168.86, 8.89, 50.17, 20.32, 139.32, 52.21, 61.66, 13.04, 11.16])
-    assert np.max(extract_h2_dtvar_dtb_histograms(f"./STOCH_DTB_{data_gen_parameters['results_folder_suffix']:s}/mech_h2_5dt.h5","H2_dtvar_TEST_histograms", tol)) < np.float64(0.0)
+    assert np.max(extract_h2_dtvar_dtb_histograms(f"./STOCH_DTB_{data_gen_parameters['results_folder_suffix']:s}/mech_h2_5dt.h5", os.path.join(tests_dir, "H2_dtvar_TEST_histograms"), tol)) < np.float64(0.0)

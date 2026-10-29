@@ -575,8 +575,12 @@ class DatabaseFlamelets(object):
 
             gas.TPX = temperature_ini, self.p, compo_ini_o
             density_o = gas.density
+            Y_o = gas.Y.copy()
+            h_o = gas.enthalpy_mass                   # J/kg
             gas.TPX = 300.0, self.p, compo_ini_f
             density_f = gas.density
+            Y_f = gas.Y.copy()
+            h_f = gas.enthalpy_mass                   # J/kg
 
             # Stream mass flow rates
             vel = strain * width / 2.0

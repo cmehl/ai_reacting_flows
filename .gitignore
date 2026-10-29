@@ -131,6 +131,8 @@ dmypy.json
 /scripts/inlets*
 /scripts/*.pkl
 /scripts/MODEL_*
+/scripts/*/MODELS/
+/scripts/*/TESTING_*
 /notebooks/MODEL_*
 /notebooks/inlets*
 /notebooks/plots*
@@ -148,6 +150,7 @@ dmypy.json
 /articles/*/*.png
 /articles/*/*.xlsx
 /articles/*/plots_*
+/articles/*/TESTING_*
 # VSCode
 *.code-workspace
 .vscode

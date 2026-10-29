@@ -1,0 +1,78 @@
+# Inputs of ANN testing (ann_model_testing.py, NNTesting). Units are SI.
+# Outputs in TESTING_<models_folder>/: plots of each case, summary_<case type>.yaml (errors of each case,
+# mean and std), plots_validation/.
+# In each case section, parameters given as lists are swept: all combinations are run.
+
+models_folder: MODEL_H2_POF_2023       # Model folder in MODELS/
+spec_to_plot: [N2, H2, O2, H2O, H2O2]  # Species plotted, and 1D errors computed on
+
+yk_renormalization: true               # Correct ANN mass fractions to conserve the elements
+hybrid_ann_cvode: false                # CVODE instead of ANN when mass is not conserved (sum of Y_k)
+hybrid_ann_cvode_tol: 5.0e-05          # Tolerance on |sum(Y_k) - 1| [-]
+device: cpu                            # Device of the networks: cpu or cuda (null: cuda if available, else cpu)
+torch_threads: 1                       # CPU threads of torch, 1 as one MPI rank per core in CFD (null: torch default)
+
+# 0D constant-pressure ignition of fuel/air
+0D_ignition:
+  run: true
+  plots: true
+  phi: [0.4]                           # Equivalence ratio [-]
+  T0: [1200.0]                         # Initial temperature [K]
+  pressure: [101325.0]                 # [Pa]
+  dt: [5.0e-07]                        # Time step [s]
+  max_simulation_time: 5.0e-04         # Maximum end time [s] if CVODE equilibrium is not reached
+  T_eq_tolerance: 1.0                  # [K] CVODE and ANN stop when CVODE T is this close to equilibrium
+  stability_factor: 2.0                # ANN continued for this times the steps after equilibrium (drifts), 0 to skip
+  conditions_file: null                # sim_test_0D.csv of a flamelets database: its Phi, T0 replace phi, T0
+
+# 0D constant-pressure pyrolysis of fuel, optionally diluted
+0D_pyrolysis:
+  run: false
+  plots: true
+  T0: [1200.0]                         # Initial temperature [K]
+  pressure: [101325.0]                 # [Pa]
+  dt: [5.0e-07]                        # Time step [s]
+  max_simulation_time: 5.0e-04         # Maximum end time [s] if CVODE equilibrium is not reached
+  T_eq_tolerance: 1.0                  # [K] CVODE and ANN stop when CVODE T is this close to equilibrium
+  stability_factor: 2.0                # ANN continued for this times the steps after equilibrium (drifts), 0 to skip
+  diluent: null                        # Diluent species (e.g. N2), null for pure fuel
+  X_diluent: [0.0]                     # Diluent mole fraction [-]
+
+# 1D freely propagating premixed flame: a priori ANN vs CVODE reaction rates
+1D_premixed:
+  run: false
+  plots: true
+  phi: [0.4]                           # Equivalence ratio [-]
+  T0: [300.0]                          # Fresh gases temperature [K]
+  pressure: [101325.0]                 # [Pa]
+  dt: [5.0e-07]                        # Time step [s]
+  T_threshold: 600.0                   # ANN not applied below this temperature [K]
+  x_window: [0.008, 0.014]             # [x_min, x_max] [m] of errors and plots, null for the full flame
+  conditions_file: null                # sim_test_1D_prem.csv of a flamelets database: its Phi, T0 replace phi, T0
+
+# 1D counterflow diffusion flame (pure fuel against air): a priori ANN vs CVODE reaction rates
+1D_diffusion:
+  run: false
+  plots: true
+  strain: [100.0]                      # Strain rate [1/s]
+  T_ox: [300.0]                        # Air temperature [K]
+  T_fuel: [300.0]                      # Fuel temperature [K]
+  pressure: [101325.0]                 # [Pa]
+  dt: [5.0e-07]                        # Time step [s]
+  width: 0.02                          # Distance between the inlets [m]
+  T_threshold: 600.0                   # ANN not applied below this temperature [K]
+  x_window: null                       # [x_min, x_max] [m] of errors and plots, null for the full flame
+  conditions_file: null                # sim_test_1D_diff.csv of a flamelets database: its Strain, T0 replace strain, T_ox
+
+# Comparison of the ANN to the validation set of training_data.h5 (scatter plots of errors)
+validation_set:
+  run: false
+  max_points_scatter: 50000            # Maximum number of points plotted per cluster
+
+# Speed-up of the ANN on batches of validation states, as in a CFD code (speedup_benchmark.csv)
+speedup_benchmark:
+  run: true
+  batch_sizes: [1, 1000, 100000]       # Numbers of states advanced in one call of the networks
+  dt: 5.0e-07                          # Time step [s] (the training time step for constant time step models)
+  pressure: 101325.0                   # [Pa]
+  nb_states_cvode: 1000                # CVODE time per state measured on this number of states

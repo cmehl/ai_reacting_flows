@@ -23,6 +23,7 @@
 
 # %%
 import os
+import oyaml as yaml
 from ai_reacting_flows.ann_model_generation.NN_testing import NNTesting
 
 # %%
@@ -36,20 +37,12 @@ from ai_reacting_flows.ann_model_generation.NN_testing import NNTesting
 os.chdir("../scripts/H2_IGN_KERNEL")
 
 # %% [markdown]
-# Parameters for the testing:
+# The testing parameters are read from the file *nn_testing.yaml* of the case folder (see the README for all keys): model folder, species to plot, options of the ANN, and series of test cases. All outputs are written in *TESTING_<models_folder>/*.
 
 # %%
-# Dictionary with parameters
-testing_parameters = {}
-
-testing_parameters["models_folder"] = "MODEL_H2_POF_2023"     # Folder for the ML model
-
-testing_parameters["spec_to_plot"] = ["N2", "H2", "O2", "H2O", "H2O2"]          # List of species to plot
-
-testing_parameters["yk_renormalization"] = True
-
-testing_parameters["hybrid_ann_cvode"] = False             # CVODE helping ANN based on a conservation criterion
-testing_parameters["hybrid_ann_cvode_tol"] = 5.0e-05      # Tolerance for the CVODE switching
+with open("nn_testing.yaml", "r") as file:
+    testing_parameters = yaml.safe_load(file)
+print(open("nn_testing.yaml").read())
 
 # %% [markdown]
 # The model testing is first initialized:
@@ -65,9 +58,9 @@ phi = 0.4
 T0 = 1200.0
 pressure = 101325.0
 dt = 0.5e-6
-nb_ite = 1000
+max_simulation_time = 5.0e-4   # Maximum end time [s] if equilibrium is not reached
 
-test.test_0D_ignition(phi, T0, pressure, dt, nb_ite)
+test.test_0D_ignition(phi, T0, pressure, dt, max_simulation_time)
 
 # %% [markdown]
 # Another test, if the ANN has been built for that, is to assess its ability to reproduce laminar premixed flames. The test here is *a priori*, in the sense that we take a CANTERA converged solution, and compare the exact reaction rate to the ANN reaction rate. For a species $k$, if the exact solution is written $Y_k$, the local reaction rate is estimated as:
@@ -83,10 +76,16 @@ pressure = 101325.0
 dt = 0.5e-6
 T_threshold = 600.0
 
-test.test_1D_premixed(phi, T0, pressure, dt, T_threshold)
+test.test_1D_premixed(phi, T0, pressure, dt, T_threshold, x_window=[0.008, 0.014])
 
 # %% [markdown]
-# Finally, the ANN predictions can be compared to the validation dataset stored in *training_data.h5*, cluster by cluster. Error statistics are returned and scatter plots are saved in *scatter_folder*:
+# Finally, the ANN predictions can be compared to the validation dataset stored in *training_data.h5*, cluster by cluster. Error statistics are returned and scatter plots are saved in *TESTING_<models_folder>/plots_validation*:
 
 # %%
-stats = test.evaluate_on_validation_set(scatter_folder="./plots_validation")
+stats = test.evaluate_on_validation_set()
+
+# %% [markdown]
+# Finally, all the series of test cases selected in *nn_testing.yaml* (`run: true`) can be run in one go. For each series, all combinations of the parameters given as lists are computed, and the errors of each case with their mean and standard deviation are written in *TESTING_<models_folder>/summary_<case type>.yaml*. This is what the script *ann_model_testing.py* of the case folders does.
+
+# %%
+summaries = test.run_testing()

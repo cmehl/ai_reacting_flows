@@ -50,7 +50,7 @@ Each case is a folder `scripts/<CASE>/` containing YAML inputs and short launche
 mpirun -n X python generate_stoch_dtb.py   # 1. database generation      (dtb_params.yaml)
 python dtb_processing.py                   # 2. learning database        (dtb_processing.yaml)
 python ann_model_learning.py               # 3. training                 (networks_params.yaml)
-python ann_model_testing.py                # 4. testing on simple cases
+python ann_model_testing.py                # 4. testing on simple cases  (nn_testing.yaml)
 ```
 
 ## 1. Database generation
@@ -169,7 +169,41 @@ The class `NNTesting` compares the ANN to CVODE on:
 
 + 0-D homogeneous ignition or pyrolysis
 + 1-D premixed flame reaction rates
++ 1-D counterflow diffusion flame reaction rates
 + the validation dataset (scatter plots)
+
+The script `ann_model_testing.py` reads `nn_testing.yaml` and runs the selected series of cases (`NNTesting.run_testing`): for each case type, all combinations of the parameters given as lists (e.g. several `phi` and `T0`). Outputs are written in `TESTING_<models_folder>/`:
+
+```
+TESTING_<models_folder>/
+├── nn_testing.yaml                       copy of the inputs
+├── <case type>_<parameters>/             plots of each case (if plots: true)
+├── summary_<case type>.yaml              errors of each case, mean and std over the series
+├── simulation_errors_<case type>.csv     one row per case: parameters and errors
+├── simulation_errors_<case type>_by_dt.csv   E(dt), std and number of simulations per dt, mean E_<variable> and speed-up
+├── simulation_errors_<case type>_by_dt.png   E(dt) with std bars, and box plot of E_i per dt
+├── simulation_errors_<case type>_by_variable.png   mean E_<variable> of T and each network species, per dt
+├── simulation_errors_<case type>_by_cluster.csv   errors per cluster and dt
+├── speedup_benchmark.csv                 speed-up of the ANN on batches of states
+├── plots_validation/                     scatter plots of validation errors
+└── nn_testing_<timestamp>.log
+```
+
+Errors: 0-D cases give the simulation error $\mathcal{E}_i$ (`E_sim`), the error on the final temperature [%], and for ignition the ignition delays (time at which $T$ exceeds $T_0 + 200$ K) and their error [%]; 1-D flames give an a priori simulation error $\mathcal{E}_i$ (`E_sim`) and the L2 error of the reaction rates of `spec_to_plot`. All cases also give the numbers of ANN and CVODE calls, and the speed-up `speedup` = `time_cvode` / `time_ann`, ratio of the CPU times [s] of the chemistry steps (CVODE integration; ANN clustering, network and CVODE fallback of the hybrid mode; the progress variable computation, which needs an equilibrium, and the diagnostics are not counted). As in a CFD code, CVODE is restarted from a new reactor at each time step (also in 0-D). The ANN advances one state per call, without batching, after an untimed warm-up call (initialization of the networks and k-means), so this speed-up is a lower bound of what a CFD code with batched calls would get: see the benchmark below. 0-D cases also give the drifts after equilibrium: the ANN alone is continued for `stability_factor` times the number of steps, and `T_drift` [K] (from the ANN temperature at the end of the simulation) and `sumYk_drift` (from 1) are the maximum deviations over these steps. A network that does not stay at equilibrium would make burnt gases drift in a CFD code.
+
+The simulation error of a 0-D case $i$ run with time step $dt$ is the normalized error of Mehl & Aubagnac (variable time step ANN, eq. 6), following Chen et al. (Energy & Fuels 37, 2023):
+
+$$\mathcal{E}_i(dt) = \frac{1}{N_i} \sum_{j=1}^{N_i} \frac{1}{N_S + 1} \left( \sum_{k=1}^{N_S} \frac{|f(Y_{k,j}^{NN}) - f(Y_{k,j}^{ref})|}{\sigma_k} + \frac{|T_j^{NN} - T_j^{ref}|}{\sigma_T} \right)$$
+
+with $f$ the transform of the network inputs (log or Box-Cox), $N_S$ the number of species of the network (N2 excluded without N chemistry), $\sigma$ the standard deviations of the training inputs over all clusters, and $N_i$ the number of time steps of the simulation. Each 0-D simulation stops when the CVODE temperature is within `T_eq_tolerance` of the equilibrium (HP) temperature of the initial mixture, and the ANN is run for the same number of steps; `max_simulation_time` only caps the simulations that do not reach equilibrium (`equilibrium_reached: false`). $\mathcal{E}(dt)$, the mean of $\mathcal{E}_i$ over the simulations run with $dt$, is written in `simulation_errors_<case type>_by_dt.csv` and plotted in `simulation_errors_<case type>_by_dt.png` (mean with standard deviation bars, and box plot of $\mathcal{E}_i$ per $dt$). The contribution of each variable, $E_T$ (`E_T`) and $E_k$ (`E_<species>`), is the term of $\mathcal{E}_i$ of this variable averaged over the steps; $\mathcal{E}_i$ is their mean. It shows which species drive the error (`simulation_errors_<case type>_by_variable.png`). For 1-D flames, $\mathcal{E}_i$ is a priori: each grid point of the converged flame (in `x_window`) is advanced by one step $dt$ with CVODE and with the ANN, and the sum over $j$ runs over these points instead of the time steps. It measures the error of one step, not its accumulation, so it is smaller than the 0-D error for the same network; it also decreases when the domain contains more points in fresh or burnt gases, hence `x_window`. `simulation_errors_<case type>_by_cluster.csv` gives, for each `dt` and cluster, the number of steps (0-D) or grid points (1-D) advanced by the network of the cluster, the mean and standard deviation of their error (mean over the variables of the normalized differences) and the mean of each variable. Cluster -1 gathers the steps done by CVODE in hybrid mode and the 1-D points below `T_threshold`. In 0-D the error of a step includes the error accumulated over the previous steps, possibly in other clusters; the 1-D errors (one step from the converged flame) are attributed to their cluster exactly.
+
+The speed-up benchmark (`speedup_benchmark`) draws states from the validation sets of `training_data.h5` and times `NNInference.advance` on batches of `batch_sizes` states (minimum over 3 calls, clustering not included as the clusters of the validation states are known) against CVODE with a new reactor for each state, as at each time step of a CFD code (time per state measured on `nb_states_cvode` states). `speedup_benchmark.csv` gives, for each batch size, the ANN time [s], the ANN and CVODE times per state [s] and the speed-up.
+
+Single cases can also be run from Python (`test_0D_ignition`, `test_0D_pyrolysis`, `test_1D_premixed`, `test_1D_diffusion`), as in `notebooks/ann_model_testing.py`.
+
+`NNTesting` (`NN_testing.py`) runs the reference and ANN cases; the error metrics are in `NN_testing_metrics.py` and the plots in `NN_testing_plots.py`. The ANN chemistry step itself (clustering, transforms, networks) is in `NN_inference.py` (`NNInference`), shared with the stochastic reactors. The new temperature follows from enthalpy conservation, with the species enthalpies and heat capacities computed from the NASA polynomials of the mechanism, vectorized over the states (`utilities.species_h_cp`).
+
+The stochastic reactors can also be run with the ANN instead of CVODE for the chemistry (`ML_inference_flag: true` in `dtb_params.yaml`), to test the networks in mixing conditions. The model is read from `MODELS/<ML_model_folder>` in the case folder; use another `results_folder_suffix` than the database used for training, as the results folder is overwritten.
 
 # Input YAML files
 
@@ -194,7 +228,11 @@ Examples of all files can be found in `scripts/<CASE>/`. Units are SI.
 | `pv_species` | Species defining the progress variable $c = (Y_c - Y_{c,u})/(Y_{c,eq} - Y_{c,u})$, with $Y_c$ the sum of their mass fractions, $u$ the unburnt mixture and $eq$ the equilibrium (e.g. `[H2O]`) |
 | `fuel` | List of fuels (e.g. `[H2]`) |
 | `calc_mean_traj` | If `true`, write mean trajectories of each inlet |
-| `ML_inference_flag` | Keep `false` |
+| `ML_inference_flag` | If `true`, chemistry is computed with the ANN instead of CVODE (optional keys below are then required) |
+| `ML_model_folder` | Model folder in `MODELS/` of the case folder (e.g. `MODEL_H2_POF_2023`). Its mechanism and `pv_species` must be those of this file |
+| `ML_yk_renormalization` | If `true`, ANN mass fractions are corrected to conserve the elements |
+| `ML_hybrid_ann_cvode` | If `true`, particles whose ANN mass fractions sum differs from 1 by more than `ML_hybrid_ann_cvode_tol` are advanced with CVODE |
+| `ML_hybrid_ann_cvode_tol` | Tolerance on the sum of mass fractions [-] (e.g. `5.0e-05`) |
 
 Each inlet has a `type`, a number of particles `nb_particles`, `T` [K], `P` [Pa] and an optional `activation_time` [s] (time at which its particles enter the simulation, default 0; at least one inlet must start at 0). Additional keys depend on the type:
 
@@ -234,7 +272,7 @@ Cases are sampled in the given bounds with Latin hypercube sampling.
 | `database_params.dtb_folder_suffix` | Suffix of the database folder to read |
 | `database_params.dtb_file` | h5 file to read (`solutions.h5` or the multi-dt file) |
 | `database_params.database_name` | Name of the output subfolder |
-| `database_params.dt_var` | `true` for a multi-dt database ($dt$ is an input) |
+| `database_params.dt_var` | `true` for a multi-dt database ($dt$ is an input, always as $\log(dt)$, whatever `log_transform_X`) |
 | `database_params.fuel`, `database_params.mech_file` | Fuel and mechanism |
 | `data_processing.log_transform_X`, `log_transform_Y` | 0: none, 1: log, 2: Box-Cox (with `lambda_bct`, optional, default 0.1) |
 | `data_processing.threshold` | Mass fractions are clipped to this value before log transform (to 0 before Box-Cox) |
@@ -274,10 +312,30 @@ An MLP definition contains:
 
 For `DeepONet`, these three keys are dicts with `branch` and `trunk` entries (plus `shift` for `DeepONetShift`), and `n_neurons` is added. The trunk takes $dt$ as input.
 
+## `nn_testing.yaml` (testing)
+
+| Key | Description |
+|-----|-------------|
+| `models_folder` | Model folder in `MODELS/` (e.g. `MODEL_H2_POF_2023`) |
+| `spec_to_plot` | Species plotted, and on which 1-D errors are computed |
+| `yk_renormalization` | If `true`, ANN mass fractions are corrected to conserve the elements |
+| `hybrid_ann_cvode` | If `true`, CVODE is used when the ANN mass fractions sum differs from 1 by more than `hybrid_ann_cvode_tol` |
+| `hybrid_ann_cvode_tol` | Tolerance on the sum of mass fractions [-] |
+| `device` | Optional, device of the networks: `cpu` (as in a first CFD use) or `cuda`; absent or `null`: `cuda` if available, else `cpu` |
+| `torch_threads` | Optional, number of CPU threads of torch: 1 as one MPI rank per core in a CFD code (small batches are also faster); absent or `null`: torch default (one per core) |
+| `0D_ignition` | Series of 0-D ignitions of fuel/air: `phi`, `T0` [K], `pressure` [Pa], `dt` [s], `T_eq_tolerance` [K] (CVODE and ANN stop when the CVODE temperature is this close to equilibrium), `max_simulation_time` [s] (end time if equilibrium is not reached), `stability_factor` [-] (ANN continued after equilibrium for this times the number of steps, 0 to skip) |
+| `0D_pyrolysis` | Series of 0-D pyrolysis: `T0` [K], `pressure` [Pa], `dt` [s], `T_eq_tolerance` [K], `max_simulation_time` [s], `stability_factor` [-], `diluent` (species or `null`), `X_diluent` [-] |
+| `1D_premixed` | Series of 1-D premixed flames: `phi`, `T0` [K], `pressure` [Pa], `dt` [s], `T_threshold` [K] (ANN not applied below), `x_window` |
+| `1D_diffusion` | Series of 1-D counterflow flames of pure fuel against air: `strain` [1/s], `T_ox` [K], `T_fuel` [K], `pressure` [Pa], `dt` [s], `width` [m], `T_threshold` [K], `x_window` |
+| `validation_set` | `run`, `max_points_scatter` (maximum number of points plotted per cluster) |
+| `speedup_benchmark` | `run`, `batch_sizes` (numbers of states per network call), `dt` [s] (training time step for constant time step models), `pressure` [Pa], `nb_states_cvode` |
+
+Each series section has `run` (run the series or not) and `plots` (plots of each case). Parameters given as lists are swept (all combinations are run), others are the same for all cases. `x_window` is `[x_min, x_max]` [m] for the 1-D errors and plots, or `null` for the whole flame. The 1-D diffusion flame has the setup of the flamelets database (mixture-averaged transport). `conditions_file` (0-D ignition, 1-D premixed and diffusion) runs the test simulations set aside by a flamelets database (`FLAMELETS_DTB_<suffix>/sim_test_0D.csv`, `sim_test_1D_prem.csv`, `sim_test_1D_diff.csv`): each row gives one simulation (`Phi`, `T0` → `phi`, `T0`; for diffusion flames `Strain`, `T0` → `strain`, `T_ox`), run with every combination of the other parameters of the section (e.g. each `dt`); `null` to use the parameters of the section.
+
 # Tests
 
 ```
 pytest tests/
 ```
 
-Tests 01 to 04 must run in order: the first one generates `tests/STOCH_DTB_TEST`, reused by the others, and results are compared to reference histograms. Tests 05 to 21 are independent and run on small cases in temporary folders (test 19 runs `mpiexec -n 2` and is skipped without `mpiexec`) (`h2_learning_database.py` builds a small H2 learning database for tests 08, 09 and 13). Each test file starts with a description of what it tests.
+Tests 01 to 04 check a small H2 stochastic reactors database, its resampling, its multi-dt version and its processing against reference histograms; the database is built once per session in a temporary folder by the fixtures of `conftest.py` (`h2_stoch_database.py`). All tests are independent: they can run in any order, alone, or in several sessions at the same time. Tests 05 to 23 run on small cases in temporary folders (test 19 runs `mpiexec -n 2` and is skipped without `mpiexec`) (`h2_learning_database.py` builds a small H2 learning database for tests 08, 09, 13, 22 and 23). Each test file starts with a description of what it tests.

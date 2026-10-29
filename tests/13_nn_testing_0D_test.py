@@ -8,6 +8,10 @@ Check:
 - run_0D_ignition_case runs with N2 removed from the network species.
 - with progress variable clustering, the 0D case attributes clusters from the progress variable
   of the current state (states advanced with CVODE through the hybrid mode, so that it ignites).
+- the 0D case stops at the first step where the CVODE temperature is within T_eq_tolerance of the
+  equilibrium temperature, with the same number of ANN steps.
+- the cluster of each step is recorded (-1 for CVODE steps of the hybrid mode), and the ANN can be
+  continued after equilibrium (drifts of T and of the sum of Y_k).
 
 Independent of the other tests.
 """
@@ -40,16 +44,16 @@ def test_nn_testing_0D(tmp_path):
     assert np.isclose(test.compute_progvar(state_eq, pressure, Yc_u), 1.0, rtol=1.0e-6)
 
     # 0D ignition with N2 removed from the network species
-    result = test.run_0D_ignition_case(phi=0.6, T0=1200.0, pressure=pressure, dt=dt, nb_ite=3)
+    result = test.run_0D_ignition_case(phi=0.6, T0=1200.0, pressure=pressure, dt=dt, max_simulation_time=3 * dt)
     assert result["states_ann"].shape == (4, 1 + gas.n_species)
 
     # Progress variable clustering (2 clusters with the same network), states advanced with CVODE
-    test.nb_clusters = 2
-    test.clustering_method = "progvar"
-    test.c_bounds = [0.0, 0.5, 1.0]
-    test.models_list = 2 * test.models_list
-    test.Xscaler_list = 2 * test.Xscaler_list
-    test.Yscaler_list = 2 * test.Yscaler_list
+    test.inference.nb_clusters = 2
+    test.inference.clustering_method = "progvar"
+    test.inference.c_bounds = [0.0, 0.5, 1.0]
+    test.inference.models_list = 2 * test.inference.models_list
+    test.inference.Xscaler_list = 2 * test.inference.Xscaler_list
+    test.inference.Yscaler_list = 2 * test.inference.Yscaler_list
     test.hybrid_ann_cvode = True
     test.hybrid_ann_cvode_tol = -1.0
 
@@ -60,8 +64,24 @@ def test_nn_testing_0D(tmp_path):
         clusters.append(test.cluster)
     test.attribute_cluster = spy
 
-    result = test.run_0D_ignition_case(phi=0.6, T0=1200.0, pressure=pressure, dt=dt, nb_ite=64)
+    result = test.run_0D_ignition_case(phi=0.6, T0=1200.0, pressure=pressure, dt=dt, max_simulation_time=64 * dt)
     progvar = result["progvar"][:-1]   # progress variable of the state before each step
 
     assert progvar.max() > 0.9
-    assert clusters == [0 if c < 0.5 else 1 for c in progvar]
+    assert clusters[1:] == [0 if c < 0.5 else 1 for c in progvar]   # First call: ANN warm-up
+    assert np.all(result["clusters"] == -1)   # All steps done by CVODE (hybrid with negative tolerance)
+
+    # Stop at CVODE equilibrium (max_simulation_time not reached), same number of ANN steps
+    result = test.run_0D_ignition_case(phi=0.6, T0=1200.0, pressure=pressure, dt=dt, max_simulation_time=1.0, T_eq_tolerance=1.0)
+    T_ref = result["states_ref"][:, 0]
+
+    assert result["equilibrium_reached"]
+    assert abs(T_ref[-1] - result["T_eq"]) <= 1.0 and abs(T_ref[-2] - result["T_eq"]) > 1.0
+    assert result["states_ann"].shape == result["states_ref"].shape
+    assert len(T_ref) < 1.0 / dt
+
+    # Stability after equilibrium: ANN continued, drifts of T and sum(Y_k)
+    test.hybrid_ann_cvode = False
+    result = test.run_0D_ignition_case(phi=0.6, T0=1200.0, pressure=pressure, dt=dt, max_simulation_time=4 * dt, stability_factor=2.0)
+    assert result["T_drift"] >= 0.0 and result["sumYk_drift"] >= 0.0
+    assert len(result["clusters"]) == 4 and np.all(result["clusters"] >= 0)

@@ -837,7 +837,7 @@ class LearningDatabase(object):
 
             # dt gets its own log transform, unclipped by the species threshold
             if self.dt_var:
-                X_p["dt"] = transforms.transform_dt(X_p["dt"], self.log_transform_X)
+                X_p["dt"] = transforms.transform_dt(X_p["dt"])
 
 
             # If differences are considered
