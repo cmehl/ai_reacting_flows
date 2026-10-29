@@ -176,7 +176,8 @@ class NNTesting():
         pressure : float
             Initial pressure [Pa].
         dt : float
-            Time step used by both CVODE and ANN loops [s].
+            Time step used by both CVODE and ANN loops [s]. As in a CFD code, CVODE is restarted from
+            a new reactor at each step.
         max_simulation_time : float
             Maximum end time [s], used only if CVODE does not reach equilibrium before.
         T_eq_tolerance : float
@@ -212,14 +213,11 @@ class NNTesting():
         T_eq = self.gas.T
         self.gas.TPX = T0, pressure, gas_init_compo
 
-        # Defining reactor
-        r = ct.IdealGasConstPressureReactor(self.gas)
-        sim = ct.ReactorNet([r])
         simtime = 0.0
         states = ct.SolutionArray(self.gas, extra=['t'])
 
         # Initial state (saved for later use in NN computation)
-        states.append(r.thermo.state, t=0.0)
+        states.append(self.gas.state, t=0.0)
         T_ini = states.T
         Y_ini = states.Y
 
@@ -232,15 +230,16 @@ class NNTesting():
         #-------------------- CVODE COMPUTATION---------------------------
         # Until equilibrium (or max_simulation_time if not reached)
         equilibrium_reached = False
-        time_cvode = 0.0   # CPU time of the chemistry integration [s]
+        time_cvode = 0.0   # CPU time of the chemistry integration (reactor creation and advance) [s]
         while not equilibrium_reached and simtime < max_simulation_time - 0.5 * dt:
             simtime += dt
 
+            # New reactor at each step, as in a CFD code (CVODE restarted from the current state)
             start = perf_counter()
-            sim.advance(simtime)
+            T_cvode, Y_cvode = self.advance_state_CVODE(states.T[-1], states.Y[-1], pressure, dt)
             time_cvode += perf_counter() - start
 
-            states.append(r.thermo.state, t=simtime*1.0e3)
+            states.append(TPY=(T_cvode, pressure, Y_cvode), t=simtime*1.0e3)
 
             if reactor_type=="ignition" and states.T[-1] > T0+200.0 and tau_ign_CVODE==0.0:
                 tau_ign_CVODE = simtime
