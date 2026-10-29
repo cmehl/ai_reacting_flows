@@ -1,17 +1,16 @@
 """
 Test 04: learning database processing.
 
-Processes STOCH_DTB_TEST/solutions.h5 (from test 01) with log transform and one cluster, and
-writes STOCH_DTB_TEST/dtb_resampled/training_data.h5.
+Processes STOCH_DTB_TEST/solutions.h5 (session fixture h2_stoch_dtb, see conftest.py) with log
+transform and one cluster, and writes STOCH_DTB_TEST/dtb_resampled/training_data.h5.
 Check: histograms of the train/validation data are close to the references in H2_TEST_training_data/.
-
-Requires test 01.
 """
 import os
 import oyaml as yaml
 import numpy as np
 from ai_reacting_flows.databases_processing.database_processing import LearningDatabase
 from misc import check_h2_training_histograms
+from h2_stoch_database import tests_dir, mech_file
 
 # Dictionary to store data processing parameters
 dtb_processing_parameters = {}
@@ -24,7 +23,7 @@ dtb_processing_parameters["database_params"]["database_name"] = "dtb_resampled" 
 dtb_processing_parameters["database_params"]["dtb_file"] = "solutions.h5"
 dtb_processing_parameters["database_params"]["dt_var"] = False
 dtb_processing_parameters["database_params"]["fuel"] = "H2"
-dtb_processing_parameters["database_params"]["mech_file"] = "../data/chemical_mechanisms/mech_H2.yaml"
+dtb_processing_parameters["database_params"]["mech_file"] = mech_file
 
 # Data processing
 dtb_processing_parameters["data_processing"] = {}
@@ -49,9 +48,8 @@ dtb_processing_parameters["train_set_size"] = 0.75
 
 
 
-def test_dtvar_dtb_processing():
-    current_dir = os.path.dirname(__file__)
-    os.chdir(current_dir)
+def test_dtvar_dtb_processing(h2_stoch_dtb):
+    os.chdir(h2_stoch_dtb)
     with open("dtb_processing.yaml", "w") as file:
         yaml.dump(dtb_processing_parameters, file, default_flow_style=False)
 
@@ -65,4 +63,4 @@ def test_dtvar_dtb_processing():
     tol.append(np.array([31.14, 19.51, 22.92, 58.46, 26.6, 40.58, 22.56, 19.82]))
     tol.append(np.array([15.82, 10.69, 7.92, 8.32, 19.92, 8.42, 12.74, 8.0, 7.06]))
     tol.append(np.array([10.76, 7.95, 9.16, 20.1, 10.25, 14.15, 8.52, 8.15]))
-    assert check_h2_training_histograms(f"./STOCH_DTB_{folder_suffix:s}/dtb_resampled/","H2_TEST_training_data", tol)
+    assert check_h2_training_histograms(f"./STOCH_DTB_{folder_suffix:s}/dtb_resampled/", os.path.join(tests_dir, "H2_TEST_training_data"), tol)
