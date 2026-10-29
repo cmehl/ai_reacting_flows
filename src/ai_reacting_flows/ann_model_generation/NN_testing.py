@@ -282,6 +282,11 @@ class NNTesting():
         time_ann = 0.0   # CPU time of the chemistry steps (clustering, network, CVODE if hybrid) [s]
         clusters = []    # Cluster of the network of each step, -1 for a CVODE step (hybrid)
         state = np.append(T_ann, Y_k_ann)
+
+        # ANN warm-up, not timed: the first calls initialize the networks (CUDA) and the k-means
+        self.attribute_cluster(state, dt, progvar)
+        self.advance_state_NN(state[0], state[1:], pressure, dt)
+
         for i in range(nb_ite):
             # Old state
             T_old = state[0]
@@ -654,6 +659,11 @@ class NNTesting():
 
         time_ann = 0.0   # CPU time of the chemistry steps (clustering, network, CVODE if hybrid) [s]
         clusters = np.full(nb_0_reactors, -1)   # Cluster of the network of each point, -1 if not advanced by a network
+
+        # ANN warm-up, not timed: the first calls initialize the networks (CUDA) and the k-means
+        self.attribute_cluster(np.append(Tt[0], Yt_ann[:, 0]), dt, c[0])
+        self.advance_state_NN(Tt[0], Yt_ann[:, 0], pressure, dt)
+
         for i_reac in range(nb_0_reactors):
 
             # Computing current progress variable on physical state

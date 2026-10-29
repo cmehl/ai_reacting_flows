@@ -68,7 +68,7 @@ def test_nn_testing_0D(tmp_path):
     progvar = result["progvar"][:-1]   # progress variable of the state before each step
 
     assert progvar.max() > 0.9
-    assert clusters == [0 if c < 0.5 else 1 for c in progvar]
+    assert clusters[1:] == [0 if c < 0.5 else 1 for c in progvar]   # First call: ANN warm-up
     assert np.all(result["clusters"] == -1)   # All steps done by CVODE (hybrid with negative tolerance)
 
     # Stop at CVODE equilibrium (max_simulation_time not reached), same number of ANN steps
