@@ -22,7 +22,7 @@ from ai_reacting_flows.ann_model_generation.NN_manager import NN_manager
 from ai_reacting_flows.ann_model_generation.NN_testing import NNTesting
 from h2_learning_database import write_h2_learning_database, mech_file, dt, pressure
 
-testing_parameters = {"models_folder": "MODEL_TEST", "spec_to_plot": ["H2"], "yk_renormalization": False,
+testing_parameters = {"models_folder": "MODEL_TEST", "spec_to_plot": ["H2"], "yk_renormalization": 0,
                       "hybrid_ann_cvode": False, "hybrid_ann_cvode_tol": 5.0e-05}
 
 

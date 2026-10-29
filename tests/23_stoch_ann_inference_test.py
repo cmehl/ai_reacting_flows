@@ -49,11 +49,11 @@ data_gen_parameters["fuel"] = ["H2"]
 data_gen_parameters["calc_mean_traj"] = False
 data_gen_parameters["ML_inference_flag"] = True
 data_gen_parameters["ML_model_folder"] = "MODEL_TEST"
-data_gen_parameters["ML_yk_renormalization"] = False
+data_gen_parameters["ML_yk_renormalization"] = 0
 data_gen_parameters["ML_hybrid_ann_cvode"] = False
 data_gen_parameters["ML_hybrid_ann_cvode_tol"] = 5.0e-05
 
-testing_parameters = {"models_folder": "MODEL_TEST", "spec_to_plot": ["H2"], "yk_renormalization": False,
+testing_parameters = {"models_folder": "MODEL_TEST", "spec_to_plot": ["H2"], "yk_renormalization": 0,
                       "hybrid_ann_cvode": False, "hybrid_ann_cvode_tol": 5.0e-05}
 
 

@@ -203,6 +203,62 @@ Single cases can also be run from Python (`test_0D_ignition`, `test_0D_pyrolysis
 
 `NNTesting` (`NN_testing.py`) runs the reference and ANN cases; the error metrics are in `NN_testing_metrics.py` and the plots in `NN_testing_plots.py`. The ANN chemistry step itself (clustering, transforms, networks) is in `NN_inference.py` (`NNInference`), shared with the stochastic reactors. The new temperature follows from enthalpy conservation, with the species enthalpies and heat capacities computed from the NASA polynomials of the mechanism, vectorized over the states (`utilities.species_h_cp`).
 
+### Element conservation of the ANN mass fractions (`yk_renormalization`)
+
+The networks do not conserve the elements exactly: the predicted mass fractions $Y_k^*$ at $t+dt$ are corrected (`NNInference.advance`, before the temperature update, which then uses the corrected $Y_k$). The sum $\sum_k Y_k^*$ before correction is kept for the mass check of the hybrid mode. Species not predicted by the network (N2 without N chemistry) have $Y_k^* = Y_k^t$.
+
+Notations, for the elements $A \in \{C, H, O, N\}$ and the species $k$ of the mechanism:
+
+- $n_{A,k}$ number of atoms of $A$ in species $k$, $W_A$ and $W_k$ molar masses [kg/kmol], $a_{A,k} = n_{A,k} W_A / W_k$;
+- $c_{A,k} = 1$ if species $k$ contains $A$ ($n_{A,k} > 0$), else 0;
+- element mass fractions $Y_A = \sum_k a_{A,k} Y_k$, of the state at $t$: $Y_A^t$, of the prediction: $Y_A^*$;
+- imbalance of the prediction $\delta_A = Y_A^* - Y_A^t$.
+
+All corrections give $Y_A = Y_A^t$ for the 4 elements, hence $\sum_k Y_k = \sum_A Y_A$ is also conserved (species made of C, H, O, N only).
+
+**`0`**: no correction.
+
+**`1`** (`enforce_elements_balance`): one species $s_A$ per element carries the whole imbalance,
+
+$$Y_{s_A} \leftarrow Y_{s_A} - \frac{\delta_A}{a_{A,s_A}}$$
+
+1. C with CO2 (only for states containing C), H with H2, N with N2: these species contain only one of C, H, N, so the three corrections are independent ($\delta_A$ of the prediction);
+2. $Y_O$ is recomputed (CO2 changed it) and O is corrected with O2.
+
+Exact and cheapest, but a minor carrier species takes the whole imbalance: with 1 % random errors on burnt H2/air gases at 1500 K, H2 ($Y_{H_2} \sim 10^{-7}$) becomes negative in about half of the lean states, O2 in about half of the rich ones.
+
+**`2`** (`enforce_elements_balance_wan`): Wan *et al.*, Combust. Flame 220 (2020), Eqs. (7)-(8). The imbalance of $A$ is distributed on all the species containing $A$, in proportion to their mass fractions:
+
+$$Y_k \leftarrow Y_k - \frac{Y_k}{Y_A}\, \delta_A = Y_k \frac{Y_A^t}{Y_A} \quad \text{for } c_{A,k} = 1$$
+
+i.e. a common rescaling of the species containing $A$ ($Y$ and $Y_A$ of the current corrected state).
+
+1. For C, H, N in turn, rescale the species containing the element by $Y_A^t / Y_A$ (factor 1 if $Y_A = 0$);
+2. species containing several of C, H, N (NH3, CH4, ...) couple these corrections: step 1 is repeated until $|Y_A - Y_A^t| \le 10^{-12}\, Y_A^t$ for C, H, N (at most 50 passes; 2 are enough in practice, the coupling is of second order);
+3. O is corrected with O2 only, as in the paper ($Y_{O_2} \leftarrow Y_{O_2} - \delta_O / a_{O,O_2}$).
+
+C, H and N corrections are multiplications by positive factors (positivity kept), but the O correction has the drawback of `1` in rich mixtures, where O2 vanishes.
+
+**`3`** (`enforce_elements_balance_wan_all`): extension of `2` to O. Each species is corrected in proportion to its mass fraction, with one multiplier $\mu_B$ per element it contains:
+
+$$Y_k \leftarrow Y_k \Big(1 + \sum_B \mu_B\, c_{B,k}\Big)$$
+
+The element mass fractions are linear in $Y$, so the conservation of the 4 elements gives a linear system for the 4 multipliers ($Y^*$ in $M$):
+
+$$\sum_B M_{AB}\, \mu_B = -\delta_A, \qquad M_{AB} = \sum_k a_{A,k}\, Y_k^*\, c_{B,k}$$
+
+1. build $M$ (4 x 4) and $\delta$ for each state;
+2. elements absent from a state or from the mechanism ($M_{AA} = Y_A^* = 0$, e.g. C in H2/air): $\mu_A = 0$ (row and column of $M$ replaced by the identity, $\delta_A = 0$);
+3. solve the systems of all states at once (`np.linalg.solve`), then apply the correction.
+
+Exact in one step, without iterations. For a single element, $\mu_A = -\delta_A / Y_A^*$: Eq. (8) of Wan *et al.* Positivity holds if $1 + \sum_B \mu_B c_{B,k} > 0$, which is not guaranteed by the system but holds by far for small prediction errors: with 1 % random errors on burnt H2/air gases (lean to rich, 1000 to 1500 K), the factors stay within 0.95 to 1.05, also in rich mixtures where `2` makes O2 negative in about half of the states.
+
+| Flag | Species carrying the correction | Exact | Positivity | Cost (NH3 mechanism, $10^5$ states, 1 % errors) |
+|------|------|------|------|------|
+| `1` | CO2, H2, N2, O2 | yes | no (minor carriers) | 0.5 µs/state |
+| `2` | all species with C, H, N (rescaling); O2 for O | yes (iterated) | C, H, N yes; O2 no in rich mixtures | 2.5 µs/state |
+| `3` | all species, for the 4 elements | yes (one solve) | in practice | 1.8 µs/state |
+
 The stochastic reactors can also be run with the ANN instead of CVODE for the chemistry (`ML_inference_flag: true` in `dtb_params.yaml`), to test the networks in mixing conditions. The model is read from `MODELS/<ML_model_folder>` in the case folder; use another `results_folder_suffix` than the database used for training, as the results folder is overwritten.
 
 # Input YAML files
@@ -230,7 +286,7 @@ Examples of all files can be found in `scripts/<CASE>/`. Units are SI.
 | `calc_mean_traj` | If `true`, write mean trajectories of each inlet |
 | `ML_inference_flag` | If `true`, chemistry is computed with the ANN instead of CVODE (optional keys below are then required) |
 | `ML_model_folder` | Model folder in `MODELS/` of the case folder (e.g. `MODEL_H2_POF_2023`). Its mechanism and `pv_species` must be those of this file |
-| `ML_yk_renormalization` | If `true`, ANN mass fractions are corrected to conserve the elements |
+| `ML_yk_renormalization` | Correction of the ANN mass fractions to conserve the elements, as `yk_renormalization` of `nn_testing.yaml` |
 | `ML_hybrid_ann_cvode` | If `true`, particles whose ANN mass fractions sum differs from 1 by more than `ML_hybrid_ann_cvode_tol` are advanced with CVODE |
 | `ML_hybrid_ann_cvode_tol` | Tolerance on the sum of mass fractions [-] (e.g. `5.0e-05`) |
 
@@ -318,7 +374,7 @@ For `DeepONet`, these three keys are dicts with `branch` and `trunk` entries (pl
 |-----|-------------|
 | `models_folder` | Model folder in `MODELS/` (e.g. `MODEL_H2_POF_2023`) |
 | `spec_to_plot` | Species plotted, and on which 1-D errors are computed |
-| `yk_renormalization` | If `true`, ANN mass fractions are corrected to conserve the elements |
+| `yk_renormalization` | Correction of the ANN mass fractions to conserve the elements: `0` none, `1` one species per element, `2` Wan *et al.* (2020), `3` Wan *et al.* extended to O (see [Element conservation](#element-conservation-of-the-ann-mass-fractions-yk_renormalization)) |
 | `hybrid_ann_cvode` | If `true`, CVODE is used when the ANN mass fractions sum differs from 1 by more than `hybrid_ann_cvode_tol` |
 | `hybrid_ann_cvode_tol` | Tolerance on the sum of mass fractions [-] |
 | `device` | Optional, device of the networks: `cpu` (as in a first CFD use) or `cuda`; absent or `null`: `cuda` if available, else `cpu` |

@@ -25,6 +25,11 @@ import ai_reacting_flows.tools.utilities as utils
 import ai_reacting_flows.tools.transforms as transforms
 from ai_reacting_flows.databases_processing.processing_parameters import read_processing_parameters, MECHANISM_FILE
 
+# Element correction of Wan et al. (enforce_elements_balance_wan): C, H, N corrections repeated until the
+# element mass fractions are conserved to this relative tolerance [-], at most this number of times
+WAN_RTOL = 1.0e-12
+WAN_MAX_ITERATIONS = 50
+
 
 class NNInference():
 
@@ -227,7 +232,10 @@ class NNInference():
         T: temperatures [K] (n), Y: mass fractions [-] (n, n_species) of all species of the mechanism,
         P: pressure [Pa] (scalar or n, not used: ideal gas enthalpies depend only on T),
         dt: time step [s] (scalar or n), clusters: clusters (n)
-        from attribute_clusters, yk_renormalization: correct Y to conserve the elements.
+        from attribute_clusters, yk_renormalization: correction of Y to conserve the elements, 0: none,
+        1: one species per element (enforce_elements_balance), 2: Wan et al. 2020
+        (enforce_elements_balance_wan), 3: Wan et al. 2020 extended to O, all elements solved together
+        (enforce_elements_balance_wan_all).
 
         Returns T_new [K] (n), Y_new [-] (n, n_species) and the sum of the predicted mass fractions
         before element correction (n), used to check mass conservation (hybrid ANN/CVODE).
@@ -281,9 +289,16 @@ class NNInference():
         # Sum of Yk before element correction (mass conservation check)
         sum_Yk = Y_new.sum(axis=1)
 
-        # Enforcing element conservation
-        if yk_renormalization:
+        # Enforcing element conservation (0: none)
+        if yk_renormalization == 1:
+            # One species per element
             Y_new = self.enforce_elements_balance(Y, Y_new)
+        elif yk_renormalization == 2:
+            # Imbalance distributed on the species containing each element (Wan et al. 2020)
+            Y_new = self.enforce_elements_balance_wan(Y, Y_new)
+        elif yk_renormalization == 3:
+            # Same, O also distributed on its species (not only O2: rich mixtures, where O2 vanishes)
+            Y_new = self.enforce_elements_balance_wan_all(Y, Y_new)
 
         # Deducing T from energy conservation: sum_k h_k Y_k constant, with cp [J/kg/K] and h_k [J/kg] at t
         # (NASA polynomials, vectorized: a Cantera SolutionArray loops over the states)
@@ -331,3 +346,83 @@ class NNInference():
         correct(Y_new_corr, "O2", 2, Y_a_in, Y_a_out)
 
         return Y_new_corr
+
+
+    def enforce_elements_balance_wan(self, Y_old, Y_new):
+        """Mass fractions Y_new (n, n_species) corrected to keep the element mass fractions of Y_old, as in
+        Wan et al., Combust. Flame 220 (2020), Eqs. (7)-(8), https://doi.org/10.1016/j.combustflame.2020.06.008.
+
+        The imbalance dY_A of element A (C, H, N) is distributed on all the species containing A, in
+        proportion to their mass fractions: Y_i <- Y_i - (Y_i / Y_A) dY_A = Y_i Y_A(t) / Y_A(t+dt), with
+        Y_A the element mass fraction of the prediction at t+dt. Species containing several of C, H, N
+        (e.g. NH3, CH4) couple the corrections, which are repeated until the three balances hold.
+        O is then corrected with O2 only, as in the paper.
+        """
+
+        W_k = self.gas.molecular_weights
+
+        # Element mass fractions (n, 4), order C, H, O, N
+        def elements(Y):
+            return self.W_atoms * ((Y / W_k) @ self.atomic_array.T)
+
+        Y_new_corr = Y_new.copy()
+        Y_a_in = elements(Y_old)
+
+        # C, H and N: species containing the element rescaled by Y_A(t) / Y_A(t+dt), repeated until the
+        # balances hold (corrections coupled by species with several elements)
+        elements_CHN = [0, 1, 3]
+        for _ in range(WAN_MAX_ITERATIONS):
+            for i_el in elements_CHN:
+                Y_a_out = elements(Y_new_corr)[:, i_el]
+                ratio = np.divide(Y_a_in[:, i_el], Y_a_out, out=np.ones_like(Y_a_out), where=Y_a_out > 0)
+
+                contains = self.atomic_array[i_el] > 0
+                Y_new_corr[:, contains] *= ratio[:, None]
+
+            if np.allclose(elements(Y_new_corr)[:, elements_CHN], Y_a_in[:, elements_CHN], rtol=WAN_RTOL, atol=0.0):
+                break
+
+        # O: corrected with O2 only, which does not change C, H and N
+        k = self.gas.species_index("O2")
+        Y_a_out = elements(Y_new_corr)
+        Y_new_corr[:, k] -= (Y_a_out[:, 2] - Y_a_in[:, 2]) / ((self.W_atoms[2] / W_k[k]) * self.atomic_array[2, k])
+
+        return Y_new_corr
+
+
+    def enforce_elements_balance_wan_all(self, Y_old, Y_new):
+        """Mass fractions Y_new (n, n_species) corrected to keep the element mass fractions of Y_old: extension
+        of Wan et al., Combust. Flame 220 (2020), Eqs. (7)-(8), https://doi.org/10.1016/j.combustflame.2020.06.008,
+        to the 4 elements C, H, O, N, O included (the paper corrects O with O2 only, which fails in rich
+        mixtures where O2 vanishes).
+
+        The correction of each species is proportional to its mass fraction, with one multiplier mu_A per
+        element A it contains: dY_i = Y_i sum_A mu_A c_Ai, with c_Ai = 1 if species i contains A, else 0.
+        The element mass fractions are linear in Y, Y_A = sum_i a_Ai Y_i with a_Ai = n_Ai W_A / W_i, so the
+        4 multipliers are solved together (one 4x4 system per state, exact in one step):
+            sum_B M_AB mu_B = Y_A(t) - Y_A(t+dt),     M_AB = sum_i a_Ai Y_i c_Bi   (Y at t+dt)
+        For a single element, mu_A = (Y_A(t) - Y_A(t+dt)) / Y_A(t+dt): Eq. (8) of the paper.
+        """
+
+        W_k = self.gas.molecular_weights
+
+        # a_Ai = n_Ai W_A / W_i and c_Ai (4, n_species), order C, H, O, N
+        a = self.W_atoms[:, None] * self.atomic_array / W_k
+        c = (self.atomic_array > 0).astype(float)
+
+        # Element imbalance (n, 4) and matrices of the systems (n, 4, 4)
+        dY_a = Y_old @ a.T - Y_new @ a.T
+        M = np.einsum("ai,ni,bi->nab", a, Y_new, c)
+
+        # Elements absent from a state (or from the mechanism), M_AA = Y_A = 0: multiplier set to 0
+        absent = np.einsum("naa->na", M) <= 0.0
+        i_state, i_el = np.nonzero(absent)
+        M[i_state, i_el, :] = 0.0
+        M[i_state, :, i_el] = 0.0
+        M[i_state, i_el, i_el] = 1.0
+        dY_a[absent] = 0.0
+
+        # Multipliers (n, 4) and corrected mass fractions
+        mu = np.linalg.solve(M, dY_a[:, :, None])[:, :, 0]
+
+        return Y_new * (1.0 + mu @ c)
