@@ -9,8 +9,8 @@ Transform of mass fractions Y [-], chosen with log_transform:
     1: logarithm, log(max(Y, threshold))
     2: Box-Cox, (max(Y, 0)**lambda_bct - 1) / lambda_bct
        (Box & Cox, J. R. Stat. Soc. B 26:211, 1964, https://doi.org/10.1111/j.2517-6161.1964.tb00553.x)
-Species listed in log_excluded_species are kept on a linear scale. The time step dt [s] has
-its own logarithm (no threshold) when log_transform_X > 0.
+Species listed in log_excluded_species are kept on a linear scale. The time step dt [s] always
+has its own logarithm (no threshold), whatever the transform of the mass fractions.
 
 Inverse functions accept numpy arrays and torch tensors (training diagnostics run on tensors).
 """
@@ -108,13 +108,11 @@ def inverse_species(Y_t, species, log_transform, lambda_bct, log_excluded_specie
 # TIME STEP
 #==============================================================================
 
-def transform_dt(dt, log_transform_X):
-    """Time step feature: log(dt) if log_transform_X > 0 (no threshold), dt [s] otherwise."""
+def transform_dt(dt):
+    """Time step feature: log(dt), dt [s] (no threshold), whatever the transform of the mass fractions:
+    time steps span orders of magnitude."""
 
-    if log_transform_X > 0:
-        return np.log(np.maximum(dt, DT_EPS))
-
-    return dt
+    return np.log(np.maximum(dt, DT_EPS))
 
 
 #==============================================================================
@@ -207,17 +205,17 @@ def kmeans_features(T, Y, dt, species, clusterize_on, log_transform_X, threshold
 
     T: temperature [K] (n_points), Y: mass fractions [-] (n_points, n_species) of species (N2 removed
     without N chemistry), dt: time step [s] (n_points), only used if clusterize_on is "dt" or "all".
-    Features: "phys": [T, transformed Y], "dt": [transformed dt], "all": [T, transformed Y, transformed dt].
+    Features: "phys": [T, transformed Y], "dt": [log(dt)], "all": [T, transformed Y, log(dt)].
     """
 
     # Clustering on the time step only
     if clusterize_on == "dt":
-        return np.reshape(transform_dt(np.asarray(dt, dtype=float), log_transform_X), (-1, 1))
+        return np.reshape(transform_dt(np.asarray(dt, dtype=float)), (-1, 1))
 
     features = np.column_stack([T, transform_species(Y, species, log_transform_X, threshold, lambda_bct, log_excluded_species)])
 
     # Clustering on physical state and time step
     if clusterize_on == "all":
-        features = np.column_stack([features, transform_dt(np.asarray(dt, dtype=float), log_transform_X)])
+        features = np.column_stack([features, transform_dt(np.asarray(dt, dtype=float))])
 
     return features

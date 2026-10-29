@@ -272,7 +272,7 @@ Cases are sampled in the given bounds with Latin hypercube sampling.
 | `database_params.dtb_folder_suffix` | Suffix of the database folder to read |
 | `database_params.dtb_file` | h5 file to read (`solutions.h5` or the multi-dt file) |
 | `database_params.database_name` | Name of the output subfolder |
-| `database_params.dt_var` | `true` for a multi-dt database ($dt$ is an input) |
+| `database_params.dt_var` | `true` for a multi-dt database ($dt$ is an input, always as $\log(dt)$, whatever `log_transform_X`) |
 | `database_params.fuel`, `database_params.mech_file` | Fuel and mechanism |
 | `data_processing.log_transform_X`, `log_transform_Y` | 0: none, 1: log, 2: Box-Cox (with `lambda_bct`, optional, default 0.1) |
 | `data_processing.threshold` | Mass fractions are clipped to this value before log transform (to 0 before Box-Cox) |

@@ -238,7 +238,7 @@ class NNInference():
                                                    self.threshold, self.lambda_bct, self.log_excluded_species)
         log_state = np.column_stack([T, x_species_t])
         if self.dt_var:
-            log_state = np.column_stack([log_state, transforms.transform_dt(dt, self.log_transform_X)])
+            log_state = np.column_stack([log_state, transforms.transform_dt(dt)])
 
         # Network species at t+dt, one network call per cluster
         Y_ANN_new = np.empty((n, self.nb_species_ANN))
