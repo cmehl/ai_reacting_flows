@@ -17,12 +17,17 @@ from scipy.sparse.csgraph import minimum_spanning_tree
 
 from ai_reacting_flows.stochastic_reactors_data_gen.particle import Particle
 from ai_reacting_flows.stochastic_reactors_data_gen.pre_processing import Inlet
+import ai_reacting_flows.stochastic_reactors_data_gen.emst_pope as emst_pope
 import ai_reacting_flows.tools.utilities as utils
 from ai_reacting_flows.tools.utilities import PRINT
 from ai_reacting_flows.ann_model_generation.NN_inference import NNInference
 
 matplotlib.use('Agg')
 sns.set()
+
+# EMST_POPE: scale of the mass fractions for the tree [-] (example of emst.f: the tree is built on Y / 0.1,
+# minor species have a negligible weight in it)
+EMST_SPECIES_SCALE = 0.1
 
 class ParticlesCloud(object):
     
@@ -182,6 +187,13 @@ class ParticlesCloud(object):
         # Mixing model
         self.mixing_model = data_gen_parameters["mixing_model"]
         self.mixing_time = float(data_gen_parameters["mixing_time"])
+
+        # EMST_POPE: ages of the particles in the stationary state. Same seed on all ranks (mixing is done
+        # by rank 0, the particles and their ages are then sent to all ranks)
+        if self.mixing_model == "EMST_POPE":
+            self.emst_rng = np.random.default_rng(0)
+            for part, age in zip(self.particles_list, emst_pope.init_ages(self.nb_parts_tot, self.emst_rng)):
+                part.emst_age = age
         
         # Chemistry temperature threshold
         self.T_threshold = float(data_gen_parameters["T_threshold"])
@@ -248,7 +260,7 @@ class ParticlesCloud(object):
 
         
 
-        if self.mixing_model!="CURL_MODIFIED_DD" and self.mixing_model!="EMST":  
+        if self.mixing_model not in ["CURL_MODIFIED_DD", "EMST_SIMPLIFIED", "EMST_POPE"]:
             # Do or read mixing
             read_mixing = data_gen_parameters["read_mixing"]
             do_CURL_rate = True if "CURL_MODIFIED" in self.mixing_model else False
@@ -301,7 +313,7 @@ class ParticlesCloud(object):
         # =====================================================================
 
         # Columns of data array with solution and post-processing variables
-        self.cols_all_states = ['Temperature'] + ['Pressure'] + self.species_names + ['Mix_frac'] + ['Equiv_ratio'] + ['Prog_var'] + ['HRR'] +  ['Time'] + ['Particle_number'] + ['Inlet_number'] + ['Y_C', 'Y_H', 'Y_O', 'Y_N'] + ['Mass']
+        self.cols_all_states = ['Temperature'] + ['Pressure'] + self.species_names + ['Mix_frac'] + ['Equiv_ratio'] + ['Prog_var'] + ['HRR'] +  ['Time'] + ['Particle_number'] + ['Inlet_number'] + ['Y_C', 'Y_H', 'Y_O', 'Y_N'] + ['Mass'] + ['EMST_age']
         
         # Initialize mean trajectories
         if self.calc_mean_traj:
@@ -553,8 +565,11 @@ class ParticlesCloud(object):
             if self.iteration%self.diffusion_freq[self.iteration]==0:
                 self._mix_curl_dd()
 
-        elif self.mixing_model=="EMST":
+        elif self.mixing_model=="EMST_SIMPLIFIED":
             self._mix_emst()
+
+        elif self.mixing_model=="EMST_POPE":
+            self._mix_emst_pope()
 
 
 
@@ -840,9 +855,10 @@ class ParticlesCloud(object):
     #         p.recompute_Yc_eq = True
 
 
-    # EMST mixing model
+    # EMST mixing model (EMST_SIMPLIFIED)
     def _mix_emst(self):
-        """Perform one EMST micro-mixing.
+        """Perform one EMST micro-mixing (simplified version, EMST_SIMPLIFIED; see _mix_emst_pope for the model
+        of Subramaniam & Pope).
 
         The implementation follows the Euclidean Minimum Spanning Tree (EMST)
         approach:
@@ -933,6 +949,47 @@ class ParticlesCloud(object):
             p.update_ThermoStates(self)
 
             # EMST requires recomputation of equilibrium progress variable
+            p.recompute_Yc_eq = True
+
+
+    # EMST mixing model of Subramaniam & Pope (EMST_POPE)
+    def _mix_emst_pope(self):
+        """EMST mixing of the active particles over the time step, model of Subramaniam & Pope with ages
+        (see emst_pope.py): the variance function of the tree variables decays as exp(-dt / mixing_time).
+
+        Mixed variables: Y, hs and Yc_u. As in the example of emst.f, the tree is built on the mass
+        fractions only, scaled by EMST_SPECIES_SCALE; hs and Yc_u are mixed but not used for the tree.
+        """
+
+        active_particles = [p for p in self.particles_list if p.is_active]
+
+        f = np.column_stack((np.array([p.Y for p in active_particles]),
+                             np.array([p.hs for p in active_particles]),
+                             np.array([p.Yc_u for p in active_particles])))
+        w = np.array([p.mass for p in active_particles])
+        ages = np.array([p.emst_age for p in active_particles])
+
+        # Scales: mass fractions for the tree, hs and Yc_u not used for the tree
+        fscale = np.append(np.full(self.nb_species, EMST_SPECIES_SCALE), [emst_pope.NO_TREE_SCALE] * 2)
+
+        # Mixing over the normalized time dt / mixing_time
+        ds = self.dt[self.iteration] / self.mixing_time
+        f_new, ages_new = emst_pope.emst_mix(f, fscale, w, ages, ds, self.emst_rng)
+
+        # Write back particle states
+        for k, p in enumerate(active_particles):
+
+            p.Y = f_new[k, :self.nb_species]
+            p.hs = f_new[k, self.nb_species]
+            p.Yc_u = f_new[k, self.nb_species + 1]
+            p.emst_age = ages_new[k]
+
+            p.state[0] = p.hs
+            p.state[2:] = p.Y
+
+            p.update_ThermoStates(self)
+
+            # Mixing changes the equilibrium progress variable
             p.recompute_Yc_eq = True
 
 
@@ -1036,6 +1093,7 @@ class ParticlesCloud(object):
             arr[i,part.nb_state_vars+6] = part.num_inlet
             arr[i,part.nb_state_vars+7:part.nb_state_vars+11] = np.dot(self.A_atomic, part.Y)   # Elements mass fractions (C, H, O, N)
             arr[i,part.nb_state_vars+11] = part.mass
+            arr[i,part.nb_state_vars+12] = part.emst_age   # Age property of EMST_POPE (NaN for other mixing models)
 
         # Store initial solution in h5 file
         f = h5py.File(f"{self.results_folder}/{self.solution_file}","a")

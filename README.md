@@ -55,7 +55,7 @@ python ann_model_testing.py                # 4. testing on simple cases  (nn_tes
 
 ## 1. Database generation
 
-+ **Stochastic reactors**: 0-D stochastic particles following [Wan *et al.*](https://www.sciencedirect.com/science/article/pii/S0010218020302170). Each particle is a chemical state; particles mix (CURL, CURL_MODIFIED, CURL_MODIFIED_DD (work in progress) or EMST models) to mimic diffusion.
++ **Stochastic reactors**: 0-D stochastic particles following [Wan *et al.*](https://www.sciencedirect.com/science/article/pii/S0010218020302170). Each particle is a chemical state; particles mix (CURL, CURL_MODIFIED, CURL_MODIFIED_DD (work in progress), EMST_SIMPLIFIED or EMST_POPE models, see [EMST mixing model](#emst-mixing-model-emst_pope)) to mimic diffusion.
 + **Canonical flames**: 0-D reactors, 1-D premixed and 1-D diffusion flames, launched with `generate_0D_dtb.py` and `dtb_params_flmts.yaml`.
 + **Multiple time steps** (optional): `generate_multi_dt.py` re-integrates the database states with several $dt$, so that $dt$ becomes a network input.
 
@@ -76,12 +76,34 @@ STOCH_DTB_<suffix>/                 (FLAMELETS_DTB_<suffix>/ for canonical flame
 
 In `solutions.h5`, each group `ITERATION_<n>` contains:
 
-+ `all_states`: state of all active particles: `Temperature` [K], `Pressure` [Pa], species mass fractions $Y_k$, `Mix_frac`, `Equiv_ratio`, `Prog_var`, `HRR` [W/m³], `Time` [s], `Particle_number`, `Inlet_number`, atomic mass fractions `Y_C`, `Y_H`, `Y_O`, `Y_N`, `Mass`.
++ `all_states`: state of all active particles: `Temperature` [K], `Pressure` [Pa], species mass fractions $Y_k$, `Mix_frac`, `Equiv_ratio`, `Prog_var`, `HRR` [W/m³], `Time` [s], `Particle_number`, `Inlet_number`, atomic mass fractions `Y_C`, `Y_H`, `Y_O`, `Y_N`, `Mass`, `EMST_age` (age property of `EMST_POPE`, NaN for other mixing models).
 + `X` and `Y` (if `build_ml_dtb: true`): states before and after the chemistry step $dt$ (`Temperature`, `Pressure`, $Y_k$, `Prog_var`, `HRR`). These are the ML input/output pairs.
 
 Column names are stored in the `cols` attribute of each dataset. For canonical flames, the file has a single group `ITERATION_00000` with `X` and `Y`, and the simulated cases are listed in `sim_train_*.csv` / `sim_test_*.csv`. The multi-dt file has one group per MPI rank with `X`, `Y` (one set of outputs per $dt$) and `DT` (the $dt$ values [s]).
 
 Post-processing of a stochastic database is shown in `post_processing_stoch_reac.py`.
+
+### EMST mixing model (`EMST_POPE`)
+
+Model of S. Subramaniam & S.B. Pope, Combust. Flame 115 (1998) 487-514, translated from the Fortran implementation of Z. Ren, S. Subramaniam & S.B. Pope (2002, http://tcg.mae.cornell.edu/emst, `emst.f` and `emst_subs.f`), in `stochastic_reactors_data_gen/emst_pope.py`. It is applied at each time step $dt$ to the active particles (`ParticlesCloud._mix_emst_pope`), over the normalized time $\Delta s = dt / \tau$ ($\tau$: `mixing_time`).
+
+**Variables.** The particles have compositions $f_{ij}$ ($Y_k$, $h_s$ and $Y_{c,u}$ are mixed), weights $w_i$ (`Mass`) and an age property $a_i$. The tree is built on the scaled compositions $g_{ij} = f_{ij} / f_j^{scale}$: as in the example of `emst.f`, $f^{scale} = 0.1$ for the mass fractions, and $h_s$ and $Y_{c,u}$ are not used for the tree ($f^{scale} = 10^{16}$). The variance function $VF = \sum_j \mathrm{var}(g_j)$ (weighted) decays as $\exp(-\Delta s)$ in expectation.
+
+**Age property** (`EMST_age` in `solutions.h5`, `Particle.emst_age`): remaining time of the current state, in units of $\tau$; $a_i > 0$: the particle is mixing, $a_i < 0$: it is not. The durations of the states are uniform in $[0.0178, 0.3157]$ (mixing) and $[0.1666, 0.1667]$ (non-mixing). Initially, a particle is mixing with the probability $p_0 = \langle Z_1 \rangle / (\langle Z_0 \rangle + \langle Z_1 \rangle) \approx 0.5$, with an age drawn from the stationary distribution of the remaining time (density $\propto 1$ below the shortest duration, decreasing linearly to 0 at the longest). After mixing over $\Delta s$, $|a_i|$ decreases by $\Delta s$; a particle whose state ends switches to the other state with a new duration.
+
+**Mixing step** (repeated until $\Delta s$ is mixed, each over at most $0.0178$, the shortest mixing duration):
+
+1. *Tree particles*: the mixing particles, plus non-mixing ones (closest to the end of their state first, which then start mixing) until $p \ge VF / (2.5\, VF_T)$, with $p$ the weight fraction and $VF_T$ the variance function of the tree particles (the ensemble cannot decay more than 2.5 times faster than them).
+2. *Tree*: Euclidean minimum spanning tree of the tree particles in the space of $g$ (Prim's algorithm). Edge $\nu$ gets the coefficient $B_\nu = 2 \min(W_\nu, 1 - W_\nu)$, $W_\nu$ the weight fraction of the tree on one side of the edge: edges in the middle of the tree mix more.
+3. *Mixing* of the tree particles along the edges:
+
+$$w_i \frac{d\phi_i}{ds} = -\alpha \sum_{\nu \ni i} B_\nu (\phi_i - \phi_{j_\nu})$$
+
+   integrated by an implicit Euler step, $(\mathrm{diag}(w) + \eta L)\, \phi^{new} = \mathrm{diag}(w)\, \phi$, with $L$ the Laplacian of the tree weighted by $B$ and $\eta = \alpha\, \delta s$ (weighted means conserved).
+4. *Amount of mixing*: $\eta$ is increased from its estimate $1.08\, \alpha_{est}\, \delta s$, $\alpha_{est} = VF / (2 \sum_\nu B_\nu |\Delta\phi_\nu|^2)$ (initial decay rate), until $VF(\eta) \le VF\, e^{-\delta s}$; then halved until no composition changes by more than 0.3 standard deviations. The time mixed is $\delta s_{done} = \ln(VF / VF(\eta))$; if it exceeds $\delta s$, the mixing is accepted with the probability $\delta s / \delta s_{done}$ (rejection method), so that the expected decay is right.
+5. Ages incremented by $\delta s_{done}$.
+
+When the range of the scaled compositions is below $4 \times 10^{-4}$ (or the largest variance below $10^{-12}$), the IEM model is used instead ($g \leftarrow g - (1 - e^{-\Delta s/2})(g - \langle g \rangle)$). Steps smaller than $10^{-6}$ are done by mixing over $2 \times 10^{-6}$, accepted with a probability.
 
 ## 2. Learning database
 
@@ -277,8 +299,8 @@ Examples of all files can be found in `scripts/<CASE>/`. Units are SI.
 | `time_step` | Constant $dt$ [s], or dict `{t_start: dt}` to change $dt$ over time (first key must be 0). Write `1.0e-5`, not `1e-5` (read as a string by YAML) |
 | `time_max` | End time [s] |
 | `automatic_termination` | Stop when temperature variance is low (optional, default `true`) |
-| `mixing_model` | `CURL`, `CURL_MODIFIED`, `CURL_MODIFIED_DD` (work in progress) or `EMST` |
-| `mixing_time` | Mixing time scale [s] |
+| `mixing_model` | `CURL`, `CURL_MODIFIED`, `CURL_MODIFIED_DD` (work in progress), `EMST_SIMPLIFIED` (minimum spanning tree on $Y_k$, each edge mixed in turn with the coefficient $\min(dt/\tau, 0.5)$) or `EMST_POPE` (model of Subramaniam & Pope, see [EMST mixing model](#emst-mixing-model-emst_pope)) |
+| `mixing_time` | Mixing time scale $\tau$ [s] (for `EMST_POPE`, the variance function decays as $\exp(-t/\tau)$) |
 | `read_mixing` | If `true`, read mixing pairs from `pairs_list.pkl` in the case folder |
 | `T_threshold` | Chemistry is not computed below this temperature [K] |
 | `pv_species` | Species defining the progress variable $c = (Y_c - Y_{c,u})/(Y_{c,eq} - Y_{c,u})$, with $Y_c$ the sum of their mass fractions, $u$ the unburnt mixture and $eq$ the equilibrium (e.g. `[H2O]`) |

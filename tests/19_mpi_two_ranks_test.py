@@ -117,7 +117,7 @@ def test_two_ranks(tmp_path):
     sol_parallel = read_solutions(parallel / "STOCH_DTB_MPI_TEST" / "solutions.h5")
     assert sol_serial.keys() == sol_parallel.keys()
     for name in sol_serial:
-        assert np.allclose(sol_serial[name], sol_parallel[name], rtol=1.0e-5, atol=1.0e-12), name
+        assert np.allclose(sol_serial[name], sol_parallel[name], rtol=1.0e-5, atol=1.0e-12, equal_nan=True), name   # EMST_age NaN (CURL)
 
     # Multi-dt generation on 2 ranks
     run_mpi(parallel, multi_dt_script)

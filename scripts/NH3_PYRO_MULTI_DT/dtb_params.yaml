@@ -19,7 +19,7 @@ build_ml_dtb: true
 time_step: {0: 5.0e-4, 1.0: 5.0e-7}
 time_max: 1.002
 automatic_termination: False
-mixing_model: EMST
+mixing_model: EMST_SIMPLIFIED
 mixing_time: 2.0e-4
 read_mixing: false
 T_threshold: 600.0
