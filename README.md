@@ -11,7 +11,7 @@ This package features the following functionalities:
 
 + A module to generate machine learning models to advance the chemical state of a mixture
 
-The models and algorithms (mixing model, element conservation, error metrics) are detailed in [docs/theory.md](docs/theory.md).
+The models and algorithms (mixing model, element conservation, error metrics) are detailed in [docs/theory.md](docs/theory.md), and the MPI parallelism in [docs/mpi.md](docs/mpi.md).
 
 
 # Package installation
@@ -63,7 +63,7 @@ python ann_model_testing.py                # 4. testing on simple cases  (nn_tes
 
 **Warning:** an existing `STOCH_DTB_<suffix>` folder is deleted when relaunching generation.
 
-With MPI, the chemistry and the derived variables (progress variable, which needs an equilibrium, mixture fraction, equivalence ratio, HRR) are computed by each rank on its share of the particles, dealt in turn (round-robin: rank $r$ of $N$ takes particles $r$, $r+N$, $r+2N$, ...), so that the particles of an inlet (e.g. the hot ones, the only ones reacting at first) are spread over all ranks; mixing and writing are done by rank 0. Each rank keeps its own copy of the particles, and only the attributes that change are exchanged, as arrays of floats (`Allgatherv` after each distributed step, `Bcast` after mixing).
+With MPI, the chemistry and the derived variables (progress variable, which needs an equilibrium, mixture fraction, equivalence ratio, HRR) are computed by each rank on its share of the particles, dealt in turn (round-robin: rank $r$ of $N$ takes particles $r$, $r+N$, $r+2N$, ...), so that the particles of an inlet (e.g. the hot ones, the only ones reacting at first) are spread over all ranks; mixing and writing are done by rank 0. Each rank keeps its own copy of the particles, and only the attributes that change are exchanged, as arrays of floats (`Allgatherv` after each distributed step, `Bcast` after mixing). The exchanges are detailed in [docs/mpi.md](docs/mpi.md).
 
 **Warning:** a particle attribute that starts changing during the simulation (e.g. in a new mixing model) must be added to `EXCHANGED_SCALARS` or `EXCHANGED_ARRAYS` at the top of `particles_cloud.py`. Otherwise the other ranks keep its old value, without any error (test 19, 1 against 2 ranks, only detects it if the attribute changes what is written in `solutions.h5`). Attributes used only by rank 0 (e.g. `Le_k` of `CURL_MODIFIED_DD`, used in mixing) need not be exchanged.
 
