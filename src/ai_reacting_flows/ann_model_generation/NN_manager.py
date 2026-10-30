@@ -18,13 +18,13 @@ import torch.optim as optim
 
 import ai_reacting_flows.tools.utilities as utils
 import ai_reacting_flows.tools.transforms as transforms
-from ai_reacting_flows.ann_model_generation.NN_models import MLPModel, DeepONet, DeepONet_shift
+from ai_reacting_flows.ann_model_generation.NN_models import MLPModel, PerSpeciesMLP, DeepONet, DeepONet_shift
 from ai_reacting_flows.databases_processing.processing_parameters import read_processing_parameters, MECHANISM_FILE
 
 torch.set_default_dtype(torch.float64)
 
 activation_functions = {"relu": nn.ReLU, "gelu" : nn.GELU, "tanh" : nn.Tanh, "id" : nn.Identity}
-model_type = {"MLP": MLPModel, "DeepONet": DeepONet, "DeepONetShift": DeepONet_shift}
+model_type = {"MLP": MLPModel, "PerSpeciesMLP": PerSpeciesMLP, "DeepONet": DeepONet, "DeepONetShift": DeepONet_shift}
 
 class NN_manager():
     def __init__(self, run_folder: str | None = None):
@@ -183,6 +183,15 @@ class NN_manager():
                 layers_type = network_parameters["layers_type"]
             
                 model = model_type[network_type](self.device, nb_units_in_layers_list, layers_type, layers_activation_list)
+            elif (network_type == "PerSpeciesMLP"):
+                # Same definition as MLP, for the network of each species: one output instead of n_out
+                nb_units_in_layers_list = copy.deepcopy(network_parameters["nb_units_in_layers_list"])
+                nb_units_in_layers_list.insert(0, n_in)
+                nb_units_in_layers_list.append(1)
+                layers_activation_list = [activation_functions[str(act).lower()] for act in network_parameters["layers_activation_list"]]
+                layers_type = network_parameters["layers_type"]
+
+                model = model_type[network_type](self.device, nb_units_in_layers_list, layers_type, layers_activation_list, n_out)
             elif (network_type=="DeepONet"):
                 # Network shapes
                 nb_units_in_layers_list = copy.deepcopy(network_parameters["nb_units_in_layers_list"])
@@ -570,7 +579,8 @@ class NN_manager():
 
         Layout is designed for cross-framework compatibility (e.g., TensorFlow),
         using 'kernel:0' and 'bias:0' datasets with weights transposed to match
-        expected dense layer formats.
+        expected dense layer formats. A PerSpeciesMLP is written as one group
+        species_<i> per output i, each with the layers of its MLP.
         """
         model.eval()
 
@@ -602,6 +612,16 @@ class NN_manager():
                 save_module(layer_group, child_module, child_name, parent_activation_map)
 
         with h5py.File(h5_path, "w") as f:
-            # Save each top-level layer directly, no 'model' group
-            for layer_name, module in model.model.named_children():  # note: model.model is nn.Sequential
-                save_module(f, module, layer_name, getattr(model, 'activation_map', {}))
+            # One MLP per species: one group per species, in the order of the outputs
+            if isinstance(model, PerSpeciesMLP):
+                for i_species in range(model.n_species):
+                    species_group = f.create_group(f"species_{i_species}")
+                    for name, activation, kernel, bias in model.species_layers(i_species):
+                        layer_group = species_group.create_group(name)
+                        layer_group.attrs["activation"] = activation
+                        layer_group.create_dataset("kernel:0", data=kernel)
+                        layer_group.create_dataset("bias:0", data=bias)
+            else:
+                # Save each top-level layer directly, no 'model' group
+                for layer_name, module in model.model.named_children():  # note: model.model is nn.Sequential
+                    save_module(f, module, layer_name, getattr(model, 'activation_map', {}))

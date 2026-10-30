@@ -164,6 +164,7 @@ nn_training_<timestamp>.log               training log (in the case folder)
 MODELS/MODEL_<suffix>/
 ├── cluster<i>_model.pth                  PyTorch model
 ├── cluster<i>_model.h5                   weights and biases per layer (kernel:0, bias:0), for use outside PyTorch
+│                                         (PerSpeciesMLP: one group species_<i> per output, with the layers of its MLP)
 ├── norm_param_X_cluster<i>.dat           mean and variance of inputs
 ├── norm_param_Y_cluster<i>.dat           mean and variance of outputs
 ├── kmeans_model.pkl, ...                 copy of the clustering files
@@ -297,7 +298,7 @@ Cases are sampled in the given bounds with Latin hypercube sampling.
 | `database_path` | Path to the learning database (`STOCH_DTB_<suffix>/<database_name>`) |
 | `model_name_suffix` | Model is written in `MODELS/MODEL_<suffix>/` |
 | `new_model_folder` | If `true`, (re)create the model folder |
-| `networks_types` | One per cluster: `MLP`, `DeepONet` or `DeepONetShift` |
+| `networks_types` | One per cluster: `MLP`, `PerSpeciesMLP` (one MLP per species, each predicting the output of its species from the whole input state, all with the definition of the cluster), `DeepONet` or `DeepONetShift` |
 | `networks_def` | One per cluster: key of its definition in `clusters` |
 | `clusters` | Network definitions (see below) |
 | `learning.optimizer` | `adam` (default) or `sgd` |
@@ -314,6 +315,8 @@ An MLP definition contains:
 + `nb_units_in_layers_list`: neurons in each hidden layer
 + `layers_activation_list`: activation of each layer, including output (`relu`, `gelu`, `tanh`, `id`; case-insensitive)
 + `layers_type`: type of each layer, including output (`dense` or `resnet`)
+
+For `PerSpeciesMLP`, this definition is that of the network of each species (one output), with dense layers only. The networks of all species are computed together (weights of a layer stacked for all species, one batched product per layer), as in the inference of NNICE, which is much faster than one network after the other. Example: `scripts/H2_IGN_KERNEL_PER_SPECIES`.
 
 For `DeepONet`, these three keys are dicts with `branch` and `trunk` entries (plus `shift` for `DeepONetShift`), and `n_neurons` is added. The trunk takes $dt$ as input.
 
