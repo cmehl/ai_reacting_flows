@@ -914,10 +914,14 @@ class ParticlesCloud(object):
 #   MPI EXCHANGES OF PARTICLE STATES
 # =============================================================================
 
-    def _particle_chunk(self):
-        """Indices of the particles treated by this processor: contiguous chunks of the particles list."""
+    def _particle_chunk(self, rank=None):
+        """Indices of the particles treated by processor rank (this processor by default), dealt in turn
+        (round-robin): rank, rank + size, rank + 2 size, ... Particles of an inlet (e.g. hot particles, the only
+        ones that react at first) are then spread over all processors."""
 
-        return np.array_split(np.arange(self.nb_parts_tot), self.size)[self.rank]
+        rank = self.rank if rank is None else rank
+
+        return np.arange(rank, self.nb_parts_tot, self.size)
 
     def _pack_states(self, particles):
         """Array (n, n_values) of the attributes of the particles changed during the simulation
@@ -966,17 +970,22 @@ class ParticlesCloud(object):
         if self.size == 1:
             return
 
-        # Array of all the states, filled by the chunks of all processors (no pickling: array of floats)
+        # Array of all the states, filled by the chunks of all processors one after the other
+        # (no pickling: array of floats)
         local = self._pack_states([self.particles_list[i] for i in chunk])
         n_values = local.shape[1]
-        counts = np.array([len(c) for c in np.array_split(np.arange(self.nb_parts_tot), self.size)]) * n_values
+        chunks = [self._particle_chunk(rank) for rank in range(self.size)]
+        counts = np.array([len(c) for c in chunks]) * n_values
         displacements = np.concatenate([[0], np.cumsum(counts)[:-1]])
         states = np.empty((self.nb_parts_tot, n_values))
         self.comm.Allgatherv(local, [states, counts, displacements, MPI.DOUBLE])
 
-        # Particles of the other processors
+        # Rows of states in the order of the particles, then particles of the other processors
+        particle_of_row = np.concatenate(chunks)
         others = np.setdiff1d(np.arange(self.nb_parts_tot), chunk)
-        self._unpack_states([self.particles_list[i] for i in others], states[others])
+        row_of_particle = np.empty(self.nb_parts_tot, dtype=int)
+        row_of_particle[particle_of_row] = np.arange(self.nb_parts_tot)
+        self._unpack_states([self.particles_list[i] for i in others], states[row_of_particle[others]])
 
 # =============================================================================
 #   MEAN TRAJECTORIES

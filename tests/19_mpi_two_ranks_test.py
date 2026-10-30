@@ -7,7 +7,9 @@ Then re-integrates the 2-rank database with 3 random time steps (GenerateVariabl
 Check:
 - solutions.h5 is the same with 1 and 2 ranks (all_states, X and Y at every iteration), up to the
   solver tolerances (relative differences ~1e-6, mostly on HRR: the Cantera gas object of each rank
-  has a different history). Errors in particles distribution or mixing would give O(1) differences.
+  has a different history; HRR compared with an absolute tolerance from its largest value, as nearly unreacted
+  particles have small HRR without relative accuracy). Errors in particles distribution or mixing would give
+  O(1) differences.
 - the multi-dt file has one group per rank, contains all states, and the ranks draw different time steps.
 
 Needs mpiexec (skipped otherwise). Independent of the other tests.
@@ -87,9 +89,10 @@ def run_mpi(folder, script, n_ranks=2):
 
 
 def read_solutions(file_name):
-    """All datasets of solutions.h5, as a dict {group/dataset: array}."""
+    """All datasets of solutions.h5, as a dict {group/dataset: (array, column names)}."""
     with h5py.File(file_name, "r") as f:
-        return {f"{grp}/{dset}": f[grp][dset][()] for grp in f.keys() for dset in f[grp].keys()}
+        return {f"{grp}/{dset}": (f[grp][dset][()], [str(c) for c in f[grp][dset].attrs["cols"]])
+                for grp in f.keys() for dset in f[grp].keys()}
 
 
 @pytest.mark.skipif(shutil.which("mpiexec") is None, reason="mpiexec not available")
@@ -117,12 +120,18 @@ def test_two_ranks(tmp_path):
     sol_parallel = read_solutions(parallel / "STOCH_DTB_MPI_TEST" / "solutions.h5")
     assert sol_serial.keys() == sol_parallel.keys()
     for name in sol_serial:
-        assert np.allclose(sol_serial[name], sol_parallel[name], rtol=1.0e-5, atol=1.0e-12, equal_nan=True), name   # EMST_age NaN (CURL)
+        (x, cols), (y, _) = sol_serial[name], sol_parallel[name]
+
+        # HRR of nearly unreacted particles (sum of terms that cancel) has no relative accuracy: absolute
+        # tolerance from the largest HRR
+        hrr = cols.index("HRR")
+        assert np.allclose(np.delete(x, hrr, axis=1), np.delete(y, hrr, axis=1), rtol=1.0e-5, atol=1.0e-12, equal_nan=True), name   # EMST_age NaN (CURL)
+        assert np.allclose(x[:, hrr], y[:, hrr], rtol=1.0e-5, atol=1.0e-5 * np.max(np.abs(x[:, hrr]))), name
 
     # Multi-dt generation on 2 ranks
     run_mpi(parallel, multi_dt_script)
 
-    n_states = sum(sol_serial[name].shape[0] for name in sol_serial if name.endswith("/X"))
+    n_states = sum(sol_serial[name][0].shape[0] for name in sol_serial if name.endswith("/X"))
     with h5py.File(parallel / "STOCH_DTB_MPI_TEST" / "solutions_3dt.h5", "r") as f:
         assert list(f.keys()) == ["ITERATION_00000", "ITERATION_00001"]
         assert sum(f[grp]["X"].shape[0] for grp in f.keys()) == n_states
