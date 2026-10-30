@@ -37,5 +37,6 @@ dependencies = [
     "torch>=2.6.0",
     "torchinfo",
     "oyaml",
-    "h5py"
+    "h5py",
+    "numba>=0.59"
 ]

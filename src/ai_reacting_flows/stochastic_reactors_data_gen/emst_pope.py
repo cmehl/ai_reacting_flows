@@ -12,11 +12,13 @@ Particles i = 1..n have compositions f_ij (j = 1..nc), weights w_i and an age pr
 Times are normalized by the mixing frequency: s = Omega t (in ParticlesCloud, Omega = 1 / mixing_time).
 The tree is built on the scaled compositions g_ij = f_ij / fscale_j of the mixing particles. Mixing along
 its edges makes the variance function VF (trace of the covariance of g) decay as exp(-s), in expectation.
+
+The loops over particles and edges (tree, edge coefficients, implicit mixing) are compiled with numba
+(https://numba.pydata.org); set NUMBA_DISABLE_JIT=1 to run them in Python (debugging).
 """
 
 import numpy as np
-import scipy.sparse as sparse
-from scipy.sparse.linalg import splu
+from numba import njit
 from scipy.spatial.distance import pdist, squareform
 
 # Durations of the non-mixing (Z0) and mixing (Z1) states [-], uniform in [lower, upper] (emst.f)
@@ -87,69 +89,91 @@ def tree_edges(x):
     algorithm from point 0 (emsti). Each edge is (parent, child), in the order the children are added,
     so that a parent always comes before its children."""
 
-    n = len(x)
-    in_tree = np.zeros(n, dtype=bool)
-    in_tree[0] = True
-
     # Squared distances between all points (n, n), computed once
-    D2 = squareform(pdist(x, "sqeuclidean"))
+    return _prim(squareform(pdist(x, "sqeuclidean")))
+
+
+@njit(cache=True)
+def _prim(D2):
+    """Prim's algorithm on the squared distances D2 (n, n), from point 0 (see tree_edges)."""
+
+    n = D2.shape[0]
+    in_tree = np.zeros(n, dtype=np.bool_)
+    in_tree[0] = True
 
     # Squared distance of each point to the tree (infinite once in the tree), and its nearest point in the tree
     dist2 = D2[0].copy()
     dist2[0] = np.inf
-    nearest = np.zeros(n, dtype=int)
+    nearest = np.zeros(n, dtype=np.int64)
 
-    edges = np.empty((n - 1, 2), dtype=int)
+    edges = np.empty((n - 1, 2), dtype=np.int64)
     for i_edge in range(n - 1):
         k = np.argmin(dist2)
-        edges[i_edge] = nearest[k], k
+        edges[i_edge, 0] = nearest[k]
+        edges[i_edge, 1] = k
         in_tree[k] = True
         dist2[k] = np.inf
 
         # Points closer to k than to the rest of the tree
-        closer = ~in_tree & (D2[k] < dist2)
-        dist2[closer] = D2[k][closer]
-        nearest[closer] = k
+        for j in range(n):
+            if not in_tree[j] and D2[k, j] < dist2[j]:
+                dist2[j] = D2[k, j]
+                nearest[j] = k
 
     return edges
 
 
+@njit(cache=True)
 def edge_coefficients(edges, w):
     """Coefficients B (n - 1) of the edges of the tree of particles of weights w (n) (edgewt, bmod):
     B = 2 min(W, 1 - W), with W the fraction of the tree weight on the child side of the edge."""
 
     # Weight of the subtree of each node, accumulated from the leaves (children after parents in edges)
     subtree_w = w.copy()
-    for parent, child in edges[::-1]:
-        subtree_w[parent] += subtree_w[child]
+    for i_edge in range(len(edges) - 1, -1, -1):
+        subtree_w[edges[i_edge, 0]] += subtree_w[edges[i_edge, 1]]
 
     W = subtree_w[edges[:, 1]] / w.sum()
 
     return 2.0 * np.minimum(W, 1.0 - W)
 
 
-def tree_laplacian(edges, B, n):
-    """Laplacian (n, n) of the tree weighted by the edge coefficients B (sparse, csc):
-    L_ii = sum of B of the edges of i, L_ij = -B of the edge (i, j)."""
-
-    i, j = edges[:, 0], edges[:, 1]
-    rows = np.concatenate([i, j, i, j])
-    cols = np.concatenate([i, j, j, i])
-    vals = np.concatenate([B, B, -B, -B])
-
-    return sparse.csc_matrix((vals, (rows, cols)), shape=(n, n))
-
-
-def implicit_mixing(phi, w, L, eta):
+@njit(cache=True)
+def implicit_mixing(phi, w, edges, B, eta):
     """Compositions (n, nc) after mixing along the tree, by an implicit Euler step (implct) of
         w_i dphi_i/ds = -alpha sum_edges(i, j) B (phi_i - phi_j),     eta = alpha ds:
-    (diag(w) + eta L) phi_new = diag(w) phi, with L the Laplacian of the tree (tree_laplacian)."""
+    (diag(w) + eta L) phi_new = diag(w) phi, with L the Laplacian of the tree weighted by B.
 
-    # diag(w) + eta L, with the sparsity of L (its diagonal is filled: every node has an edge)
-    A = eta * L
-    A.setdiag(A.diagonal() + w)
+    Direct solution along the tree, as implct: equation of node i,
+        d_i phi_i - sum_edges(i, j) eta B phi_j = r_i,     d_i = w_i + eta sum_edges(i, j) B,  r_i = w_i phi_i;
+    from the leaves to the root (edges in reverse order: children after their parent), the equation of a child c,
+    d_c phi_c - eta B phi_p = r_c, gives phi_c as a function of its parent p and is substituted in the equation
+    of p; the root (point 0) is then solved and the children are deduced from their parent."""
 
-    return splu(A).solve(w[:, None] * phi)
+    n, nc = phi.shape
+    d = w.copy()
+    r = np.empty_like(phi)
+    for i in range(n):
+        r[i] = w[i] * phi[i]
+    for i_edge in range(n - 1):
+        d[edges[i_edge, 0]] += eta * B[i_edge]
+        d[edges[i_edge, 1]] += eta * B[i_edge]
+
+    # Leaves to root: elimination of each child c in the equation of its parent p
+    for i_edge in range(n - 2, -1, -1):
+        p, c = edges[i_edge, 0], edges[i_edge, 1]
+        a = eta * B[i_edge]
+        d[p] -= a * a / d[c]
+        r[p] += a * r[c] / d[c]
+
+    # Root to leaves: root, then each child from its parent
+    phi_new = np.empty_like(phi)
+    phi_new[0] = r[0] / d[0]
+    for i_edge in range(n - 1):
+        p, c = edges[i_edge, 0], edges[i_edge, 1]
+        phi_new[c] = (r[c] + eta * B[i_edge] * phi_new[p]) / d[c]
+
+    return phi_new
 
 
 #==============================================================================
@@ -212,11 +236,10 @@ def emst_step(g, w, ages, ds, rng):
     mean = w @ g
     phi = g - mean
 
-    # Tree of the mixing particles, its edge coefficients and its Laplacian (the same for all values of eta)
+    # Tree of the mixing particles and its edge coefficients
     idx = np.where(_tree_particles(phi, w, ages, rng))[0]
     edges = tree_edges(phi[idx])
     B = edge_coefficients(edges, w[idx])
-    L = tree_laplacian(edges, B, len(idx))
 
     # Mixing time of the step: at most the shortest duration of the mixing state
     ds_step = min(ds, Z1_LOWER)
@@ -227,7 +250,7 @@ def emst_step(g, w, ages, ds, rng):
     # Mixing of the tree particles with eta, the others unchanged; variance function in excess of the target
     def mix(eta):
         phi_new = phi.copy()
-        phi_new[idx] = implicit_mixing(phi[idx], w[idx], L, eta)
+        phi_new[idx] = implicit_mixing(phi[idx], w[idx], edges, B, eta)
         return phi_new, variance_function(phi_new, w) - vf_target
 
     # Estimate of eta from the initial decay rate of the variance function (rtest):
