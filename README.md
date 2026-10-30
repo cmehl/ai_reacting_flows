@@ -63,6 +63,8 @@ python ann_model_testing.py                # 4. testing on simple cases  (nn_tes
 
 **Warning:** an existing `STOCH_DTB_<suffix>` folder is deleted when relaunching generation.
 
+With MPI, the chemistry and the derived variables (progress variable, which needs an equilibrium, mixture fraction, equivalence ratio, HRR) are computed by each rank on a contiguous chunk of particles; mixing and writing are done by rank 0. Each rank keeps its own copy of the particles, and only the attributes that change are exchanged, as arrays of floats (`Allgatherv` after each distributed step, `Bcast` after mixing).
+
 Generated files:
 
 ```

@@ -14,6 +14,7 @@ import cantera as ct
 
 from scipy.spatial.distance import pdist, squareform
 from scipy.sparse.csgraph import minimum_spanning_tree
+from mpi4py import MPI
 
 from ai_reacting_flows.stochastic_reactors_data_gen.particle import Particle
 from ai_reacting_flows.stochastic_reactors_data_gen.pre_processing import Inlet
@@ -24,6 +25,12 @@ from ai_reacting_flows.ann_model_generation.NN_inference import NNInference
 
 matplotlib.use('Agg')
 sns.set()
+
+# Attributes of the particles changed during the simulation, exchanged between MPI ranks as one array of floats
+# per particle (each rank keeps its own copy of the particles; the other attributes are constant)
+EXCHANGED_SCALARS = ["T", "P", "hs", "Hs", "mass", "Yc_u", "Yc_eq", "recompute_Yc_eq", "prog_var", "equiv_ratio",
+                     "mix_frac", "hrr", "emst_age"]
+EXCHANGED_ARRAYS = ["Y", "X", "mass_k", "state"]
 
 # EMST_POPE: scale of the mass fractions for the tree [-] (example of emst.f: the tree is built on Y / 0.1,
 # minor species have a negligible weight in it)
@@ -451,10 +458,10 @@ class ParticlesCloud(object):
             self._update_dtb_states("Y")
         
         # Advance molecular diffusion
-        # Diffusion is applied by rank 0, the mixed states are then given to every processor by _update_vars
-        # (scatter from rank 0 and allgather)
+        # Diffusion is applied by rank 0, the mixed states are then sent to every processor
         if self.rank==0:
             self._apply_diffusion()
+        self._share_states_of_root()
 
         t3 = perf_counter()
         
@@ -496,19 +503,13 @@ class ParticlesCloud(object):
     # Apply reaction rate to particles
     def _apply_reactions(self, dt):
 
-        # We divide the list of particles into chunks to be treated by each processor
-        lists_particles = np.array_split(np.array(self.particles_list), self.size)
-
-        # We verify size of list to avoid errors
-        assert len(lists_particles) == self.size
-
-        # We scatter the chunks on each processors. Remark: rank=root also takes a chunk.
-        lists_particles = self.comm.scatter(lists_particles, root=0)
+        # Each processor computes the chemistry of its chunk of particles
+        chunk = self._particle_chunk()
+        particles = [self.particles_list[i] for i in chunk]
 
         # Reaction only if time is larger than activation time
-        active_particles = [part for part in lists_particles if self.time >= part.activation_time]
+        active_particles = [part for part in particles if self.time >= part.activation_time]
 
-        # We perform chemical reactions -> each processor computes on its chunks
         if self.ML_inference_flag:
             # Chemistry with the ANN
             self._react_ANN(active_particles, dt)
@@ -517,11 +518,8 @@ class ParticlesCloud(object):
             for part in active_particles:
                 part.react(dt, self)
 
-        # Allgather regroups the chunks and give the whole list to all the processors (<=> gather + broadcast)
-        result = self.comm.allgather(lists_particles)
-
-        # As we have a list of lists of particles we need to concatenate
-        self.particles_list = list(itertools.chain.from_iterable(result))
+        # States of all chunks given to all the processors
+        self._gather_states(chunk)
 
     # Apply reaction rate to particles with the ANN
     def _react_ANN(self, particles, dt):
@@ -1000,25 +998,86 @@ class ParticlesCloud(object):
     def _update_vars(self):
 
         # We parallelize as the progress variable computation is expensive (indeed, it relies on an "equil" computation)
+        chunk = self._particle_chunk()
 
-        # We divide the list of particles into chunks to be treated by each processor
-        lists_particles = np.array_split(np.array(self.particles_list), self.size)
-
-        # We scatter the chunks on each processors. Remark: rank=root also takes a chunk.
-        lists_particles = self.comm.scatter(lists_particles, root=0)
-
-        # We perform variable updates of particles
-        for part in lists_particles:
+        # We perform variable updates of particles of the chunk of this processor
+        for i in chunk:
+            part = self.particles_list[i]
             part.compute_equiv_ratio()
             part.compute_progress_variable(self)
             part.compute_mixture_fraction()
             part.compute_heat_release_rate(self)
 
-        # Allgather regroups the chunks and give the whole list to all the processors (<=> gather + broadcast)
-        result = self.comm.allgather(lists_particles)
+        # States of all chunks given to all the processors
+        self._gather_states(chunk)
 
-        # As we have a list of lists of particles we need to concatenate
-        self.particles_list = list(itertools.chain.from_iterable(result))
+# =============================================================================
+#   MPI EXCHANGES OF PARTICLE STATES
+# =============================================================================
+
+    def _particle_chunk(self):
+        """Indices of the particles treated by this processor: contiguous chunks of the particles list."""
+
+        return np.array_split(np.arange(self.nb_parts_tot), self.size)[self.rank]
+
+    def _pack_states(self, particles):
+        """Array (n, n_values) of the attributes of the particles changed during the simulation
+        (EXCHANGED_SCALARS, then EXCHANGED_ARRAYS)."""
+
+        return np.array([np.concatenate([[float(getattr(part, name)) for name in EXCHANGED_SCALARS]]
+                                        + [getattr(part, name) for name in EXCHANGED_ARRAYS])
+                         for part in particles])
+
+    def _unpack_states(self, particles, states):
+        """Set the attributes of the particles from the array states (see _pack_states)."""
+
+        for part, values in zip(particles, states):
+            for k, name in enumerate(EXCHANGED_SCALARS):
+                setattr(part, name, values[k])
+            part.recompute_Yc_eq = bool(part.recompute_Yc_eq)
+
+            start = len(EXCHANGED_SCALARS)
+            for name in EXCHANGED_ARRAYS:
+                n = len(getattr(part, name))
+                setattr(part, name, values[start:start + n].copy())
+                start += n
+
+    def _share_states_of_root(self):
+        """States of the particles of processor 0 (e.g. after mixing) given to all the processors."""
+
+        if self.size == 1:
+            return
+
+        # Number of exchanged values per particle, the same for all particles and processors
+        part = self.particles_list[0]
+        n_values = len(EXCHANGED_SCALARS) + sum(len(getattr(part, name)) for name in EXCHANGED_ARRAYS)
+
+        if self.rank == 0:
+            states = self._pack_states(self.particles_list)
+        else:
+            states = np.empty((self.nb_parts_tot, n_values))
+        self.comm.Bcast(states, root=0)
+
+        if self.rank != 0:
+            self._unpack_states(self.particles_list, states)
+
+    def _gather_states(self, chunk):
+        """States of the particles of the chunk of each processor given to all the processors."""
+
+        if self.size == 1:
+            return
+
+        # Array of all the states, filled by the chunks of all processors (no pickling: array of floats)
+        local = self._pack_states([self.particles_list[i] for i in chunk])
+        n_values = local.shape[1]
+        counts = np.array([len(c) for c in np.array_split(np.arange(self.nb_parts_tot), self.size)]) * n_values
+        displacements = np.concatenate([[0], np.cumsum(counts)[:-1]])
+        states = np.empty((self.nb_parts_tot, n_values))
+        self.comm.Allgatherv(local, [states, counts, displacements, MPI.DOUBLE])
+
+        # Particles of the other processors
+        others = np.setdiff1d(np.arange(self.nb_parts_tot), chunk)
+        self._unpack_states([self.particles_list[i] for i in others], states[others])
 
 # =============================================================================
 #   MEAN TRAJECTORIES
