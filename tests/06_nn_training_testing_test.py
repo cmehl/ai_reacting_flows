@@ -89,7 +89,7 @@ def test_nn_training_and_inference(tmp_path, database_type, prefix):
 
     # Inference on one premixed H2/air state
     testing_parameters = {"models_folder": "MODEL_TEST", "spec_to_plot": ["H2"], "yk_renormalization": 0,
-                          "hybrid_ann_cvode": False, "hybrid_ann_cvode_tol": 5.0e-05}
+                          "hybrid_ann_cvode": 0, "hybrid_ann_cvode_tol": 5.0e-05}
     test = NNTesting(testing_parameters)
     test.cluster = 0
 

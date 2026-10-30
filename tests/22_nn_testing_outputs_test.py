@@ -10,6 +10,8 @@ Check:
   it is removed from the network species (the pyrolysis plots used to fail in this case).
 - series_cases gives all combinations of the parameters given as lists, and with a conditions file
   (sim_test_*.csv of a flamelets database) one case per row of the file and per value of the other lists.
+- the a priori check of the hybrid criteria on the validation states (e_sum and e_e against the mean error of
+  the step) gives one value per state and writes its two plots.
 - run_testing (sections of nn_testing.yaml, networks on CPU with 1 thread) runs the selected series, including 1D premixed and
   diffusion flames, and writes their summaries (errors of each case, mean); evaluate_on_validation_set
   statistics and plots; the 0D simulation errors E_sim per case and per dt in CSV tables, with the
@@ -31,7 +33,7 @@ import ai_reacting_flows.tools.transforms as transforms
 from h2_learning_database import write_h2_learning_database, dt, pressure
 
 testing_parameters = {"models_folder": "MODEL_TEST", "spec_to_plot": ["H2", "N2"], "yk_renormalization": 0,
-                      "hybrid_ann_cvode": False, "hybrid_ann_cvode_tol": 5.0e-05}
+                      "hybrid_ann_cvode": 0, "hybrid_ann_cvode_tol": 5.0e-05}
 
 # Series as in nn_testing.yaml: 2 ignition cases, 1 premixed flame, 1 diffusion flame, validation set
 series_parameters = {
@@ -199,3 +201,13 @@ def test_nn_testing_outputs(tmp_path):
     assert len(stats) == test.inference.nb_clusters
     assert stats[0]["mse_phys"].shape == (test.nb_species_ANN,)
     assert os.path.isfile(os.path.join(output, "plots_validation", "cluster_0_errors.png"))
+
+    # A priori check of the hybrid criteria on the validation states: one value per state, and the states at
+    # t rebuilt from the network inputs conserve the mass (N2 closes the sum)
+    T, Y, Y_ref, dt_val, clusters = test._validation_states()
+    assert np.allclose(Y.sum(axis=1), 1.0) and dt_val is None
+    E, e_sum, e_e = test.hybrid_criteria_on_validation_set(os.path.join(output, "plots_validation"))
+    assert E.shape == e_sum.shape == e_e.shape == T.shape
+    assert np.all(E >= 0.0) and np.all(e_sum >= 0.0) and np.all(e_e >= 0.0)
+    for name in ["hybrid_e_sum.png", "hybrid_e_elements.png"]:
+        assert os.path.isfile(os.path.join(output, "plots_validation", name))

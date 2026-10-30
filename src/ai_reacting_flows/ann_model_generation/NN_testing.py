@@ -13,7 +13,7 @@ import torch
 from datetime import datetime
 from time import perf_counter
 from ai_reacting_flows.ann_model_generation.NN_models import MLPModel, DeepONet, DeepONet_shift
-from ai_reacting_flows.ann_model_generation.NN_inference import NNInference
+from ai_reacting_flows.ann_model_generation.NN_inference import NNInference, use_cvode
 import ai_reacting_flows.ann_model_generation.NN_testing_metrics as metrics
 import ai_reacting_flows.ann_model_generation.NN_testing_plots as plots
 
@@ -697,10 +697,9 @@ class NNTesting():
             if Tt[i_reac] >= T_threshold:
                 T_new, Y_new = self.advance_state_NN(Tt[i_reac], Yt_ann[:,i_reac], pressure, dt)
 
-                # If hybrid, we check conservation and use CVODE if not satisfied
+                # If hybrid, we check conservation (prediction before element correction) and use CVODE if not satisfied
                 if self.hybrid_ann_cvode:
-                    cons_criterion = np.abs(np.sum(Y_new,axis=0) - 1.0)
-                    if cons_criterion > self.hybrid_ann_cvode_tol:
+                    if self.ia_success is False:
                         # CVODE advance
                         T_new, Y_new = self.advance_state_CVODE(Tt[i_reac], Yt_ann[:,i_reac], pressure, dt)
                         cvode_calls += 1
@@ -770,6 +769,8 @@ class NNTesting():
         validation = self.testing_parameters["validation_set"]
         if validation["run"]:
             self.evaluate_on_validation_set(max_points_scatter=validation["max_points_scatter"])
+            self.hybrid_criteria_on_validation_set(os.path.join(self.output_folder, "plots_validation"),
+                                                   validation["max_points_scatter"])
 
         benchmark = self.testing_parameters["speedup_benchmark"]
         if benchmark["run"]:
@@ -790,23 +791,9 @@ class NNTesting():
         """
 
         inf = self.inference
-        self._load_validation_data()
 
-        # Validation states of all clusters: T [K], Y [-] of the network species, cluster
-        T_val, Y_val, clusters_val = [], [], []
-        for i_cluster, X_val in enumerate(self._X_val):
-            X = transforms.unscale(X_val, inf.Xscaler_list[i_cluster][:, 0], inf.Xscaler_list[i_cluster][:, 1])
-            T_val.append(X[:, 0])
-            Y_val.append(transforms.inverse_species(X[:, 1:1 + inf.nb_species_ANN], inf.spec_list_ANN, inf.log_transform_X,
-                                                    inf.lambda_bct, inf.log_excluded_species))
-            clusters_val.append(np.full(len(X), i_cluster))
-        T_val, Y_ANN_val, clusters_val = np.concatenate(T_val), np.concatenate(Y_val), np.concatenate(clusters_val)
-
-        # All species of the mechanism: N2 not predicted (without N chemistry) closes the sum of Y_k
-        Y_val = np.zeros((len(T_val), self.nb_species_ref))
-        Y_val[:, [self.spec_list_ref.index(spec) for spec in inf.spec_list_ANN]] = Y_ANN_val
-        if self.remove_N2:
-            Y_val[:, self.spec_list_ref.index("N2")] = np.maximum(1.0 - Y_ANN_val.sum(axis=1), 0.0)
+        # Validation states of all clusters: T [K], Y [-] of all species, cluster
+        T_val, Y_val, _, _, clusters_val = self._validation_states()
 
         # CVODE time per state [s]
         rng = np.random.default_rng(0)
@@ -1115,17 +1102,11 @@ class NNTesting():
         """ANN advancement by dt [s] of the state T_old [K], Y_old [-] (all species) at pressure [Pa],
         with the network of self.cluster (see NNInference.advance)."""
 
-        T_new, Y_new, sum_Yk = self.inference.advance(np.array([T_old]), np.reshape(Y_old, (1, -1)), pressure, dt,
-                                                      np.array([self.cluster]), self.yk_renormalization)
+        T_new, Y_new, e_sum, e_e = self.inference.advance(np.array([T_old]), np.reshape(Y_old, (1, -1)), pressure, dt,
+                                                          np.array([self.cluster]), self.yk_renormalization)
 
-        # Sum of Yk before renormalization (used for analysis)
-        self.sum_Yk_before_renorm = sum_Yk[0]
-
-        # Hybrid model: ANN computation fails if mass conservation is not satisfied
-        self.ia_success = True
-        if self.hybrid_ann_cvode:
-            if np.abs(sum_Yk[0] - 1.0) > self.hybrid_ann_cvode_tol:
-                self.ia_success = False
+        # Hybrid model: ANN computation fails if its conservation error is too large (see use_cvode)
+        self.ia_success = not use_cvode(e_sum, e_e, self.hybrid_ann_cvode, self.hybrid_ann_cvode_tol)[0]
 
         return T_new[0], Y_new[0]
 
@@ -1191,6 +1172,86 @@ class NNTesting():
                 self._Y_val.append(Y_val)
 
         self._val_data_loaded = True
+
+
+    def _validation_states(self):
+        """Validation states of training_data.h5 (all clusters), in physical space: T [K] (n) and Y [-]
+        (n, n_species, all species) at t, Y_ref [-] (n, n_species) at t+dt (target of the network), dt [s] (n,
+        None for a constant time step database) and cluster (n). N2, not predicted without N chemistry, closes
+        the sum of the Y_k at t and is unchanged at t+dt."""
+
+        inf = self.inference
+        self._load_validation_data()
+        ns = inf.nb_species_ANN
+
+        T, Y_ANN, Y_ANN_ref, dt, clusters = [], [], [], [], []
+        for i_cluster, (X_val, Y_val) in enumerate(zip(self._X_val, self._Y_val)):
+
+            # Network inputs: T, transformed Y_k, (log(dt)); outputs: transformed Y_k at t+dt or differences
+            X = transforms.unscale(X_val, inf.Xscaler_list[i_cluster][:, 0], inf.Xscaler_list[i_cluster][:, 1])
+            y_t = transforms.unscale(Y_val, inf.Yscaler_list[i_cluster][:, 0], inf.Yscaler_list[i_cluster][:, 1])
+
+            T.append(X[:, 0])
+            Y_ANN.append(transforms.inverse_species(X[:, 1:1 + ns], inf.spec_list_ANN, inf.log_transform_X,
+                                                    inf.lambda_bct, inf.log_excluded_species))
+            Y_ANN_ref.append(transforms.output_to_Yk(X[:, 1:1 + ns], y_t, inf.spec_list_ANN, inf.output_omegas,
+                                                     inf.log_transform_X, inf.log_transform_Y, inf.lambda_bct,
+                                                     inf.log_excluded_species))
+            if inf.dt_var:
+                dt.append(np.exp(X[:, -1]))
+            clusters.append(np.full(len(X), i_cluster))
+
+        T, Y_ANN, Y_ANN_ref, clusters = np.concatenate(T), np.concatenate(Y_ANN), np.concatenate(Y_ANN_ref), np.concatenate(clusters)
+        dt = np.concatenate(dt) if inf.dt_var else None
+
+        # All species of the mechanism
+        cols_ANN = [self.spec_list_ref.index(spec) for spec in inf.spec_list_ANN]
+        Y = np.zeros((len(T), self.nb_species_ref))
+        Y[:, cols_ANN] = Y_ANN
+        if self.remove_N2:
+            Y[:, self.spec_list_ref.index("N2")] = np.maximum(1.0 - Y_ANN.sum(axis=1), 0.0)
+        Y_ref = Y.copy()
+        Y_ref[:, cols_ANN] = Y_ANN_ref
+
+        return T, Y, Y_ref, dt, clusters
+
+
+    def hybrid_criteria_on_validation_set(self, folder, max_points_scatter=50000):
+        """A priori check of the conservation errors of the hybrid ANN/CVODE model (see NN_inference.use_cvode) on
+        the validation states, as Fig. 12 of Mehl & Aubagnac-Karkar, Phys. Fluids 35, 067115 (2023),
+        https://doi.org/10.1063/5.0151026.
+
+        For each validation state, one ANN step (with the element correction yk_renormalization) is compared to
+        the target of the database: E [-] is the mean over [T, transformed Y_k of the network species] of
+        |x_ANN - x_ref| / sigma, as the simulation error E_sim (sigma: standard deviations of the training inputs).
+        The temperatures at t+dt follow from the enthalpy conservation (NNInference.temperature_after) for both.
+        e_sum = |sum_k Y_k - 1| and e_e (largest relative error on the element mass fractions) are those of the
+        ANN prediction before element correction.
+
+        Writes hybrid_e_sum.png and hybrid_e_elements.png in folder (scatter plots of e_sum and e_e against E),
+        with hybrid_ann_cvode_tol on the plot of the criterion selected by hybrid_ann_cvode. Returns E, e_sum, e_e (n).
+        """
+
+        inf = self.inference
+        T, Y, Y_ref, dt, clusters = self._validation_states()
+
+        # ANN step (dt is not a network input for a constant time step database; P is not used)
+        dt_network = dt if dt is not None else np.nan
+        T_ann, Y_ann, e_sum, e_e = inf.advance(T, Y, np.nan, dt_network, clusters, self.yk_renormalization)
+        T_ref = inf.temperature_after(T, Y, Y_ref)
+
+        # Error of the step, mean over the variables of the normalized differences
+        x_ann = self._error_variables(np.column_stack([T_ann, Y_ann]))
+        x_ref = self._error_variables(np.column_stack([T_ref, Y_ref]))
+        E = metrics.normalized_errors(x_ann, x_ref, self.std_train).mean(axis=1)
+
+        # Plots, with the threshold of the selected criterion
+        tol_sum = self.hybrid_ann_cvode_tol if self.hybrid_ann_cvode == 1 else None
+        tol_e = self.hybrid_ann_cvode_tol if self.hybrid_ann_cvode == 2 else None
+        plots.plot_hybrid_criterion(E, e_sum, T, tol_sum, r"$e_\Sigma$ [-]", "hybrid_e_sum.png", folder, max_points_scatter)
+        plots.plot_hybrid_criterion(E, e_e, T, tol_e, r"$e_e$ [-]", "hybrid_e_elements.png", folder, max_points_scatter)
+
+        return E, e_sum, e_e
 
 
     def evaluate_on_validation_set(self, scatter_folder=None, max_points_scatter=50000):

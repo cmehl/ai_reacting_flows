@@ -193,7 +193,8 @@ TESTING_<models_folder>/
 ├── simulation_errors_<case type>_by_variable.png   mean E_<variable> of T and each network species, per dt
 ├── simulation_errors_<case type>_by_cluster.csv   errors per cluster and dt
 ├── speedup_benchmark.csv                 speed-up of the ANN on batches of states
-├── plots_validation/                     scatter plots of validation errors
+├── plots_validation/                     scatter plots of validation errors, and a priori check of the hybrid
+│                                         criteria (hybrid_e_sum.png, hybrid_e_elements.png)
 └── nn_testing_<timestamp>.log
 ```
 
@@ -235,8 +236,8 @@ Examples of all files can be found in `scripts/<CASE>/`. Units are SI.
 | `ML_inference_flag` | If `true`, chemistry is computed with the ANN instead of CVODE (optional keys below are then required) |
 | `ML_model_folder` | Model folder in `MODELS/` of the case folder (e.g. `MODEL_H2_POF_2023`). Its mechanism and `pv_species` must be those of this file |
 | `ML_yk_renormalization` | Correction of the ANN mass fractions to conserve the elements, as `yk_renormalization` of `nn_testing.yaml` |
-| `ML_hybrid_ann_cvode` | If `true`, particles whose ANN mass fractions sum differs from 1 by more than `ML_hybrid_ann_cvode_tol` are advanced with CVODE |
-| `ML_hybrid_ann_cvode_tol` | Tolerance on the sum of mass fractions [-] (e.g. `5.0e-05`) |
+| `ML_hybrid_ann_cvode` | Hybrid ANN/CVODE model, as `hybrid_ann_cvode` of `nn_testing.yaml`: particles whose ANN prediction has a conservation error larger than `ML_hybrid_ann_cvode_tol` are advanced with CVODE |
+| `ML_hybrid_ann_cvode_tol` | Tolerance on the conservation error [-] (e.g. `2.0e-04`) |
 
 Each inlet has a `type`, a number of particles `nb_particles`, `T` [K], `P` [Pa] and an optional `activation_time` [s] (time at which its particles enter the simulation, default 0; at least one inlet must start at 0). Additional keys depend on the type:
 
@@ -323,15 +324,15 @@ For `DeepONet`, these three keys are dicts with `branch` and `trunk` entries (pl
 | `models_folder` | Model folder in `MODELS/` (e.g. `MODEL_H2_POF_2023`) |
 | `spec_to_plot` | Species plotted, and on which 1-D errors are computed |
 | `yk_renormalization` | Correction of the ANN mass fractions to conserve the elements: `0` none, `1` one species per element, `2` Wan *et al.* (2020), `3` Wan *et al.* extended to O (see [theory](docs/theory.md#element-conservation-of-the-ann-mass-fractions-yk_renormalization)) |
-| `hybrid_ann_cvode` | If `true`, CVODE is used when the ANN mass fractions sum differs from 1 by more than `hybrid_ann_cvode_tol` |
-| `hybrid_ann_cvode_tol` | Tolerance on the sum of mass fractions [-] |
+| `hybrid_ann_cvode` | Hybrid ANN/CVODE model of Mehl & Aubagnac-Karkar (2023): CVODE is used instead of the ANN when the conservation error of its prediction exceeds `hybrid_ann_cvode_tol`. `0`: never. `1`: error on the sum of mass fractions $\|\sum_k Y_k - 1\|$. `2`: largest relative error on the element mass fractions (see [theory](docs/theory.md#hybrid-anncvode-model-hybrid_ann_cvode)) |
+| `hybrid_ann_cvode_tol` | Tolerance on the conservation error [-] (in the paper, about `2.0e-04` for `1` and `2.0e-03` for `2`) |
 | `device` | Optional, device of the networks: `cpu` (as in a first CFD use) or `cuda`; absent or `null`: `cuda` if available, else `cpu` |
 | `torch_threads` | Optional, number of CPU threads of torch: 1 as one MPI rank per core in a CFD code (small batches are also faster); absent or `null`: torch default (one per core) |
 | `0D_ignition` | Series of 0-D ignitions of fuel/air: `phi`, `T0` [K], `pressure` [Pa], `dt` [s], `T_eq_tolerance` [K] (CVODE and ANN stop when the CVODE temperature is this close to equilibrium), `max_simulation_time` [s] (end time if equilibrium is not reached), `stability_factor` [-] (ANN continued after equilibrium for this times the number of steps, 0 to skip) |
 | `0D_pyrolysis` | Series of 0-D pyrolysis: `T0` [K], `pressure` [Pa], `dt` [s], `T_eq_tolerance` [K], `max_simulation_time` [s], `stability_factor` [-], `diluent` (species or `null`), `X_diluent` [-] |
 | `1D_premixed` | Series of 1-D premixed flames: `phi`, `T0` [K], `pressure` [Pa], `dt` [s], `T_threshold` [K] (ANN not applied below), `x_window` |
 | `1D_diffusion` | Series of 1-D counterflow flames of pure fuel against air: `strain` [1/s], `T_ox` [K], `T_fuel` [K], `pressure` [Pa], `dt` [s], `width` [m], `T_threshold` [K], `x_window` |
-| `validation_set` | `run`, `max_points_scatter` (maximum number of points plotted per cluster) |
+| `validation_set` | `run`, `max_points_scatter` (maximum number of points plotted per cluster). Also checks a priori the criteria of the hybrid ANN/CVODE model on the validation states: $e_\Sigma$ and $e_e$ of one ANN step against its mean normalized error (see [theory](docs/theory.md#hybrid-anncvode-model-hybrid_ann_cvode)) |
 | `speedup_benchmark` | `run`, `batch_sizes` (numbers of states per network call), `dt` [s] (training time step for constant time step models), `pressure` [Pa], `nb_states_cvode` |
 
 Each series section has `run` (run the series or not) and `plots` (plots of each case). Parameters given as lists are swept (all combinations are run), others are the same for all cases. `x_window` is `[x_min, x_max]` [m] for the 1-D errors and plots, or `null` for the whole flame. The 1-D diffusion flame has the setup of the flamelets database (mixture-averaged transport). `conditions_file` (0-D ignition, 1-D premixed and diffusion) runs the test simulations set aside by a flamelets database (`FLAMELETS_DTB_<suffix>/sim_test_0D.csv`, `sim_test_1D_prem.csv`, `sim_test_1D_diff.csv`): each row gives one simulation (`Phi`, `T0` → `phi`, `T0`; for diffusion flames `Strain`, `T0` → `strain`, `T_ox`), run with every combination of the other parameters of the section (e.g. each `dt`); `null` to use the parameters of the section.

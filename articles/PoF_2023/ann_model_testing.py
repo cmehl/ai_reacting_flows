@@ -7,7 +7,7 @@ testing_parameters["spec_to_plot"] = ["N2", "H2", "O2", "H2O", "H2O2"]          
 
 testing_parameters["yk_renormalization"] = 1
 
-testing_parameters["hybrid_ann_cvode"] = False             # CVODE helping ANN based on a conservation criterion
+testing_parameters["hybrid_ann_cvode"] = 0                 # CVODE helping ANN based on a conservation criterion (0 none, 1 sum of Y_k, 2 elements)
 testing_parameters["hybrid_ann_cvode_tol"] = 5.0e-05      # Tolerance for the CVODE switching
 
 test = NNTesting(testing_parameters)

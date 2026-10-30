@@ -10,6 +10,10 @@ Check:
 - extended to O, the correction keeps positive mass fractions in a rich mixture (little O2), where the O
   correction with O2 only (Wan et al.) makes O2 negative, and it reduces to Eq. (8) for a single element.
 
+Also the conservation errors of the hybrid ANN/CVODE model (Mehl & Aubagnac-Karkar 2023): elements_error is
+the largest relative change of the element mass fractions (0 for a prediction conserving the elements), and
+use_cvode selects the states from the sum of mass fractions (1) or the element error (2), none for 0.
+
 Independent of the other tests.
 """
 import os
@@ -17,7 +21,7 @@ import numpy as np
 import cantera as ct
 import pytest
 import ai_reacting_flows.tools.utilities as utils
-from ai_reacting_flows.ann_model_generation.NN_inference import NNInference
+from ai_reacting_flows.ann_model_generation.NN_inference import NNInference, use_cvode
 
 mech_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../data/chemical_mechanisms")
 
@@ -107,3 +111,23 @@ def test_wan_all_single_element():
     Y_corr = inference.enforce_elements_balance_wan_all(Y_old, Y_new)
 
     assert np.allclose(Y_corr, Y_old, rtol=1.0e-12, atol=1.0e-16)
+
+
+def test_hybrid_criteria():
+    inference = element_corrector("mech_H2.yaml")
+    Y_old, Y_new = perturbed_states(inference.gas, "H2", n=5)
+
+    # Element error: relative change of the element mass fractions present (H, O, N in H2/air)
+    e_e = inference.elements_error(Y_old, Y_new)
+    Y_a_old, Y_a_new = elements(inference, Y_old), elements(inference, Y_new)
+    present = Y_a_old[0] > 0.0
+    assert np.allclose(e_e, np.max(np.abs(Y_a_new[:, present] - Y_a_old[:, present]) / Y_a_old[:, present], axis=1))
+    assert np.allclose(inference.elements_error(Y_old, Y_old), 0.0)
+    assert np.allclose(inference.elements_error(Y_old, inference.enforce_elements_balance(Y_old, Y_new)), 0.0, atol=1.0e-12)
+
+    # Choice of CVODE
+    e_sum = np.abs(Y_new.sum(axis=1) - 1.0)
+    tol = np.median(e_sum)
+    assert not use_cvode(e_sum, e_e, 0, tol).any()
+    assert np.array_equal(use_cvode(e_sum, e_e, 1, tol), e_sum > tol)
+    assert np.array_equal(use_cvode(e_sum, e_e, 2, np.median(e_e)), e_e > np.median(e_e))
