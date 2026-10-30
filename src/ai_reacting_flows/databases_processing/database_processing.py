@@ -496,7 +496,8 @@ class LearningDatabase(object):
         X_save["p"] = p
 
         # Setting probability of points with p=0.0 to a very small value, so that we are able to reach the original datasets for high values of samples
-        X_save.loc[X_save["p"]==0.0, 'p'] = X_save["p"].min()/1000.0
+        # (smallest positive probability: the minimum of all p is 0)
+        X_save.loc[X_save["p"]==0.0, 'p'] = X_save.loc[X_save["p"]>0.0, "p"].min()/1000.0
 
         # Imposing small progress variable values to stay in dataset (needed for ignition)
         if keep_low_c:
