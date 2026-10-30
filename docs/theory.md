@@ -6,6 +6,7 @@ Models and algorithms used in ARF, with their equations. The [README](../README.
 + [EMST mixing model (`EMST_POPE`)](#emst-mixing-model-emst_pope): stochastic reactors
 + [Temperature update of the ANN chemistry step](#temperature-update-of-the-ann-chemistry-step)
 + [Element conservation of the ANN mass fractions (`yk_renormalization`)](#element-conservation-of-the-ann-mass-fractions-yk_renormalization)
++ [Hybrid ANN/CVODE model (`hybrid_ann_cvode`)](#hybrid-anncvode-model-hybrid_ann_cvode)
 + [Simulation error](#simulation-error)
 + [Speed-up benchmark](#speed-up-benchmark)
 
@@ -87,6 +88,23 @@ Exact in one step, without iterations. For a single element, $\mu_A = -\delta_A 
 | `1` | CO2, H2, N2, O2 | yes | no (minor carriers) | 0.5 µs/state |
 | `2` | all species with C, H, N (rescaling); O2 for O | yes (iterated) | C, H, N yes; O2 no in rich mixtures | 2.5 µs/state |
 | `3` | all species, for the 4 elements | yes (one solve) | in practice | 1.8 µs/state |
+
+# Hybrid ANN/CVODE model (`hybrid_ann_cvode`)
+
+C. Mehl & D. Aubagnac-Karkar, Phys. Fluids 35, 067115 (2023), https://doi.org/10.1063/5.0151026. The ANN is called for every state; its prediction $Y_k^*$ at $t+dt$ is rejected, and the state is integrated with CVODE instead, when an error proxy $\mathcal{P}$ exceeds a threshold $\epsilon$ (`hybrid_ann_cvode_tol`). The proxy is the error of the prediction on a conserved quantity, computed before the element correction (`yk_renormalization`), which would otherwise remove it (`use_cvode` and `NNInference.elements_error` in `NN_inference.py`):
+
++ `0`: no hybrid model, the ANN is always used.
++ `1`: error on the sum of the mass fractions (Eq. 10 of the paper):
+
+$$\mathcal{P} = e_\Sigma = \left| \sum_{k=1}^{N_S} Y_k^* - 1 \right|$$
+
++ `2`: largest relative error on the element mass fractions (Eq. B1), over the elements $A \in \{C, H, O, N\}$ present in the state at $t$:
+
+$$\mathcal{P} = e_e = \max_A \frac{\left| Y_A^* - Y_A^t \right|}{Y_A^t}, \qquad Y_A = \sum_k \frac{n_{A,k} W_A}{W_k} Y_k$$
+
+As $\sum_k Y_k = \sum_A Y_A$, conserving every element conserves the sum of mass fractions, but not the reverse: $e_e$ detects errors that compensate in $e_\Sigma$. Elements absent at $t$ (e.g. C in H2/air) are not considered; species not predicted by the network (N2 without N chemistry) are unchanged, so their element (N) has no error.
+
+In the paper (H2 ignition in 2-D turbulence), both criteria correlate with the error of the ANN and give the same behaviour, with different thresholds: $\epsilon \approx 2 \times 10^{-4}$ for $e_\Sigma$ and $20 \times 10^{-4}$ for $e_e$, which call CVODE during the ignition only. The paper retains $e_\Sigma$, slightly simpler. The ratio $\alpha$ of CVODE calls reduces the speed-up $A$ of the ANN as $A'/A = 1/(\alpha A + 1)$: the hybrid model is interesting when large ANN errors are localized in space or time. The threshold can be chosen a priori from the errors on the validation states.
 
 # Simulation error
 

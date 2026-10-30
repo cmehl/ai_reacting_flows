@@ -21,7 +21,7 @@ from ai_reacting_flows.stochastic_reactors_data_gen.pre_processing import Inlet
 import ai_reacting_flows.stochastic_reactors_data_gen.emst_pope as emst_pope
 import ai_reacting_flows.tools.utilities as utils
 from ai_reacting_flows.tools.utilities import PRINT
-from ai_reacting_flows.ann_model_generation.NN_inference import NNInference
+from ai_reacting_flows.ann_model_generation.NN_inference import NNInference, use_cvode
 
 matplotlib.use('Agg')
 sns.set()
@@ -525,9 +525,9 @@ class ParticlesCloud(object):
     def _react_ANN(self, particles, dt):
         """Advance the chemistry of particles by dt [s] with the ANN (one batch, see NNInference).
 
-        Particles at T <= T_threshold are frozen, as in Particle.react. With ML_hybrid_ann_cvode,
-        particles whose predicted mass fractions sum differs from 1 by more than ML_hybrid_ann_cvode_tol
-        are advanced with Cantera instead.
+        Particles at T <= T_threshold are frozen, as in Particle.react. With ML_hybrid_ann_cvode (1: sum of
+        mass fractions, 2: element mass fractions, see use_cvode), particles whose ANN prediction has a
+        conservation error larger than ML_hybrid_ann_cvode_tol are advanced with Cantera instead.
         """
 
         particles = [part for part in particles if part.T > self.T_threshold]
@@ -540,12 +540,13 @@ class ParticlesCloud(object):
         progvar = np.array([part.prog_var for part in particles])
 
         clusters = self.nn_inference.attribute_clusters(T, Y, dt, progvar)
-        T_new, Y_new, sum_Yk = self.nn_inference.advance(T, Y, P, dt, clusters, self.ML_yk_renormalization)
+        T_new, Y_new, sum_Yk, elements_error = self.nn_inference.advance(T, Y, P, dt, clusters, self.ML_yk_renormalization)
+        cvode = use_cvode(sum_Yk, elements_error, self.ML_hybrid_ann_cvode, self.ML_hybrid_ann_cvode_tol)
 
         for i, part in enumerate(particles):
 
-            # Hybrid: Cantera if the ANN does not conserve mass
-            if self.ML_hybrid_ann_cvode and np.abs(sum_Yk[i] - 1.0) > self.ML_hybrid_ann_cvode_tol:
+            # Hybrid: Cantera if the conservation error of the ANN is too large
+            if cvode[i]:
                 part.react(dt, self)
             else:
                 part.set_state_from_T_Y(T_new[i], Y_new[i], self)

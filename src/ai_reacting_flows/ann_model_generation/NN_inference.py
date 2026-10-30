@@ -31,6 +31,30 @@ WAN_RTOL = 1.0e-12
 WAN_MAX_ITERATIONS = 50
 
 
+def use_cvode(sum_Yk, elements_error, hybrid_ann_cvode, tol):
+    """States (boolean array, n) to advance with CVODE instead of the ANN: hybrid DI/ANN model of
+    Mehl & Aubagnac-Karkar, Phys. Fluids 35, 067115 (2023), https://doi.org/10.1063/5.0151026.
+    The error of the ANN prediction is estimated from a conserved quantity, before element correction:
+
+        hybrid_ann_cvode = 0: never (ANN only)
+        hybrid_ann_cvode = 1: e_sum = |sum_k Y_k - 1| > tol, sum of mass fractions (Eq. 10)
+        hybrid_ann_cvode = 2: e_e = max_a |Y_a(t+dt) - Y_a(t)| / Y_a(t) > tol, element mass fractions (Eq. B1)
+
+    sum_Yk: sum of the predicted mass fractions (n), elements_error: e_e (n), tol [-]. The paper finds
+    good thresholds of 2e-4 for e_sum and 20e-4 for e_e on a H2 ignition case.
+    """
+
+    # ANN error estimated from the sum of mass fractions
+    if hybrid_ann_cvode == 1:
+        return np.abs(sum_Yk - 1.0) > tol
+
+    # ANN error estimated from the element mass fractions
+    elif hybrid_ann_cvode == 2:
+        return elements_error > tol
+
+    return np.zeros(len(sum_Yk), dtype=bool)
+
+
 class NNInference():
 
     def __init__(self, models_folder, run_folder, device=None):
@@ -237,8 +261,9 @@ class NNInference():
         (enforce_elements_balance_wan), 3: Wan et al. 2020 extended to O, all elements solved together
         (enforce_elements_balance_wan_all).
 
-        Returns T_new [K] (n), Y_new [-] (n, n_species) and the sum of the predicted mass fractions
-        before element correction (n), used to check mass conservation (hybrid ANN/CVODE).
+        Returns T_new [K] (n), Y_new [-] (n, n_species), and, for the hybrid ANN/CVODE model (use_cvode),
+        the sum of the predicted mass fractions and their largest relative error on the element mass
+        fractions (elements_error), both before element correction (n).
         T_new is deduced from enthalpy conservation, with cp and h_k of the initial state.
         """
 
@@ -286,8 +311,9 @@ class NNInference():
         Y_new = Y.copy()
         Y_new[:, cols_ANN] = Y_ANN_new
 
-        # Sum of Yk before element correction (mass conservation check)
+        # Conservation errors of the prediction, before element correction (hybrid ANN/CVODE model)
         sum_Yk = Y_new.sum(axis=1)
+        elements_error = self.elements_error(Y, Y_new)
 
         # Enforcing element conservation (0: none)
         if yk_renormalization == 1:
@@ -306,7 +332,24 @@ class NNInference():
         cp = np.sum(cp_k * Y, axis=1)
         T_new = T - np.sum(h_k * (Y_new - Y), axis=1) / cp
 
-        return T_new, Y_new, sum_Yk
+        return T_new, Y_new, sum_Yk, elements_error
+
+
+    def elements_error(self, Y_old, Y_new):
+        """Largest relative change [-] (n) of the element mass fractions between Y_old and Y_new (n, n_species):
+        e_e = max_a |Y_a(new) - Y_a(old)| / Y_a(old), over the elements a (C, H, O, N) present in Y_old,
+        with Y_a = sum_k (n_ak W_a / W_k) Y_k (Mehl & Aubagnac-Karkar, Phys. Fluids 2023, Eqs. A1, B1)."""
+
+        W_k = self.gas.molecular_weights
+        Y_a_old = self.W_atoms * ((Y_old / W_k) @ self.atomic_array.T)
+        Y_a_new = self.W_atoms * ((Y_new / W_k) @ self.atomic_array.T)
+
+        # Relative errors of the elements present (0 for the absent ones)
+        present = Y_a_old > 0.0
+        relative = np.zeros_like(Y_a_old)
+        relative[present] = np.abs(Y_a_new[present] - Y_a_old[present]) / Y_a_old[present]
+
+        return relative.max(axis=1)
 
 
     def enforce_elements_balance(self, Y_old, Y_new):

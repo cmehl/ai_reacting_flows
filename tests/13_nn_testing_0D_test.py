@@ -10,7 +10,8 @@ Check:
   of the current state (states advanced with CVODE through the hybrid mode, so that it ignites).
 - the 0D case stops at the first step where the CVODE temperature is within T_eq_tolerance of the
   equilibrium temperature, with the same number of ANN steps.
-- the cluster of each step is recorded (-1 for CVODE steps of the hybrid mode), and the ANN can be
+- the cluster of each step is recorded (-1 for CVODE steps of the hybrid mode, with the criterion on the
+  sum of mass fractions or on the element mass fractions), and the ANN can be
   continued after equilibrium (drifts of T and of the sum of Y_k).
 
 Independent of the other tests.
@@ -23,7 +24,7 @@ from ai_reacting_flows.ann_model_generation.NN_testing import NNTesting
 from h2_learning_database import write_h2_learning_database, mech_file, dt, pressure
 
 testing_parameters = {"models_folder": "MODEL_TEST", "spec_to_plot": ["H2"], "yk_renormalization": 0,
-                      "hybrid_ann_cvode": False, "hybrid_ann_cvode_tol": 5.0e-05}
+                      "hybrid_ann_cvode": 0, "hybrid_ann_cvode_tol": 5.0e-05}
 
 
 def test_nn_testing_0D(tmp_path):
@@ -54,7 +55,7 @@ def test_nn_testing_0D(tmp_path):
     test.inference.models_list = 2 * test.inference.models_list
     test.inference.Xscaler_list = 2 * test.inference.Xscaler_list
     test.inference.Yscaler_list = 2 * test.inference.Yscaler_list
-    test.hybrid_ann_cvode = True
+    test.hybrid_ann_cvode = 1
     test.hybrid_ann_cvode_tol = -1.0
 
     clusters = []
@@ -71,6 +72,12 @@ def test_nn_testing_0D(tmp_path):
     assert clusters[1:] == [0 if c < 0.5 else 1 for c in progvar]   # First call: ANN warm-up
     assert np.all(result["clusters"] == -1)   # All steps done by CVODE (hybrid with negative tolerance)
 
+    # Same with the hybrid criterion on the element mass fractions
+    test.hybrid_ann_cvode = 2
+    result = test.run_0D_ignition_case(phi=0.6, T0=1200.0, pressure=pressure, dt=dt, max_simulation_time=4 * dt)
+    assert np.all(result["clusters"] == -1)
+    test.hybrid_ann_cvode = 1
+
     # Stop at CVODE equilibrium (max_simulation_time not reached), same number of ANN steps
     result = test.run_0D_ignition_case(phi=0.6, T0=1200.0, pressure=pressure, dt=dt, max_simulation_time=1.0, T_eq_tolerance=1.0)
     T_ref = result["states_ref"][:, 0]
@@ -81,7 +88,7 @@ def test_nn_testing_0D(tmp_path):
     assert len(T_ref) < 1.0 / dt
 
     # Stability after equilibrium: ANN continued, drifts of T and sum(Y_k)
-    test.hybrid_ann_cvode = False
+    test.hybrid_ann_cvode = 0
     result = test.run_0D_ignition_case(phi=0.6, T0=1200.0, pressure=pressure, dt=dt, max_simulation_time=4 * dt, stability_factor=2.0)
     assert result["T_drift"] >= 0.0 and result["sumYk_drift"] >= 0.0
     assert len(result["clusters"]) == 4 and np.all(result["clusters"] >= 0)

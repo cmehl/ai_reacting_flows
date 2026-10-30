@@ -31,7 +31,7 @@ import ai_reacting_flows.tools.transforms as transforms
 from h2_learning_database import write_h2_learning_database, dt, pressure
 
 testing_parameters = {"models_folder": "MODEL_TEST", "spec_to_plot": ["H2", "N2"], "yk_renormalization": 0,
-                      "hybrid_ann_cvode": False, "hybrid_ann_cvode_tol": 5.0e-05}
+                      "hybrid_ann_cvode": 0, "hybrid_ann_cvode_tol": 5.0e-05}
 
 # Series as in nn_testing.yaml: 2 ignition cases, 1 premixed flame, 1 diffusion flame, validation set
 series_parameters = {

@@ -50,11 +50,11 @@ data_gen_parameters["calc_mean_traj"] = False
 data_gen_parameters["ML_inference_flag"] = True
 data_gen_parameters["ML_model_folder"] = "MODEL_TEST"
 data_gen_parameters["ML_yk_renormalization"] = 0
-data_gen_parameters["ML_hybrid_ann_cvode"] = False
+data_gen_parameters["ML_hybrid_ann_cvode"] = 0
 data_gen_parameters["ML_hybrid_ann_cvode_tol"] = 5.0e-05
 
 testing_parameters = {"models_folder": "MODEL_TEST", "spec_to_plot": ["H2"], "yk_renormalization": 0,
-                      "hybrid_ann_cvode": False, "hybrid_ann_cvode_tol": 5.0e-05}
+                      "hybrid_ann_cvode": 0, "hybrid_ann_cvode_tol": 5.0e-05}
 
 
 def particles_states(cloud):
@@ -90,7 +90,7 @@ def test_stoch_ann_inference(tmp_path):
 
     # Hybrid mode with a negative tolerance: all particles advanced with Cantera
     params = copy.deepcopy(data_gen_parameters)
-    params["ML_hybrid_ann_cvode"] = True
+    params["ML_hybrid_ann_cvode"] = 1
     params["ML_hybrid_ann_cvode_tol"] = -1.0
     cloud_hybrid = ParticlesCloud(params, dc.DummyComm())
     cloud_hybrid._apply_reactions(dt)

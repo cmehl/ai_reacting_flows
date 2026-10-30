@@ -235,8 +235,8 @@ Examples of all files can be found in `scripts/<CASE>/`. Units are SI.
 | `ML_inference_flag` | If `true`, chemistry is computed with the ANN instead of CVODE (optional keys below are then required) |
 | `ML_model_folder` | Model folder in `MODELS/` of the case folder (e.g. `MODEL_H2_POF_2023`). Its mechanism and `pv_species` must be those of this file |
 | `ML_yk_renormalization` | Correction of the ANN mass fractions to conserve the elements, as `yk_renormalization` of `nn_testing.yaml` |
-| `ML_hybrid_ann_cvode` | If `true`, particles whose ANN mass fractions sum differs from 1 by more than `ML_hybrid_ann_cvode_tol` are advanced with CVODE |
-| `ML_hybrid_ann_cvode_tol` | Tolerance on the sum of mass fractions [-] (e.g. `5.0e-05`) |
+| `ML_hybrid_ann_cvode` | Hybrid ANN/CVODE model, as `hybrid_ann_cvode` of `nn_testing.yaml`: particles whose ANN prediction has a conservation error larger than `ML_hybrid_ann_cvode_tol` are advanced with CVODE |
+| `ML_hybrid_ann_cvode_tol` | Tolerance on the conservation error [-] (e.g. `2.0e-04`) |
 
 Each inlet has a `type`, a number of particles `nb_particles`, `T` [K], `P` [Pa] and an optional `activation_time` [s] (time at which its particles enter the simulation, default 0; at least one inlet must start at 0). Additional keys depend on the type:
 
@@ -323,8 +323,8 @@ For `DeepONet`, these three keys are dicts with `branch` and `trunk` entries (pl
 | `models_folder` | Model folder in `MODELS/` (e.g. `MODEL_H2_POF_2023`) |
 | `spec_to_plot` | Species plotted, and on which 1-D errors are computed |
 | `yk_renormalization` | Correction of the ANN mass fractions to conserve the elements: `0` none, `1` one species per element, `2` Wan *et al.* (2020), `3` Wan *et al.* extended to O (see [theory](docs/theory.md#element-conservation-of-the-ann-mass-fractions-yk_renormalization)) |
-| `hybrid_ann_cvode` | If `true`, CVODE is used when the ANN mass fractions sum differs from 1 by more than `hybrid_ann_cvode_tol` |
-| `hybrid_ann_cvode_tol` | Tolerance on the sum of mass fractions [-] |
+| `hybrid_ann_cvode` | Hybrid ANN/CVODE model of Mehl & Aubagnac-Karkar (2023): CVODE is used instead of the ANN when the conservation error of its prediction exceeds `hybrid_ann_cvode_tol`. `0`: never. `1`: error on the sum of mass fractions $\|\sum_k Y_k - 1\|$. `2`: largest relative error on the element mass fractions (see [theory](docs/theory.md#hybrid-anncvode-model-hybrid_ann_cvode)) |
+| `hybrid_ann_cvode_tol` | Tolerance on the conservation error [-] (in the paper, about `2.0e-04` for `1` and `2.0e-03` for `2`) |
 | `device` | Optional, device of the networks: `cpu` (as in a first CFD use) or `cuda`; absent or `null`: `cuda` if available, else `cpu` |
 | `torch_threads` | Optional, number of CPU threads of torch: 1 as one MPI rank per core in a CFD code (small batches are also faster); absent or `null`: torch default (one per core) |
 | `0D_ignition` | Series of 0-D ignitions of fuel/air: `phi`, `T0` [K], `pressure` [Pa], `dt` [s], `T_eq_tolerance` [K] (CVODE and ANN stop when the CVODE temperature is this close to equilibrium), `max_simulation_time` [s] (end time if equilibrium is not reached), `stability_factor` [-] (ANN continued after equilibrium for this times the number of steps, 0 to skip) |

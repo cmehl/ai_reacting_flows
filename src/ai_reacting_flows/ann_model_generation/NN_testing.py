@@ -13,7 +13,7 @@ import torch
 from datetime import datetime
 from time import perf_counter
 from ai_reacting_flows.ann_model_generation.NN_models import MLPModel, DeepONet, DeepONet_shift
-from ai_reacting_flows.ann_model_generation.NN_inference import NNInference
+from ai_reacting_flows.ann_model_generation.NN_inference import NNInference, use_cvode
 import ai_reacting_flows.ann_model_generation.NN_testing_metrics as metrics
 import ai_reacting_flows.ann_model_generation.NN_testing_plots as plots
 
@@ -697,10 +697,9 @@ class NNTesting():
             if Tt[i_reac] >= T_threshold:
                 T_new, Y_new = self.advance_state_NN(Tt[i_reac], Yt_ann[:,i_reac], pressure, dt)
 
-                # If hybrid, we check conservation and use CVODE if not satisfied
+                # If hybrid, we check conservation (prediction before element correction) and use CVODE if not satisfied
                 if self.hybrid_ann_cvode:
-                    cons_criterion = np.abs(np.sum(Y_new,axis=0) - 1.0)
-                    if cons_criterion > self.hybrid_ann_cvode_tol:
+                    if self.ia_success is False:
                         # CVODE advance
                         T_new, Y_new = self.advance_state_CVODE(Tt[i_reac], Yt_ann[:,i_reac], pressure, dt)
                         cvode_calls += 1
@@ -1115,17 +1114,15 @@ class NNTesting():
         """ANN advancement by dt [s] of the state T_old [K], Y_old [-] (all species) at pressure [Pa],
         with the network of self.cluster (see NNInference.advance)."""
 
-        T_new, Y_new, sum_Yk = self.inference.advance(np.array([T_old]), np.reshape(Y_old, (1, -1)), pressure, dt,
-                                                      np.array([self.cluster]), self.yk_renormalization)
+        T_new, Y_new, sum_Yk, elements_error = self.inference.advance(np.array([T_old]), np.reshape(Y_old, (1, -1)),
+                                                                      pressure, dt, np.array([self.cluster]),
+                                                                      self.yk_renormalization)
 
         # Sum of Yk before renormalization (used for analysis)
         self.sum_Yk_before_renorm = sum_Yk[0]
 
-        # Hybrid model: ANN computation fails if mass conservation is not satisfied
-        self.ia_success = True
-        if self.hybrid_ann_cvode:
-            if np.abs(sum_Yk[0] - 1.0) > self.hybrid_ann_cvode_tol:
-                self.ia_success = False
+        # Hybrid model: ANN computation fails if its conservation error is too large (see use_cvode)
+        self.ia_success = not use_cvode(sum_Yk, elements_error, self.hybrid_ann_cvode, self.hybrid_ann_cvode_tol)[0]
 
         return T_new[0], Y_new[0]
 
