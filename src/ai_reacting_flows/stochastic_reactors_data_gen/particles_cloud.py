@@ -540,8 +540,8 @@ class ParticlesCloud(object):
         progvar = np.array([part.prog_var for part in particles])
 
         clusters = self.nn_inference.attribute_clusters(T, Y, dt, progvar)
-        T_new, Y_new, sum_Yk, elements_error = self.nn_inference.advance(T, Y, P, dt, clusters, self.ML_yk_renormalization)
-        cvode = use_cvode(sum_Yk, elements_error, self.ML_hybrid_ann_cvode, self.ML_hybrid_ann_cvode_tol)
+        T_new, Y_new, e_sum, e_e = self.nn_inference.advance(T, Y, P, dt, clusters, self.ML_yk_renormalization)
+        cvode = use_cvode(e_sum, e_e, self.ML_hybrid_ann_cvode, self.ML_hybrid_ann_cvode_tol)
 
         for i, part in enumerate(particles):
 

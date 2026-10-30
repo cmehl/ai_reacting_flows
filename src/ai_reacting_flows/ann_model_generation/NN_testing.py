@@ -1102,15 +1102,11 @@ class NNTesting():
         """ANN advancement by dt [s] of the state T_old [K], Y_old [-] (all species) at pressure [Pa],
         with the network of self.cluster (see NNInference.advance)."""
 
-        T_new, Y_new, sum_Yk, elements_error = self.inference.advance(np.array([T_old]), np.reshape(Y_old, (1, -1)),
-                                                                      pressure, dt, np.array([self.cluster]),
-                                                                      self.yk_renormalization)
-
-        # Sum of Yk before renormalization (used for analysis)
-        self.sum_Yk_before_renorm = sum_Yk[0]
+        T_new, Y_new, e_sum, e_e = self.inference.advance(np.array([T_old]), np.reshape(Y_old, (1, -1)), pressure, dt,
+                                                          np.array([self.cluster]), self.yk_renormalization)
 
         # Hybrid model: ANN computation fails if its conservation error is too large (see use_cvode)
-        self.ia_success = not use_cvode(sum_Yk, elements_error, self.hybrid_ann_cvode, self.hybrid_ann_cvode_tol)[0]
+        self.ia_success = not use_cvode(e_sum, e_e, self.hybrid_ann_cvode, self.hybrid_ann_cvode_tol)[0]
 
         return T_new[0], Y_new[0]
 
@@ -1241,15 +1237,13 @@ class NNTesting():
 
         # ANN step (dt is not a network input for a constant time step database; P is not used)
         dt_network = dt if dt is not None else np.nan
-        T_ann, Y_ann, sum_Yk, e_e = inf.advance(T, Y, np.nan, dt_network, clusters, self.yk_renormalization)
+        T_ann, Y_ann, e_sum, e_e = inf.advance(T, Y, np.nan, dt_network, clusters, self.yk_renormalization)
         T_ref = inf.temperature_after(T, Y, Y_ref)
 
         # Error of the step, mean over the variables of the normalized differences
         x_ann = self._error_variables(np.column_stack([T_ann, Y_ann]))
         x_ref = self._error_variables(np.column_stack([T_ref, Y_ref]))
         E = metrics.normalized_errors(x_ann, x_ref, self.std_train).mean(axis=1)
-
-        e_sum = np.abs(sum_Yk - 1.0)
 
         # Plots, with the threshold of the selected criterion
         tol_sum = self.hybrid_ann_cvode_tol if self.hybrid_ann_cvode == 1 else None

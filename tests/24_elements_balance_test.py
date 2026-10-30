@@ -126,8 +126,8 @@ def test_hybrid_criteria():
     assert np.allclose(inference.elements_error(Y_old, inference.enforce_elements_balance(Y_old, Y_new)), 0.0, atol=1.0e-12)
 
     # Choice of CVODE
-    sum_Yk = Y_new.sum(axis=1)
-    tol = np.median(np.abs(sum_Yk - 1.0))
-    assert not use_cvode(sum_Yk, e_e, 0, tol).any()
-    assert np.array_equal(use_cvode(sum_Yk, e_e, 1, tol), np.abs(sum_Yk - 1.0) > tol)
-    assert np.array_equal(use_cvode(sum_Yk, e_e, 2, np.median(e_e)), e_e > np.median(e_e))
+    e_sum = np.abs(Y_new.sum(axis=1) - 1.0)
+    tol = np.median(e_sum)
+    assert not use_cvode(e_sum, e_e, 0, tol).any()
+    assert np.array_equal(use_cvode(e_sum, e_e, 1, tol), e_sum > tol)
+    assert np.array_equal(use_cvode(e_sum, e_e, 2, np.median(e_e)), e_e > np.median(e_e))

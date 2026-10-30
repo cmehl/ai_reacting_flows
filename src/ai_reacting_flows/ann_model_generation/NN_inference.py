@@ -31,7 +31,7 @@ WAN_RTOL = 1.0e-12
 WAN_MAX_ITERATIONS = 50
 
 
-def use_cvode(sum_Yk, elements_error, hybrid_ann_cvode, tol):
+def use_cvode(e_sum, e_e, hybrid_ann_cvode, tol):
     """States (boolean array, n) to advance with CVODE instead of the ANN: hybrid DI/ANN model of
     Mehl & Aubagnac-Karkar, Phys. Fluids 35, 067115 (2023), https://doi.org/10.1063/5.0151026.
     The error of the ANN prediction is estimated from a conserved quantity, before element correction:
@@ -40,19 +40,19 @@ def use_cvode(sum_Yk, elements_error, hybrid_ann_cvode, tol):
         hybrid_ann_cvode = 1: e_sum = |sum_k Y_k - 1| > tol, sum of mass fractions (Eq. 10)
         hybrid_ann_cvode = 2: e_e = max_a |Y_a(t+dt) - Y_a(t)| / Y_a(t) > tol, element mass fractions (Eq. B1)
 
-    sum_Yk: sum of the predicted mass fractions (n), elements_error: e_e (n), tol [-]. The paper finds
+    e_sum, e_e [-] (n): conservation errors returned by NNInference.advance, tol [-]. The paper finds
     good thresholds of 2e-4 for e_sum and 20e-4 for e_e on a H2 ignition case.
     """
 
     # ANN error estimated from the sum of mass fractions
     if hybrid_ann_cvode == 1:
-        return np.abs(sum_Yk - 1.0) > tol
+        return e_sum > tol
 
     # ANN error estimated from the element mass fractions
     elif hybrid_ann_cvode == 2:
-        return elements_error > tol
+        return e_e > tol
 
-    return np.zeros(len(sum_Yk), dtype=bool)
+    return np.zeros(len(e_sum), dtype=bool)
 
 
 class NNInference():
@@ -261,9 +261,9 @@ class NNInference():
         (enforce_elements_balance_wan), 3: Wan et al. 2020 extended to O, all elements solved together
         (enforce_elements_balance_wan_all).
 
-        Returns T_new [K] (n), Y_new [-] (n, n_species), and, for the hybrid ANN/CVODE model (use_cvode),
-        the sum of the predicted mass fractions and their largest relative error on the element mass
-        fractions (elements_error), both before element correction (n).
+        Returns T_new [K] (n), Y_new [-] (n, n_species), and the conservation errors of the prediction before
+        element correction, for the hybrid ANN/CVODE model (use_cvode): e_sum = |sum_k Y_k - 1| [-] (n) and
+        e_e [-] (n), largest relative error on the element mass fractions (elements_error).
         T_new is deduced from enthalpy conservation, with cp and h_k of the initial state.
         """
 
@@ -312,8 +312,8 @@ class NNInference():
         Y_new[:, cols_ANN] = Y_ANN_new
 
         # Conservation errors of the prediction, before element correction (hybrid ANN/CVODE model)
-        sum_Yk = Y_new.sum(axis=1)
-        elements_error = self.elements_error(Y, Y_new)
+        e_sum = np.abs(Y_new.sum(axis=1) - 1.0)
+        e_e = self.elements_error(Y, Y_new)
 
         # Enforcing element conservation (0: none)
         if yk_renormalization == 1:
@@ -329,7 +329,7 @@ class NNInference():
         # Deducing T from energy conservation
         T_new = self.temperature_after(T, Y, Y_new)
 
-        return T_new, Y_new, sum_Yk, elements_error
+        return T_new, Y_new, e_sum, e_e
 
 
     def temperature_after(self, T, Y_old, Y_new):
