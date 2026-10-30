@@ -14,15 +14,27 @@ import cantera as ct
 
 from scipy.spatial.distance import pdist, squareform
 from scipy.sparse.csgraph import minimum_spanning_tree
+from mpi4py import MPI
 
 from ai_reacting_flows.stochastic_reactors_data_gen.particle import Particle
 from ai_reacting_flows.stochastic_reactors_data_gen.pre_processing import Inlet
+import ai_reacting_flows.stochastic_reactors_data_gen.emst_pope as emst_pope
 import ai_reacting_flows.tools.utilities as utils
 from ai_reacting_flows.tools.utilities import PRINT
 from ai_reacting_flows.ann_model_generation.NN_inference import NNInference
 
 matplotlib.use('Agg')
 sns.set()
+
+# Attributes of the particles changed during the simulation, exchanged between MPI ranks as one array of floats
+# per particle (each rank keeps its own copy of the particles; the other attributes are constant)
+EXCHANGED_SCALARS = ["T", "P", "hs", "Hs", "mass", "Yc_u", "Yc_eq", "recompute_Yc_eq", "prog_var", "equiv_ratio",
+                     "mix_frac", "hrr", "emst_age"]
+EXCHANGED_ARRAYS = ["Y", "X", "mass_k", "state"]
+
+# EMST_POPE: scale of the mass fractions for the tree [-] (example of emst.f: the tree is built on Y / 0.1,
+# minor species have a negligible weight in it)
+EMST_SPECIES_SCALE = 0.1
 
 class ParticlesCloud(object):
     
@@ -182,6 +194,13 @@ class ParticlesCloud(object):
         # Mixing model
         self.mixing_model = data_gen_parameters["mixing_model"]
         self.mixing_time = float(data_gen_parameters["mixing_time"])
+
+        # EMST_POPE: ages of the particles in the stationary state. Same seed on all ranks (mixing is done
+        # by rank 0, the particles and their ages are then sent to all ranks)
+        if self.mixing_model == "EMST_POPE":
+            self.emst_rng = np.random.default_rng(0)
+            for part, age in zip(self.particles_list, emst_pope.init_ages(self.nb_parts_tot, self.emst_rng)):
+                part.emst_age = age
         
         # Chemistry temperature threshold
         self.T_threshold = float(data_gen_parameters["T_threshold"])
@@ -248,7 +267,7 @@ class ParticlesCloud(object):
 
         
 
-        if self.mixing_model!="CURL_MODIFIED_DD" and self.mixing_model!="EMST":  
+        if self.mixing_model not in ["CURL_MODIFIED_DD", "EMST_SIMPLIFIED", "EMST_POPE"]:
             # Do or read mixing
             read_mixing = data_gen_parameters["read_mixing"]
             do_CURL_rate = True if "CURL_MODIFIED" in self.mixing_model else False
@@ -301,7 +320,7 @@ class ParticlesCloud(object):
         # =====================================================================
 
         # Columns of data array with solution and post-processing variables
-        self.cols_all_states = ['Temperature'] + ['Pressure'] + self.species_names + ['Mix_frac'] + ['Equiv_ratio'] + ['Prog_var'] + ['HRR'] +  ['Time'] + ['Particle_number'] + ['Inlet_number'] + ['Y_C', 'Y_H', 'Y_O', 'Y_N'] + ['Mass']
+        self.cols_all_states = ['Temperature'] + ['Pressure'] + self.species_names + ['Mix_frac'] + ['Equiv_ratio'] + ['Prog_var'] + ['HRR'] +  ['Time'] + ['Particle_number'] + ['Inlet_number'] + ['Y_C', 'Y_H', 'Y_O', 'Y_N'] + ['Mass'] + ['EMST_age']
         
         # Initialize mean trajectories
         if self.calc_mean_traj:
@@ -439,10 +458,10 @@ class ParticlesCloud(object):
             self._update_dtb_states("Y")
         
         # Advance molecular diffusion
-        # Diffusion is applied by rank 0, the mixed states are then given to every processor by _update_vars
-        # (scatter from rank 0 and allgather)
+        # Diffusion is applied by rank 0, the mixed states are then sent to every processor
         if self.rank==0:
             self._apply_diffusion()
+        self._share_states_of_root()
 
         t3 = perf_counter()
         
@@ -484,19 +503,13 @@ class ParticlesCloud(object):
     # Apply reaction rate to particles
     def _apply_reactions(self, dt):
 
-        # We divide the list of particles into chunks to be treated by each processor
-        lists_particles = np.array_split(np.array(self.particles_list), self.size)
-
-        # We verify size of list to avoid errors
-        assert len(lists_particles) == self.size
-
-        # We scatter the chunks on each processors. Remark: rank=root also takes a chunk.
-        lists_particles = self.comm.scatter(lists_particles, root=0)
+        # Each processor computes the chemistry of its chunk of particles
+        chunk = self._particle_chunk()
+        particles = [self.particles_list[i] for i in chunk]
 
         # Reaction only if time is larger than activation time
-        active_particles = [part for part in lists_particles if self.time >= part.activation_time]
+        active_particles = [part for part in particles if self.time >= part.activation_time]
 
-        # We perform chemical reactions -> each processor computes on its chunks
         if self.ML_inference_flag:
             # Chemistry with the ANN
             self._react_ANN(active_particles, dt)
@@ -505,11 +518,8 @@ class ParticlesCloud(object):
             for part in active_particles:
                 part.react(dt, self)
 
-        # Allgather regroups the chunks and give the whole list to all the processors (<=> gather + broadcast)
-        result = self.comm.allgather(lists_particles)
-
-        # As we have a list of lists of particles we need to concatenate
-        self.particles_list = list(itertools.chain.from_iterable(result))
+        # States of all chunks given to all the processors
+        self._gather_states(chunk)
 
     # Apply reaction rate to particles with the ANN
     def _react_ANN(self, particles, dt):
@@ -553,8 +563,11 @@ class ParticlesCloud(object):
             if self.iteration%self.diffusion_freq[self.iteration]==0:
                 self._mix_curl_dd()
 
-        elif self.mixing_model=="EMST":
+        elif self.mixing_model=="EMST_SIMPLIFIED":
             self._mix_emst()
+
+        elif self.mixing_model=="EMST_POPE":
+            self._mix_emst_pope()
 
 
 
@@ -737,112 +750,12 @@ class ParticlesCloud(object):
                 part.update_ThermoStates(self)
 
 
-    # # EMST mixing model using Pope-style EMST micro-mixing.
-    # def _mix_emst(self):
-    #     """Perform one EMST micro-mixing step using Pope's EMST model.
-
-    #     The implementation follows the Euclidean Minimum Spanning Tree (EMST)
-    #     approach:
-    #       - build an MST in normalized composition/enthalpy space,
-    #       - compute an exponential pairwise relaxation coefficient,
-    #       - distribute mixing conservatively along tree edges.
-    #     """
-
-    #     # --------------------------------------------------------------
-    #     # Gather particle properties
-    #     # --------------------------------------------------------------
-    #     active_particles = [p for p in self.particles_list if p.is_active]
-    #     Y_all = np.array([p.Y for p in active_particles])
-    #     hs_all = np.array([p.hs for p in active_particles])
-    #     extra_all = np.array([p.Yc_u for p in active_particles])
-
-    #     # --------------------------------------------------------------
-    #     # Phase-space used to build the EMST (normalized)
-    #     # --------------------------------------------------------------
-    #     phi_tree_raw = np.column_stack((Y_all, hs_all))
-
-    #     sigma = phi_tree_raw.std(axis=0)
-    #     sigma[sigma < 1e-30] = 1.0
-
-    #     phi_tree = phi_tree_raw / sigma
-
-    #     # Variables actually mixed (can include extra scalars such as Yc_u)
-    #     phi_old = np.column_stack((Y_all, hs_all, extra_all))
-
-    #     # --------------------------------------------------------------
-    #     # Compute Euclidean MST
-    #     # --------------------------------------------------------------
-    #     distances = squareform(pdist(phi_tree))
-    #     mst = minimum_spanning_tree(distances)
-
-    #     rows, cols = mst.nonzero()
-    #     lengths = np.asarray(mst[rows, cols]).ravel()
-
-    #     if len(lengths) == 0:
-    #         return
-
-    #     # --------------------------------------------------------------
-    #     # Global mixing strength (Pope exponential relaxation)
-    #     # --------------------------------------------------------------
-    #     dt = self.dt[self.iteration]
-    #     tau = self.mixing_time
-
-    #     # Exact solution of pairwise relaxation equation
-    #     alpha0 = 0.5 * (1.0 - np.exp(-2.0 * dt / tau))
-
-    #     # Normalize edge weights
-    #     Ltot = lengths.sum()
-    #     if Ltot < 1e-30:
-    #         weights = np.ones_like(lengths) / len(lengths)
-    #     else:
-    #         weights = lengths / Ltot
-
-    #     # --------------------------------------------------------------
-    #     # Conservative simultaneous update
-    #     # --------------------------------------------------------------
-    #     dphi = np.zeros_like(phi_old)
-    #     n_edges = len(lengths)
-
-    #     for i, j, w in zip(rows, cols, weights):
-
-    #         # Average mixing coefficient equals alpha0
-    #         alpha = alpha0 * w * n_edges
-
-    #         # Stability safeguard (prevents overshooting on a single edge)
-    #         alpha = min(alpha, 0.5)
-
-    #         delta = phi_old[i] - phi_old[j]
-
-    #         dphi[i] -= alpha * delta
-    #         dphi[j] += alpha * delta
-
-    #     phi_new = phi_old + dphi
-
-    #     # --------------------------------------------------------------
-    #     # Write back particle states
-    #     # --------------------------------------------------------------
-    #     for k, p in enumerate(active_particles):
-
-    #         p.Y = phi_new[k, :self.nb_species]
-    #         p.hs = phi_new[k, self.nb_species]
-    #         p.Yc_u = phi_new[k, self.nb_species + 1]
-
-    #         # For safety
-    #         p.Y = np.clip(p.Y, 0.0, None)
-    #         p.Y /= p.Y.sum() + 1e-30
-
-    #         p.state[0] = p.hs
-    #         p.state[2:] = p.Y
-
-    #         p.update_ThermoStates(self)
-
-    #         # EMST requires recomputation of equilibrium progress variable
-    #         p.recompute_Yc_eq = True
 
 
-    # EMST mixing model
+    # EMST mixing model (EMST_SIMPLIFIED)
     def _mix_emst(self):
-        """Perform one EMST micro-mixing.
+        """Perform one EMST micro-mixing (simplified version, EMST_SIMPLIFIED; see _mix_emst_pope for the model
+        of Subramaniam & Pope).
 
         The implementation follows the Euclidean Minimum Spanning Tree (EMST)
         approach:
@@ -936,6 +849,47 @@ class ParticlesCloud(object):
             p.recompute_Yc_eq = True
 
 
+    # EMST mixing model of Subramaniam & Pope (EMST_POPE)
+    def _mix_emst_pope(self):
+        """EMST mixing of the active particles over the time step, model of Subramaniam & Pope with ages
+        (see emst_pope.py): the variance function of the tree variables decays as exp(-dt / mixing_time).
+
+        Mixed variables: Y, hs and Yc_u. As in the example of emst.f, the tree is built on the mass
+        fractions only, scaled by EMST_SPECIES_SCALE; hs and Yc_u are mixed but not used for the tree.
+        """
+
+        active_particles = [p for p in self.particles_list if p.is_active]
+
+        f = np.column_stack((np.array([p.Y for p in active_particles]),
+                             np.array([p.hs for p in active_particles]),
+                             np.array([p.Yc_u for p in active_particles])))
+        w = np.array([p.mass for p in active_particles])
+        ages = np.array([p.emst_age for p in active_particles])
+
+        # Scales: mass fractions for the tree, hs and Yc_u not used for the tree
+        fscale = np.append(np.full(self.nb_species, EMST_SPECIES_SCALE), [emst_pope.NO_TREE_SCALE] * 2)
+
+        # Mixing over the normalized time dt / mixing_time
+        ds = self.dt[self.iteration] / self.mixing_time
+        f_new, ages_new = emst_pope.emst_mix(f, fscale, w, ages, ds, self.emst_rng)
+
+        # Write back particle states
+        for k, p in enumerate(active_particles):
+
+            p.Y = f_new[k, :self.nb_species]
+            p.hs = f_new[k, self.nb_species]
+            p.Yc_u = f_new[k, self.nb_species + 1]
+            p.emst_age = ages_new[k]
+
+            p.state[0] = p.hs
+            p.state[2:] = p.Y
+
+            p.update_ThermoStates(self)
+
+            # Mixing changes the equilibrium progress variable
+            p.recompute_Yc_eq = True
+
+
 # =============================================================================
 #   MISC
 # =============================================================================
@@ -943,25 +897,95 @@ class ParticlesCloud(object):
     def _update_vars(self):
 
         # We parallelize as the progress variable computation is expensive (indeed, it relies on an "equil" computation)
+        chunk = self._particle_chunk()
 
-        # We divide the list of particles into chunks to be treated by each processor
-        lists_particles = np.array_split(np.array(self.particles_list), self.size)
-
-        # We scatter the chunks on each processors. Remark: rank=root also takes a chunk.
-        lists_particles = self.comm.scatter(lists_particles, root=0)
-
-        # We perform variable updates of particles
-        for part in lists_particles:
+        # We perform variable updates of particles of the chunk of this processor
+        for i in chunk:
+            part = self.particles_list[i]
             part.compute_equiv_ratio()
             part.compute_progress_variable(self)
             part.compute_mixture_fraction()
             part.compute_heat_release_rate(self)
 
-        # Allgather regroups the chunks and give the whole list to all the processors (<=> gather + broadcast)
-        result = self.comm.allgather(lists_particles)
+        # States of all chunks given to all the processors
+        self._gather_states(chunk)
 
-        # As we have a list of lists of particles we need to concatenate
-        self.particles_list = list(itertools.chain.from_iterable(result))
+# =============================================================================
+#   MPI EXCHANGES OF PARTICLE STATES
+# =============================================================================
+
+    def _particle_chunk(self, rank=None):
+        """Indices of the particles treated by processor rank (this processor by default), dealt in turn
+        (round-robin): rank, rank + size, rank + 2 size, ... Particles of an inlet (e.g. hot particles, the only
+        ones that react at first) are then spread over all processors."""
+
+        rank = self.rank if rank is None else rank
+
+        return np.arange(rank, self.nb_parts_tot, self.size)
+
+    def _pack_states(self, particles):
+        """Array (n, n_values) of the attributes of the particles changed during the simulation
+        (EXCHANGED_SCALARS, then EXCHANGED_ARRAYS)."""
+
+        return np.array([np.concatenate([[float(getattr(part, name)) for name in EXCHANGED_SCALARS]]
+                                        + [getattr(part, name) for name in EXCHANGED_ARRAYS])
+                         for part in particles])
+
+    def _unpack_states(self, particles, states):
+        """Set the attributes of the particles from the array states (see _pack_states)."""
+
+        for part, values in zip(particles, states):
+            for k, name in enumerate(EXCHANGED_SCALARS):
+                setattr(part, name, values[k])
+            part.recompute_Yc_eq = bool(part.recompute_Yc_eq)
+
+            start = len(EXCHANGED_SCALARS)
+            for name in EXCHANGED_ARRAYS:
+                n = len(getattr(part, name))
+                setattr(part, name, values[start:start + n].copy())
+                start += n
+
+    def _share_states_of_root(self):
+        """States of the particles of processor 0 (e.g. after mixing) given to all the processors."""
+
+        if self.size == 1:
+            return
+
+        # Number of exchanged values per particle, the same for all particles and processors
+        part = self.particles_list[0]
+        n_values = len(EXCHANGED_SCALARS) + sum(len(getattr(part, name)) for name in EXCHANGED_ARRAYS)
+
+        if self.rank == 0:
+            states = self._pack_states(self.particles_list)
+        else:
+            states = np.empty((self.nb_parts_tot, n_values))
+        self.comm.Bcast(states, root=0)
+
+        if self.rank != 0:
+            self._unpack_states(self.particles_list, states)
+
+    def _gather_states(self, chunk):
+        """States of the particles of the chunk of each processor given to all the processors."""
+
+        if self.size == 1:
+            return
+
+        # Array of all the states, filled by the chunks of all processors one after the other
+        # (no pickling: array of floats)
+        local = self._pack_states([self.particles_list[i] for i in chunk])
+        n_values = local.shape[1]
+        chunks = [self._particle_chunk(rank) for rank in range(self.size)]
+        counts = np.array([len(c) for c in chunks]) * n_values
+        displacements = np.concatenate([[0], np.cumsum(counts)[:-1]])
+        states = np.empty((self.nb_parts_tot, n_values))
+        self.comm.Allgatherv(local, [states, counts, displacements, MPI.DOUBLE])
+
+        # Rows of states in the order of the particles, then particles of the other processors
+        particle_of_row = np.concatenate(chunks)
+        others = np.setdiff1d(np.arange(self.nb_parts_tot), chunk)
+        row_of_particle = np.empty(self.nb_parts_tot, dtype=int)
+        row_of_particle[particle_of_row] = np.arange(self.nb_parts_tot)
+        self._unpack_states([self.particles_list[i] for i in others], states[row_of_particle[others]])
 
 # =============================================================================
 #   MEAN TRAJECTORIES
@@ -1036,6 +1060,7 @@ class ParticlesCloud(object):
             arr[i,part.nb_state_vars+6] = part.num_inlet
             arr[i,part.nb_state_vars+7:part.nb_state_vars+11] = np.dot(self.A_atomic, part.Y)   # Elements mass fractions (C, H, O, N)
             arr[i,part.nb_state_vars+11] = part.mass
+            arr[i,part.nb_state_vars+12] = part.emst_age   # Age property of EMST_POPE (NaN for other mixing models)
 
         # Store initial solution in h5 file
         f = h5py.File(f"{self.results_folder}/{self.solution_file}","a")

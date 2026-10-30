@@ -88,6 +88,10 @@ class Particle(object):
         #
         self.Yc_u = Yc_u_ini
         self.recompute_Yc_eq = True  # We initially need to compute Yc_eq
+
+        # Age property of the EMST_POPE mixing model [-] (see emst_pope.py): remaining time of the mixing
+        # (> 0) or non-mixing (< 0) state, in units of mixing_time. Set by ParticlesCloud, NaN for other models.
+        self.emst_age = np.nan
         self.compute_progress_variable(parent)
         #
         self.compute_heat_release_rate(parent)

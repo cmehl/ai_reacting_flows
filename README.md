@@ -11,6 +11,8 @@ This package features the following functionalities:
 
 + A module to generate machine learning models to advance the chemical state of a mixture
 
+The models and algorithms (mixing model, element conservation, error metrics) are detailed in [docs/theory.md](docs/theory.md).
+
 
 # Package installation
 
@@ -55,11 +57,15 @@ python ann_model_testing.py                # 4. testing on simple cases  (nn_tes
 
 ## 1. Database generation
 
-+ **Stochastic reactors**: 0-D stochastic particles following [Wan *et al.*](https://www.sciencedirect.com/science/article/pii/S0010218020302170). Each particle is a chemical state; particles mix (CURL, CURL_MODIFIED, CURL_MODIFIED_DD (work in progress) or EMST models) to mimic diffusion.
++ **Stochastic reactors**: 0-D stochastic particles following [Wan *et al.*](https://www.sciencedirect.com/science/article/pii/S0010218020302170). Each particle is a chemical state; particles mix (CURL, CURL_MODIFIED, CURL_MODIFIED_DD (work in progress), EMST_SIMPLIFIED or EMST_POPE models, see [theory](docs/theory.md#emst-mixing-model-emst_pope)) to mimic diffusion.
 + **Canonical flames**: 0-D reactors, 1-D premixed and 1-D diffusion flames, launched with `generate_0D_dtb.py` and `dtb_params_flmts.yaml`.
 + **Multiple time steps** (optional): `generate_multi_dt.py` re-integrates the database states with several $dt$, so that $dt$ becomes a network input.
 
 **Warning:** an existing `STOCH_DTB_<suffix>` folder is deleted when relaunching generation.
+
+With MPI, the chemistry and the derived variables (progress variable, which needs an equilibrium, mixture fraction, equivalence ratio, HRR) are computed by each rank on its share of the particles, dealt in turn (round-robin: rank $r$ of $N$ takes particles $r$, $r+N$, $r+2N$, ...), so that the particles of an inlet (e.g. the hot ones, the only ones reacting at first) are spread over all ranks; mixing and writing are done by rank 0. Each rank keeps its own copy of the particles, and only the attributes that change are exchanged, as arrays of floats (`Allgatherv` after each distributed step, `Bcast` after mixing).
+
+**Warning:** a particle attribute that starts changing during the simulation (e.g. in a new mixing model) must be added to `EXCHANGED_SCALARS` or `EXCHANGED_ARRAYS` at the top of `particles_cloud.py`. Otherwise the other ranks keep its old value, without any error (test 19, 1 against 2 ranks, only detects it if the attribute changes what is written in `solutions.h5`). Attributes used only by rank 0 (e.g. `Le_k` of `CURL_MODIFIED_DD`, used in mixing) need not be exchanged.
 
 Generated files:
 
@@ -76,12 +82,14 @@ STOCH_DTB_<suffix>/                 (FLAMELETS_DTB_<suffix>/ for canonical flame
 
 In `solutions.h5`, each group `ITERATION_<n>` contains:
 
-+ `all_states`: state of all active particles: `Temperature` [K], `Pressure` [Pa], species mass fractions $Y_k$, `Mix_frac`, `Equiv_ratio`, `Prog_var`, `HRR` [W/m³], `Time` [s], `Particle_number`, `Inlet_number`, atomic mass fractions `Y_C`, `Y_H`, `Y_O`, `Y_N`, `Mass`.
++ `all_states`: state of all active particles: `Temperature` [K], `Pressure` [Pa], species mass fractions $Y_k$, `Mix_frac`, `Equiv_ratio`, `Prog_var`, `HRR` [W/m³], `Time` [s], `Particle_number`, `Inlet_number`, atomic mass fractions `Y_C`, `Y_H`, `Y_O`, `Y_N`, `Mass`, `EMST_age` (age property of `EMST_POPE`, NaN for other mixing models).
 + `X` and `Y` (if `build_ml_dtb: true`): states before and after the chemistry step $dt$ (`Temperature`, `Pressure`, $Y_k$, `Prog_var`, `HRR`). These are the ML input/output pairs.
 
 Column names are stored in the `cols` attribute of each dataset. For canonical flames, the file has a single group `ITERATION_00000` with `X` and `Y`, and the simulated cases are listed in `sim_train_*.csv` / `sim_test_*.csv`. The multi-dt file has one group per MPI rank with `X`, `Y` (one set of outputs per $dt$) and `DT` (the $dt$ values [s]).
 
 Post-processing of a stochastic database is shown in `post_processing_stoch_reac.py`.
+
+The `EMST_POPE` mixing model (Subramaniam & Pope, with an age property of the particles, written as `EMST_age`) is described in [theory: EMST mixing model](docs/theory.md#emst-mixing-model-emst_pope).
 
 ## 2. Learning database
 
@@ -191,73 +199,13 @@ TESTING_<models_folder>/
 
 Errors: 0-D cases give the simulation error $\mathcal{E}_i$ (`E_sim`), the error on the final temperature [%], and for ignition the ignition delays (time at which $T$ exceeds $T_0 + 200$ K) and their error [%]; 1-D flames give an a priori simulation error $\mathcal{E}_i$ (`E_sim`) and the L2 error of the reaction rates of `spec_to_plot`. All cases also give the numbers of ANN and CVODE calls, and the speed-up `speedup` = `time_cvode` / `time_ann`, ratio of the CPU times [s] of the chemistry steps (CVODE integration; ANN clustering, network and CVODE fallback of the hybrid mode; the progress variable computation, which needs an equilibrium, and the diagnostics are not counted). As in a CFD code, CVODE is restarted from a new reactor at each time step (also in 0-D). The ANN advances one state per call, without batching, after an untimed warm-up call (initialization of the networks and k-means), so this speed-up is a lower bound of what a CFD code with batched calls would get: see the benchmark below. 0-D cases also give the drifts after equilibrium: the ANN alone is continued for `stability_factor` times the number of steps, and `T_drift` [K] (from the ANN temperature at the end of the simulation) and `sumYk_drift` (from 1) are the maximum deviations over these steps. A network that does not stay at equilibrium would make burnt gases drift in a CFD code.
 
-The simulation error of a 0-D case $i$ run with time step $dt$ is the normalized error of Mehl & Aubagnac (variable time step ANN, eq. 6), following Chen et al. (Energy & Fuels 37, 2023):
+`E_sim` is the normalized simulation error of Mehl & Aubagnac (eq. 6), per case, per `dt`, per variable and per cluster ([theory: simulation error](docs/theory.md#simulation-error)). Its tables and plots are listed above. Each 0-D simulation stops when the CVODE temperature is within `T_eq_tolerance` of the equilibrium (HP) temperature of the initial mixture, and the ANN is run for the same number of steps; `max_simulation_time` only caps the simulations that do not reach equilibrium (`equilibrium_reached: false`). 1-D errors are a priori (one step $dt$ from each grid point in `x_window`).
 
-$$\mathcal{E}_i(dt) = \frac{1}{N_i} \sum_{j=1}^{N_i} \frac{1}{N_S + 1} \left( \sum_{k=1}^{N_S} \frac{|f(Y_{k,j}^{NN}) - f(Y_{k,j}^{ref})|}{\sigma_k} + \frac{|T_j^{NN} - T_j^{ref}|}{\sigma_T} \right)$$
-
-with $f$ the transform of the network inputs (log or Box-Cox), $N_S$ the number of species of the network (N2 excluded without N chemistry), $\sigma$ the standard deviations of the training inputs over all clusters, and $N_i$ the number of time steps of the simulation. Each 0-D simulation stops when the CVODE temperature is within `T_eq_tolerance` of the equilibrium (HP) temperature of the initial mixture, and the ANN is run for the same number of steps; `max_simulation_time` only caps the simulations that do not reach equilibrium (`equilibrium_reached: false`). $\mathcal{E}(dt)$, the mean of $\mathcal{E}_i$ over the simulations run with $dt$, is written in `simulation_errors_<case type>_by_dt.csv` and plotted in `simulation_errors_<case type>_by_dt.png` (mean with standard deviation bars, and box plot of $\mathcal{E}_i$ per $dt$). The contribution of each variable, $E_T$ (`E_T`) and $E_k$ (`E_<species>`), is the term of $\mathcal{E}_i$ of this variable averaged over the steps; $\mathcal{E}_i$ is their mean. It shows which species drive the error (`simulation_errors_<case type>_by_variable.png`). For 1-D flames, $\mathcal{E}_i$ is a priori: each grid point of the converged flame (in `x_window`) is advanced by one step $dt$ with CVODE and with the ANN, and the sum over $j$ runs over these points instead of the time steps. It measures the error of one step, not its accumulation, so it is smaller than the 0-D error for the same network; it also decreases when the domain contains more points in fresh or burnt gases, hence `x_window`. `simulation_errors_<case type>_by_cluster.csv` gives, for each `dt` and cluster, the number of steps (0-D) or grid points (1-D) advanced by the network of the cluster, the mean and standard deviation of their error (mean over the variables of the normalized differences) and the mean of each variable. Cluster -1 gathers the steps done by CVODE in hybrid mode and the 1-D points below `T_threshold`. In 0-D the error of a step includes the error accumulated over the previous steps, possibly in other clusters; the 1-D errors (one step from the converged flame) are attributed to their cluster exactly.
-
-The speed-up benchmark (`speedup_benchmark`) draws states from the validation sets of `training_data.h5` and times `NNInference.advance` on batches of `batch_sizes` states (minimum over 3 calls, clustering not included as the clusters of the validation states are known) against CVODE with a new reactor for each state, as at each time step of a CFD code (time per state measured on `nb_states_cvode` states). `speedup_benchmark.csv` gives, for each batch size, the ANN time [s], the ANN and CVODE times per state [s] and the speed-up.
+`speedup_benchmark.csv` gives, for each batch size, the ANN time [s], the ANN and CVODE times per state [s] and the speed-up ([theory: speed-up benchmark](docs/theory.md#speed-up-benchmark)).
 
 Single cases can also be run from Python (`test_0D_ignition`, `test_0D_pyrolysis`, `test_1D_premixed`, `test_1D_diffusion`), as in `notebooks/ann_model_testing.py`.
 
-`NNTesting` (`NN_testing.py`) runs the reference and ANN cases; the error metrics are in `NN_testing_metrics.py` and the plots in `NN_testing_plots.py`. The ANN chemistry step itself (clustering, transforms, networks) is in `NN_inference.py` (`NNInference`), shared with the stochastic reactors. The new temperature follows from enthalpy conservation, with the species enthalpies and heat capacities computed from the NASA polynomials of the mechanism, vectorized over the states (`utilities.species_h_cp`).
-
-### Element conservation of the ANN mass fractions (`yk_renormalization`)
-
-The networks do not conserve the elements exactly: the predicted mass fractions $Y_k^*$ at $t+dt$ are corrected (`NNInference.advance`, before the temperature update, which then uses the corrected $Y_k$). The sum $\sum_k Y_k^*$ before correction is kept for the mass check of the hybrid mode. Species not predicted by the network (N2 without N chemistry) have $Y_k^* = Y_k^t$.
-
-Notations, for the elements $A \in \{C, H, O, N\}$ and the species $k$ of the mechanism:
-
-- $n_{A,k}$ number of atoms of $A$ in species $k$, $W_A$ and $W_k$ molar masses [kg/kmol], $a_{A,k} = n_{A,k} W_A / W_k$;
-- $c_{A,k} = 1$ if species $k$ contains $A$ ($n_{A,k} > 0$), else 0;
-- element mass fractions $Y_A = \sum_k a_{A,k} Y_k$, of the state at $t$: $Y_A^t$, of the prediction: $Y_A^*$;
-- imbalance of the prediction $\delta_A = Y_A^* - Y_A^t$.
-
-All corrections give $Y_A = Y_A^t$ for the 4 elements, hence $\sum_k Y_k = \sum_A Y_A$ is also conserved (species made of C, H, O, N only).
-
-**`0`**: no correction.
-
-**`1`** (`enforce_elements_balance`): one species $s_A$ per element carries the whole imbalance,
-
-$$Y_{s_A} \leftarrow Y_{s_A} - \frac{\delta_A}{a_{A,s_A}}$$
-
-1. C with CO2 (only for states containing C), H with H2, N with N2: these species contain only one of C, H, N, so the three corrections are independent ($\delta_A$ of the prediction);
-2. $Y_O$ is recomputed (CO2 changed it) and O is corrected with O2.
-
-Exact and cheapest, but a minor carrier species takes the whole imbalance: with 1 % random errors on burnt H2/air gases at 1500 K, H2 ($Y_{H_2} \sim 10^{-7}$) becomes negative in about half of the lean states, O2 in about half of the rich ones.
-
-**`2`** (`enforce_elements_balance_wan`): Wan *et al.*, Combust. Flame 220 (2020), Eqs. (7)-(8). The imbalance of $A$ is distributed on all the species containing $A$, in proportion to their mass fractions:
-
-$$Y_k \leftarrow Y_k - \frac{Y_k}{Y_A}\, \delta_A = Y_k \frac{Y_A^t}{Y_A} \quad \text{for } c_{A,k} = 1$$
-
-i.e. a common rescaling of the species containing $A$ ($Y$ and $Y_A$ of the current corrected state).
-
-1. For C, H, N in turn, rescale the species containing the element by $Y_A^t / Y_A$ (factor 1 if $Y_A = 0$);
-2. species containing several of C, H, N (NH3, CH4, ...) couple these corrections: step 1 is repeated until $|Y_A - Y_A^t| \le 10^{-12}\, Y_A^t$ for C, H, N (at most 50 passes; 2 are enough in practice, the coupling is of second order);
-3. O is corrected with O2 only, as in the paper ($Y_{O_2} \leftarrow Y_{O_2} - \delta_O / a_{O,O_2}$).
-
-C, H and N corrections are multiplications by positive factors (positivity kept), but the O correction has the drawback of `1` in rich mixtures, where O2 vanishes.
-
-**`3`** (`enforce_elements_balance_wan_all`): extension of `2` to O. Each species is corrected in proportion to its mass fraction, with one multiplier $\mu_B$ per element it contains:
-
-$$Y_k \leftarrow Y_k \Big(1 + \sum_B \mu_B\, c_{B,k}\Big)$$
-
-The element mass fractions are linear in $Y$, so the conservation of the 4 elements gives a linear system for the 4 multipliers ($Y^*$ in $M$):
-
-$$\sum_B M_{AB}\, \mu_B = -\delta_A, \qquad M_{AB} = \sum_k a_{A,k}\, Y_k^*\, c_{B,k}$$
-
-1. build $M$ (4 x 4) and $\delta$ for each state;
-2. elements absent from a state or from the mechanism ($M_{AA} = Y_A^* = 0$, e.g. C in H2/air): $\mu_A = 0$ (row and column of $M$ replaced by the identity, $\delta_A = 0$);
-3. solve the systems of all states at once (`np.linalg.solve`), then apply the correction.
-
-Exact in one step, without iterations. For a single element, $\mu_A = -\delta_A / Y_A^*$: Eq. (8) of Wan *et al.* Positivity holds if $1 + \sum_B \mu_B c_{B,k} > 0$, which is not guaranteed by the system but holds by far for small prediction errors: with 1 % random errors on burnt H2/air gases (lean to rich, 1000 to 1500 K), the factors stay within 0.95 to 1.05, also in rich mixtures where `2` makes O2 negative in about half of the states.
-
-| Flag | Species carrying the correction | Exact | Positivity | Cost (NH3 mechanism, $10^5$ states, 1 % errors) |
-|------|------|------|------|------|
-| `1` | CO2, H2, N2, O2 | yes | no (minor carriers) | 0.5 µs/state |
-| `2` | all species with C, H, N (rescaling); O2 for O | yes (iterated) | C, H, N yes; O2 no in rich mixtures | 2.5 µs/state |
-| `3` | all species, for the 4 elements | yes (one solve) | in practice | 1.8 µs/state |
+`NNTesting` (`NN_testing.py`) runs the reference and ANN cases; the error metrics are in `NN_testing_metrics.py` and the plots in `NN_testing_plots.py`. The ANN chemistry step itself (clustering, transforms, networks) is in `NN_inference.py` (`NNInference`), shared with the stochastic reactors. The new temperature follows from enthalpy conservation ([theory: temperature update](docs/theory.md#temperature-update-of-the-ann-chemistry-step)), and the predicted mass fractions are corrected to conserve the elements (`yk_renormalization`, [theory: element conservation](docs/theory.md#element-conservation-of-the-ann-mass-fractions-yk_renormalization)).
 
 The stochastic reactors can also be run with the ANN instead of CVODE for the chemistry (`ML_inference_flag: true` in `dtb_params.yaml`), to test the networks in mixing conditions. The model is read from `MODELS/<ML_model_folder>` in the case folder; use another `results_folder_suffix` than the database used for training, as the results folder is overwritten.
 
@@ -277,8 +225,8 @@ Examples of all files can be found in `scripts/<CASE>/`. Units are SI.
 | `time_step` | Constant $dt$ [s], or dict `{t_start: dt}` to change $dt$ over time (first key must be 0). Write `1.0e-5`, not `1e-5` (read as a string by YAML) |
 | `time_max` | End time [s] |
 | `automatic_termination` | Stop when temperature variance is low (optional, default `true`) |
-| `mixing_model` | `CURL`, `CURL_MODIFIED`, `CURL_MODIFIED_DD` (work in progress) or `EMST` |
-| `mixing_time` | Mixing time scale [s] |
+| `mixing_model` | `CURL`, `CURL_MODIFIED`, `CURL_MODIFIED_DD` (work in progress), `EMST_SIMPLIFIED` (minimum spanning tree on $Y_k$, each edge mixed in turn with the coefficient $\min(dt/\tau, 0.5)$) or `EMST_POPE` (model of Subramaniam & Pope, see [theory](docs/theory.md#emst-mixing-model-emst_pope)) |
+| `mixing_time` | Mixing time scale $\tau$ [s] (for `EMST_POPE`, the variance function decays as $\exp(-t/\tau)$) |
 | `read_mixing` | If `true`, read mixing pairs from `pairs_list.pkl` in the case folder |
 | `T_threshold` | Chemistry is not computed below this temperature [K] |
 | `pv_species` | Species defining the progress variable $c = (Y_c - Y_{c,u})/(Y_{c,eq} - Y_{c,u})$, with $Y_c$ the sum of their mass fractions, $u$ the unburnt mixture and $eq$ the equilibrium (e.g. `[H2O]`) |
@@ -374,7 +322,7 @@ For `DeepONet`, these three keys are dicts with `branch` and `trunk` entries (pl
 |-----|-------------|
 | `models_folder` | Model folder in `MODELS/` (e.g. `MODEL_H2_POF_2023`) |
 | `spec_to_plot` | Species plotted, and on which 1-D errors are computed |
-| `yk_renormalization` | Correction of the ANN mass fractions to conserve the elements: `0` none, `1` one species per element, `2` Wan *et al.* (2020), `3` Wan *et al.* extended to O (see [Element conservation](#element-conservation-of-the-ann-mass-fractions-yk_renormalization)) |
+| `yk_renormalization` | Correction of the ANN mass fractions to conserve the elements: `0` none, `1` one species per element, `2` Wan *et al.* (2020), `3` Wan *et al.* extended to O (see [theory](docs/theory.md#element-conservation-of-the-ann-mass-fractions-yk_renormalization)) |
 | `hybrid_ann_cvode` | If `true`, CVODE is used when the ANN mass fractions sum differs from 1 by more than `hybrid_ann_cvode_tol` |
 | `hybrid_ann_cvode_tol` | Tolerance on the sum of mass fractions [-] |
 | `device` | Optional, device of the networks: `cpu` (as in a first CFD use) or `cuda`; absent or `null`: `cuda` if available, else `cpu` |

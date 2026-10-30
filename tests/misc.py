@@ -28,7 +28,7 @@ def extract_h2_dtb_histograms(dtb_file, histo_folder, tol):
     df = pd.concat(list_df, ignore_index=True)
     
     varlist = col_names.tolist()
-    varlist = [var for var in varlist if var not in ["Prog_var","N2","Pressure","Time","mass","Y_C","Y_H","Y_O","Y_N","Inlet_number","Particle_number","Mix_frac", "Equiv_ratio", "Mass"]]
+    varlist = [var for var in varlist if var not in ["Prog_var","N2","Pressure","Time","mass","Y_C","Y_H","Y_O","Y_N","Inlet_number","Particle_number","Mix_frac", "Equiv_ratio", "Mass", "EMST_age"]]
     distances = []
     for var in varlist:
         # references histogram generated using the following code (to use again if reference is to change)
