@@ -17,6 +17,7 @@ its edges makes the variance function VF (trace of the covariance of g) decay as
 import numpy as np
 import scipy.sparse as sparse
 from scipy.sparse.linalg import splu
+from scipy.spatial.distance import pdist, squareform
 
 # Durations of the non-mixing (Z0) and mixing (Z1) states [-], uniform in [lower, upper] (emst.f)
 Z0_LOWER, Z0_UPPER = 0.1666, 0.1667
@@ -90,20 +91,24 @@ def tree_edges(x):
     in_tree = np.zeros(n, dtype=bool)
     in_tree[0] = True
 
-    # Squared distance of each point to the tree, and its nearest point in the tree
-    dist2 = np.sum((x - x[0])**2, axis=1)
+    # Squared distances between all points (n, n), computed once
+    D2 = squareform(pdist(x, "sqeuclidean"))
+
+    # Squared distance of each point to the tree (infinite once in the tree), and its nearest point in the tree
+    dist2 = D2[0].copy()
+    dist2[0] = np.inf
     nearest = np.zeros(n, dtype=int)
 
     edges = np.empty((n - 1, 2), dtype=int)
     for i_edge in range(n - 1):
-        k = np.argmin(np.where(in_tree, np.inf, dist2))
+        k = np.argmin(dist2)
         edges[i_edge] = nearest[k], k
         in_tree[k] = True
+        dist2[k] = np.inf
 
         # Points closer to k than to the rest of the tree
-        dist2_k = np.sum((x - x[k])**2, axis=1)
-        closer = ~in_tree & (dist2_k < dist2)
-        dist2[closer] = dist2_k[closer]
+        closer = ~in_tree & (D2[k] < dist2)
+        dist2[closer] = D2[k][closer]
         nearest[closer] = k
 
     return edges
@@ -123,21 +128,26 @@ def edge_coefficients(edges, w):
     return 2.0 * np.minimum(W, 1.0 - W)
 
 
-def implicit_mixing(phi, w, edges, B, eta):
-    """Compositions (n, nc) after mixing along the tree, by an implicit Euler step (implct) of
-        w_i dphi_i/ds = -alpha sum_edges(i, j) B (phi_i - phi_j),     eta = alpha ds:
-    (diag(w) + eta L) phi_new = diag(w) phi, with L the Laplacian of the tree weighted by B."""
+def tree_laplacian(edges, B, n):
+    """Laplacian (n, n) of the tree weighted by the edge coefficients B (sparse, csc):
+    L_ii = sum of B of the edges of i, L_ij = -B of the edge (i, j)."""
 
-    n = len(w)
     i, j = edges[:, 0], edges[:, 1]
-
-    # Weighted Laplacian of the tree
     rows = np.concatenate([i, j, i, j])
     cols = np.concatenate([i, j, j, i])
     vals = np.concatenate([B, B, -B, -B])
-    L = sparse.csc_matrix((vals, (rows, cols)), shape=(n, n))
 
-    A = sparse.diags(w, format="csc") + eta * L
+    return sparse.csc_matrix((vals, (rows, cols)), shape=(n, n))
+
+
+def implicit_mixing(phi, w, L, eta):
+    """Compositions (n, nc) after mixing along the tree, by an implicit Euler step (implct) of
+        w_i dphi_i/ds = -alpha sum_edges(i, j) B (phi_i - phi_j),     eta = alpha ds:
+    (diag(w) + eta L) phi_new = diag(w) phi, with L the Laplacian of the tree (tree_laplacian)."""
+
+    # diag(w) + eta L, with the sparsity of L (its diagonal is filled: every node has an edge)
+    A = eta * L
+    A.setdiag(A.diagonal() + w)
 
     return splu(A).solve(w[:, None] * phi)
 
@@ -202,10 +212,11 @@ def emst_step(g, w, ages, ds, rng):
     mean = w @ g
     phi = g - mean
 
-    # Tree of the mixing particles, and its edge coefficients
+    # Tree of the mixing particles, its edge coefficients and its Laplacian (the same for all values of eta)
     idx = np.where(_tree_particles(phi, w, ages, rng))[0]
     edges = tree_edges(phi[idx])
     B = edge_coefficients(edges, w[idx])
+    L = tree_laplacian(edges, B, len(idx))
 
     # Mixing time of the step: at most the shortest duration of the mixing state
     ds_step = min(ds, Z1_LOWER)
@@ -216,7 +227,7 @@ def emst_step(g, w, ages, ds, rng):
     # Mixing of the tree particles with eta, the others unchanged; variance function in excess of the target
     def mix(eta):
         phi_new = phi.copy()
-        phi_new[idx] = implicit_mixing(phi[idx], w[idx], edges, B, eta)
+        phi_new[idx] = implicit_mixing(phi[idx], w[idx], L, eta)
         return phi_new, variance_function(phi_new, w) - vf_target
 
     # Estimate of eta from the initial decay rate of the variance function (rtest):
