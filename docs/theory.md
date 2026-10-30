@@ -106,6 +106,12 @@ As $\sum_k Y_k = \sum_A Y_A$, conserving every element conserves the sum of mass
 
 In the paper (H2 ignition in 2-D turbulence), both criteria correlate with the error of the ANN and give the same behaviour, with different thresholds: $\epsilon \approx 2 \times 10^{-4}$ for $e_\Sigma$ and $20 \times 10^{-4}$ for $e_e$, which call CVODE during the ignition only. The paper retains $e_\Sigma$, slightly simpler. The ratio $\alpha$ of CVODE calls reduces the speed-up $A$ of the ANN as $A'/A = 1/(\alpha A + 1)$: the hybrid model is interesting when large ANN errors are localized in space or time. The threshold can be chosen a priori from the errors on the validation states.
 
+**A priori check** (`NNTesting.hybrid_criteria_on_validation_set`, run with `validation_set`, as Fig. 12 of the paper). Each validation state of `training_data.h5` is advanced by one ANN step (with the element correction `yk_renormalization`, as in a simulation) and compared to its target in the database. The error of the step is the mean over the variables of the normalized differences, as the simulation error:
+
+$$E = \frac{1}{N_S + 1} \left( \sum_{k=1}^{N_S} \frac{|f(Y_k^{NN}) - f(Y_k^{ref})|}{\sigma_k} + \frac{|T^{NN} - T^{ref}|}{\sigma_T} \right)$$
+
+with $f$ the transform of the network inputs and $\sigma$ the standard deviations of the training inputs. The database targets contain only the species: $T^{ref}$ and $T^{NN}$ at $t+dt$ both follow from the enthalpy conservation from the state at $t$ (`NNInference.temperature_after`). $e_\Sigma$ and $e_e$ of the prediction (before element correction) are plotted against $E$ in `plots_validation/hybrid_e_sum.png` and `hybrid_e_elements.png`, colored by the temperature at $t$. The plot of the selected criterion shows `hybrid_ann_cvode_tol` and the fraction of states above it, i.e. the fraction $\alpha$ of CVODE calls expected on states like those of the database. A criterion is useful if large $E$ go with large proxies.
+
 # Simulation error
 
 The simulation error of a 0-D case $i$ run with time step $dt$ is the normalized error of Mehl & Aubagnac (variable time step ANN, eq. 6), following Chen et al. (Energy & Fuels 37, 2023):

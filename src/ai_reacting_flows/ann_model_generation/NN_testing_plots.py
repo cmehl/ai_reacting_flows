@@ -156,6 +156,35 @@ def plot_validation_errors(diff, i_cluster, folder, max_points_scatter=50000):
     plt.close(fig)
 
 
+def plot_hybrid_criterion(E, proxy, T, tol, proxy_label, file_name, folder, max_points_scatter=50000):
+    """Scatter plot of a conservation error proxy of the hybrid ANN/CVODE model against the error E of the
+    ANN step (as Fig. 12 of Mehl & Aubagnac-Karkar 2023), colored by the temperature T [K] at t.
+
+    tol: threshold of the proxy (dashed line, with the fraction of states above it, which the hybrid model
+    would compute with CVODE), None for no line. Points are randomly subsampled to max_points_scatter.
+    """
+
+    # Subsample if needed
+    idx = np.arange(len(E))
+    if len(E) > max_points_scatter:
+        idx = np.random.default_rng(0).choice(len(E), size=max_points_scatter, replace=False)
+
+    fig, ax = plt.subplots()
+    sc = ax.scatter(E[idx], proxy[idx], c=T[idx], s=2, cmap="plasma")
+    fig.colorbar(sc, ax=ax, label="T [K]")
+
+    if tol is not None:
+        ax.axhline(tol, color="r", linestyle="--")
+        ax.text(0.98, 0.98, f"tol = {tol:.1e}: {100.0 * np.mean(proxy > tol):.1f} % of states with CVODE",
+                transform=ax.transAxes, ha="right", va="top", color="r")
+
+    ax.set_xlabel(r"Mean normalized error of the step $E$ [-]")
+    ax.set_ylabel(proxy_label)
+    fig.tight_layout()
+    fig.savefig(os.path.join(folder, file_name), dpi=200)
+    plt.close(fig)
+
+
 def plot_simulation_errors_by_dt(table, by_dt, case_type, folder):
     """Simulation error E_sim [-] of a series (0D or 1D) versus the time step dt [s], in
     folder/simulation_errors_<case_type>_by_dt.png.

@@ -326,13 +326,21 @@ class NNInference():
             # Same, O also distributed on its species (not only O2: rich mixtures, where O2 vanishes)
             Y_new = self.enforce_elements_balance_wan_all(Y, Y_new)
 
-        # Deducing T from energy conservation: sum_k h_k Y_k constant, with cp [J/kg/K] and h_k [J/kg] at t
-        # (NASA polynomials, vectorized: a Cantera SolutionArray loops over the states)
-        h_k, cp_k = utils.species_h_cp(T, self.gas.molecular_weights, *self.nasa7)
-        cp = np.sum(cp_k * Y, axis=1)
-        T_new = T - np.sum(h_k * (Y_new - Y), axis=1) / cp
+        # Deducing T from energy conservation
+        T_new = self.temperature_after(T, Y, Y_new)
 
         return T_new, Y_new, sum_Yk, elements_error
+
+
+    def temperature_after(self, T, Y_old, Y_new):
+        """Temperature [K] (n) after a chemistry step from T [K], Y_old to Y_new [-] (n, n_species), from the
+        conservation of enthalpy at constant pressure: sum_k h_k Y_k constant, with cp [J/kg/K] and h_k [J/kg]
+        at T (NASA polynomials, vectorized: a Cantera SolutionArray loops over the states)."""
+
+        h_k, cp_k = utils.species_h_cp(T, self.gas.molecular_weights, *self.nasa7)
+        cp = np.sum(cp_k * Y_old, axis=1)
+
+        return T - np.sum(h_k * (Y_new - Y_old), axis=1) / cp
 
 
     def elements_error(self, Y_old, Y_new):
