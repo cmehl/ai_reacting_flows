@@ -31,22 +31,19 @@ $$w_i \frac{d\phi_i}{ds} = -\alpha \sum_{\nu \ni i} B_\nu (\phi_i - \phi_{j_\nu}
 
 When the range of the scaled compositions is below $4 \times 10^{-4}$ (or the largest variance below $10^{-12}$), the IEM model is used instead ($g \leftarrow g - (1 - e^{-\Delta s/2})(g - \langle g \rangle)$). Steps smaller than $10^{-6}$ are done by mixing over $2 \times 10^{-6}$, accepted with a probability.
 
-# Temperature update of the ANN chemistry step
-
-The new temperature follows from enthalpy conservation, with the species enthalpies and heat capacities computed from the NASA polynomials of the mechanism, vectorized over the states (`utilities.species_h_cp`).
 
 # Element conservation of the ANN mass fractions (`yk_renormalization`)
 
-The networks do not conserve the elements exactly: the predicted mass fractions $Y_k^*$ at $t+dt$ are corrected (`NNInference.advance`, before the temperature update, which then uses the corrected $Y_k$). The sum $\sum_k Y_k^*$ before correction is kept for the mass check of the hybrid mode. Species not predicted by the network (N2 without N chemistry) have $Y_k^* = Y_k^t$.
+The networks do not conserve the elements exactly: the predicted mass fractions $Y_k^*$ at $t+dt$ are corrected (`NNInference.advance`, before the temperature update, which then uses the corrected $Y_k$). The sum $\sum_k Y_k^*$ before correction is kept for the mass check of the hybrid mode. Species not predicted by the network (N2 without N chemistry) have $Y_k^* = Y_k(t)$.
 
 Notations, for the elements $A \in \{C, H, O, N\}$ and the species $k$ of the mechanism:
 
 - $n_{A,k}$ number of atoms of $A$ in species $k$, $W_A$ and $W_k$ molar masses [kg/kmol], $a_{A,k} = n_{A,k} W_A / W_k$;
 - $c_{A,k} = 1$ if species $k$ contains $A$ ($n_{A,k} > 0$), else 0;
-- element mass fractions $Y_A = \sum_k a_{A,k} Y_k$, of the state at $t$: $Y_A^t$, of the prediction: $Y_A^*$;
-- imbalance of the prediction $\delta_A = Y_A^* - Y_A^t$.
+- element mass fractions $Y_A = \sum_k a_{A,k} Y_k$, of the state at $t$: $Y_A(t)$, of the prediction: $Y_A^*$;
+- imbalance of the prediction $\delta_A = Y_A^* - Y_A(t)$.
 
-All corrections give $Y_A = Y_A^t$ for the 4 elements, hence $\sum_k Y_k = \sum_A Y_A$ is also conserved (species made of C, H, O, N only).
+All corrections give $Y_A = Y_A(t)$ for the 4 elements, hence $\sum_k Y_k = \sum_A Y_A$ is also conserved (species made of C, H, O, N only).
 
 **`0`**: no correction.
 
@@ -61,12 +58,12 @@ Exact and cheapest, but a minor carrier species takes the whole imbalance: with 
 
 **`2`** (`enforce_elements_balance_wan`): Wan *et al.*, Combust. Flame 220 (2020), Eqs. (7)-(8). The imbalance of $A$ is distributed on all the species containing $A$, in proportion to their mass fractions:
 
-$$Y_k \leftarrow Y_k - \frac{Y_k}{Y_A}\, \delta_A = Y_k \frac{Y_A^t}{Y_A} \quad \text{for } c_{A,k} = 1$$
+$$Y_k \leftarrow Y_k - \frac{Y_k}{Y_A}\, \delta_A = Y_k \frac{Y_A(t)}{Y_A} \quad \text{for } c_{A,k} = 1$$
 
 i.e. a common rescaling of the species containing $A$ ($Y$ and $Y_A$ of the current corrected state).
 
-1. For C, H, N in turn, rescale the species containing the element by $Y_A^t / Y_A$ (factor 1 if $Y_A = 0$);
-2. species containing several of C, H, N (NH3, CH4, ...) couple these corrections: step 1 is repeated until $|Y_A - Y_A^t| \le 10^{-12}\, Y_A^t$ for C, H, N (at most 50 passes; 2 are enough in practice, the coupling is of second order);
+1. For C, H, N in turn, rescale the species containing the element by $Y_A(t) / Y_A$ (factor 1 if $Y_A = 0$);
+2. species containing several of C, H, N (NH3, CH4, ...) couple these corrections: step 1 is repeated until $|Y_A - Y_A(t)| \le 10^{-12}\, Y_A(t)$ for C, H, N (at most 50 passes; 2 are enough in practice, the coupling is of second order);
 3. O is corrected with O2 only, as in the paper ($Y_{O_2} \leftarrow Y_{O_2} - \delta_O / a_{O,O_2}$).
 
 C, H and N corrections are multiplications by positive factors (positivity kept), but the O correction has the drawback of `1` in rich mixtures, where O2 vanishes.
