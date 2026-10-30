@@ -47,19 +47,57 @@ class MLPModel(nn.Module):
         return self.model(x)
 
 class PerSpeciesMLP(nn.Module):
-    """One MLP per output (network species), all with the same architecture: each takes the whole input state
-    [T, Y_k, (dt)] and predicts a single output. The outputs are concatenated in the order of the species, so
-    that the model is used as MLPModel in training, inference and testing.
+    """One MLP per output (network species), all with the same architecture of dense layers: each takes the
+    whole input state [T, Y_k, (dt)] and predicts a single output. The outputs are in the order of the species,
+    so that the model is used as MLPModel in training, inference and testing.
 
-    hidden_layers: [n_in, hidden layers..., 1], n_out: number of outputs (one MLP each).
+    The MLPs of all species are computed together: the weights of a layer are stacked in one tensor
+    (n_species, n_in, n_out), and the layer is one batched matrix product for all species, instead of one
+    small product per species (much faster to train), as in the inference of NNICE.
+
+    hidden_layers: [n_in, hidden layers..., 1], layers_type: "dense" only, activations: one per layer
+    (including the output layer), n_out: number of outputs (one MLP each).
     """
 
     def __init__(self, device, hidden_layers: list[int], layers_type: list[str], activations: list, n_out: int):
         super().__init__()
-        self.species_models = nn.ModuleList([MLPModel(device, hidden_layers, layers_type, activations) for _ in range(n_out)])
+
+        if any(layer_type != "dense" for layer_type in layers_type):
+            sys.exit(f"ERROR: PerSpeciesMLP only has dense layers, got {layers_type}")
+
+        self.n_species = n_out
+
+        # Layers named as in MLPModel (h5 export), activations
+        n_layers = len(hidden_layers) - 1
+        self.layer_names = [f"dense_layer_{i}" for i in range(1, n_layers)] + ["output_layer"]
+        self.activations = nn.ModuleList([activation() for activation in activations])
+
+        # Weights (n_species, n_in, n_out) and biases (n_species, 1, n_out) of each layer, initialized as nn.Linear:
+        # uniform in [-1/sqrt(n_in), 1/sqrt(n_in)]
+        self.weights = nn.ParameterList()
+        self.biases = nn.ParameterList()
+        for n_in, n_out_layer in zip(hidden_layers[:-1], hidden_layers[1:]):
+            bound = 1.0 / n_in**0.5
+            self.weights.append(nn.Parameter(torch.empty(n_out, n_in, n_out_layer, device=device).uniform_(-bound, bound)))
+            self.biases.append(nn.Parameter(torch.empty(n_out, 1, n_out_layer, device=device).uniform_(-bound, bound)))
 
     def forward(self, x):
-        return torch.cat([species_model(x) for species_model in self.species_models], dim=1)
+        # Same input for all species: (n_species, batch, n_in)
+        h = x.unsqueeze(0).expand(self.n_species, -1, -1)
+
+        # Each layer: h W + b for all species at once, then activation
+        for weight, bias, activation in zip(self.weights, self.biases, self.activations):
+            h = activation(torch.baddbmm(bias, h, weight))
+
+        # (n_species, batch, 1) -> (batch, n_species)
+        return h[:, :, 0].T
+
+    def species_layers(self, i_species):
+        """Layers of the MLP of species i_species: list of (name, activation name, kernel (n_in, n_out), bias (n_out)),
+        as numpy arrays (h5 export, with the layout of MLPModel)."""
+
+        return [(name, type(activation).__name__, weight[i_species].detach().cpu().numpy(), bias[i_species, 0].detach().cpu().numpy())
+                for name, activation, weight, bias in zip(self.layer_names, self.activations, self.weights, self.biases)]
 
 class DeepONet(nn.Module):
     

@@ -316,7 +316,7 @@ An MLP definition contains:
 + `layers_activation_list`: activation of each layer, including output (`relu`, `gelu`, `tanh`, `id`; case-insensitive)
 + `layers_type`: type of each layer, including output (`dense` or `resnet`)
 
-For `PerSpeciesMLP`, this definition is that of the network of each species (one output). Example: `scripts/H2_IGN_KERNEL_PER_SPECIES`.
+For `PerSpeciesMLP`, this definition is that of the network of each species (one output), with dense layers only. The networks of all species are computed together (weights of a layer stacked for all species, one batched product per layer), as in the inference of NNICE, which is much faster than one network after the other. Example: `scripts/H2_IGN_KERNEL_PER_SPECIES`.
 
 For `DeepONet`, these three keys are dicts with `branch` and `trunk` entries (plus `shift` for `DeepONetShift`), and `n_neurons` is added. The trunk takes $dt$ as input.
 

@@ -611,15 +611,17 @@ class NN_manager():
             for child_name, child_module in module.named_children():
                 save_module(layer_group, child_module, child_name, parent_activation_map)
 
-        def save_mlp(group, mlp):
-            """Save each top-level layer of the MLP directly in group (mlp.model is nn.Sequential)."""
-            for layer_name, module in mlp.model.named_children():
-                save_module(group, module, layer_name, getattr(mlp, 'activation_map', {}))
-
         with h5py.File(h5_path, "w") as f:
             # One MLP per species: one group per species, in the order of the outputs
             if isinstance(model, PerSpeciesMLP):
-                for i_species, species_model in enumerate(model.species_models):
-                    save_mlp(f.create_group(f"species_{i_species}"), species_model)
+                for i_species in range(model.n_species):
+                    species_group = f.create_group(f"species_{i_species}")
+                    for name, activation, kernel, bias in model.species_layers(i_species):
+                        layer_group = species_group.create_group(name)
+                        layer_group.attrs["activation"] = activation
+                        layer_group.create_dataset("kernel:0", data=kernel)
+                        layer_group.create_dataset("bias:0", data=bias)
             else:
-                save_mlp(f, model)
+                # Save each top-level layer directly, no 'model' group
+                for layer_name, module in model.model.named_children():  # note: model.model is nn.Sequential
+                    save_module(f, module, layer_name, getattr(model, 'activation_map', {}))
