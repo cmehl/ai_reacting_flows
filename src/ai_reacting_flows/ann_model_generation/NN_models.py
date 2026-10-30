@@ -46,6 +46,21 @@ class MLPModel(nn.Module):
     def forward(self, x):
         return self.model(x)
 
+class PerSpeciesMLP(nn.Module):
+    """One MLP per output (network species), all with the same architecture: each takes the whole input state
+    [T, Y_k, (dt)] and predicts a single output. The outputs are concatenated in the order of the species, so
+    that the model is used as MLPModel in training, inference and testing.
+
+    hidden_layers: [n_in, hidden layers..., 1], n_out: number of outputs (one MLP each).
+    """
+
+    def __init__(self, device, hidden_layers: list[int], layers_type: list[str], activations: list, n_out: int):
+        super().__init__()
+        self.species_models = nn.ModuleList([MLPModel(device, hidden_layers, layers_type, activations) for _ in range(n_out)])
+
+    def forward(self, x):
+        return torch.cat([species_model(x) for species_model in self.species_models], dim=1)
+
 class DeepONet(nn.Module):
     
     def __init__(self, device, hidden_layers : dict[str,list[int]], layers_type : dict[str,list[str]], activations : dict[str,list], n_out, n_neuron):
