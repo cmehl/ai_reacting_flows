@@ -170,6 +170,25 @@ def output_to_Yk(x_species_t, y_t, species, output_omegas, log_transform_X, log_
     return inverse_species(y_t, species, log_transform_Y, lambda_bct, log_excluded_species)
 
 
+def Yk_to_output(x_species_t, Y, species, output_omegas, log_transform_X, log_transform_Y, threshold, lambda_bct, log_excluded_species):
+    """Network output, unscaled (see output_to_Yk), that gives the mass fractions Y [-] (n_points, n_species)
+    from the species part x_species_t of the unscaled network input. Mass fractions are clipped before the transform."""
+
+    if output_omegas:
+
+        # Differences in transformed space
+        if log_transform_Y > 0:
+            return transform_species(Y, species, log_transform_Y, threshold, lambda_bct, log_excluded_species) - x_species_t
+
+        # Differences of mass fractions
+        else:
+            return Y - inverse_species(x_species_t, species, log_transform_X, lambda_bct, log_excluded_species)
+
+    # Mass fractions at t+dt
+    else:
+        return transform_species(Y, species, log_transform_Y, threshold, lambda_bct, log_excluded_species)
+
+
 #==============================================================================
 # K-MEANS FEATURES
 #==============================================================================

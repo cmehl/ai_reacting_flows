@@ -23,6 +23,7 @@ import torch
 
 import ai_reacting_flows.tools.utilities as utils
 import ai_reacting_flows.tools.transforms as transforms
+from ai_reacting_flows.tools.element_projection import project_elements
 from ai_reacting_flows.databases_processing.processing_parameters import read_processing_parameters, MECHANISM_FILE
 
 # Element correction of Wan et al. (enforce_elements_balance_wan): C, H, N corrections repeated until the
@@ -71,6 +72,9 @@ class NNInference():
         with open(os.path.join(self.models_folder, "networks_params.yaml"), "r") as file:
             networks_parameters = yaml.safe_load(file)
         self.dataset_path = os.path.join(run_folder, networks_parameters["database_path"])
+
+        # Networks trained with the element projection (learning.project_elements of NN_manager)
+        self.trained_with_projection = networks_parameters.get("learning", {}).get("project_elements", False)
 
         # Processing parameters of the learning database (stored in training_data.h5, see processing_parameters.py)
         params = read_processing_parameters(self.dataset_path, run_folder)
@@ -267,6 +271,12 @@ class NNInference():
         T_new is deduced from enthalpy conservation, with cp and h_k of the initial state.
         """
 
+        # Networks trained with the projection, used with another correction: legitimate for comparisons, not the
+        # state they were trained on (warning once)
+        if self.trained_with_projection and yk_renormalization != 3:
+            print(f"WARNING: networks trained with project_elements, used with yk_renormalization = {yk_renormalization} (not 3)")
+            self.trained_with_projection = False
+
         n = len(T)
         dt = np.broadcast_to(dt, n)
 
@@ -442,18 +452,8 @@ class NNInference():
 
 
     def enforce_elements_balance_wan_all(self, Y_old, Y_new):
-        """Mass fractions Y_new (n, n_species) corrected to keep the element mass fractions of Y_old: extension
-        of Wan et al., Combust. Flame 220 (2020), Eqs. (7)-(8), https://doi.org/10.1016/j.combustflame.2020.06.008,
-        to the 4 elements C, H, O, N, O included (the paper corrects O with O2 only, which fails in rich
-        mixtures where O2 vanishes).
-
-        The correction of each species is proportional to its mass fraction, with one multiplier mu_A per
-        element A it contains: dY_i = Y_i sum_A mu_A c_Ai, with c_Ai = 1 if species i contains A, else 0.
-        The element mass fractions are linear in Y, Y_A = sum_i a_Ai Y_i with a_Ai = n_Ai W_A / W_i, so the
-        4 multipliers are solved together (one 4x4 system per state, exact in one step):
-            sum_B M_AB mu_B = Y_A(t) - Y_A(t+dt),     M_AB = sum_i a_Ai Y_i c_Bi   (Y at t+dt)
-        For a single element, mu_A = (Y_A(t) - Y_A(t+dt)) / Y_A(t+dt): Eq. (8) of the paper.
-        """
+        """Mass fractions Y_new (n, n_species) corrected to keep the element mass fractions of Y_old, with the
+        4 elements C, H, O, N solved together (tools/element_projection.py)."""
 
         W_k = self.gas.molecular_weights
 
@@ -461,19 +461,4 @@ class NNInference():
         a = self.W_atoms[:, None] * self.atomic_array / W_k
         c = (self.atomic_array > 0).astype(float)
 
-        # Element imbalance (n, 4) and matrices of the systems (n, 4, 4)
-        dY_a = Y_old @ a.T - Y_new @ a.T
-        M = np.einsum("ai,ni,bi->nab", a, Y_new, c)
-
-        # Elements absent from a state (or from the mechanism), M_AA = Y_A = 0: multiplier set to 0
-        absent = np.einsum("naa->na", M) <= 0.0
-        i_state, i_el = np.nonzero(absent)
-        M[i_state, i_el, :] = 0.0
-        M[i_state, :, i_el] = 0.0
-        M[i_state, i_el, i_el] = 1.0
-        dY_a[absent] = 0.0
-
-        # Multipliers (n, 4) and corrected mass fractions
-        mu = np.linalg.solve(M, dY_a[:, :, None])[:, :, 0]
-
-        return Y_new * (1.0 + mu @ c)
+        return project_elements(Y_old, Y_new, a, c)
