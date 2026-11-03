@@ -59,7 +59,7 @@ python ann_model_testing.py                # 4. testing on simple cases  (nn_tes
 
 + **Stochastic reactors**: 0-D stochastic particles following [Wan *et al.*](https://www.sciencedirect.com/science/article/pii/S0010218020302170). Each particle is a chemical state; particles mix (CURL, CURL_MODIFIED, CURL_MODIFIED_DD (work in progress), EMST_SIMPLIFIED or EMST_POPE models, see [theory](docs/theory.md#emst-mixing-model-emst_pope)) to mimic diffusion.
 + **Canonical flames**: 0-D reactors, 1-D premixed and 1-D diffusion flames, launched with `generate_0D_dtb.py` and `dtb_params_flmts.yaml`.
-+ **Multiple time steps** (optional): `generate_multi_dt.py` re-integrates the database states with several $dt$, so that $dt$ becomes a network input.
++ **Multiple time steps** (optional): `generate_multi_dt.py` re-integrates the database states with several $dt$, so that $dt$ becomes a network input. With `time_step_type: rollout`, it instead computes the states after 1, 2, ..., $n$ steps of constant $dt$, for [rollout training](docs/theory.md#rollout-training) (example: `scripts/H2_IGN_KERNEL_ROLLOUT`).
 
 **Warning:** an existing `STOCH_DTB_<suffix>` folder is deleted when relaunching generation.
 
@@ -148,14 +148,15 @@ In `training_data.h5`, each group `CLUSTER_<i>` contains:
 + `X_train`, `X_val`: inputs (`Temperature`, $Y_k$, and $dt$ for multi-dt), transformed and standardized. Columns end with `_X`.
 + `Y_train`, `Y_val`: outputs ($Y_k$ or their differences), transformed and standardized. Columns end with `_Y`.
 + `Xscaler`, `Yscaler`: mean and variance of each column, used for standardization.
++ With `rollout: true`, `Y_rollout_train`, `Y_rollout_val`: mass fractions after each step, transformed but not scaled nor as differences, shape (points, `rollout_steps`, species), and `Y_N2_train`, `Y_N2_val`: N2 mass fraction at $t$ [-] (0 if N2 is predicted). `Y_train`, `Y_val` remain the outputs of the first step.
 
 `Pressure`, `Prog_var` and `HRR` are not kept, nor `N2` unless `with_N_chemistry: true`.
 
-The processing parameters are stored as attributes of `training_data.h5` (`dt_var`, `fuel`, transforms, `threshold`, `lambda_bct`, `output_omegas`, `with_N_chemistry`, `log_excluded_species`, clustering, number of clusters, `pv_species`). Training and testing read them there, and use the mechanism copy `mech_detailed.yaml`, so the YAML files of database processing and generation are not read again. Databases processed before this was introduced are still read through their YAML files.
+The processing parameters are stored as attributes of `training_data.h5` (`dt_var`, `rollout`, `fuel`, transforms, `threshold`, `lambda_bct`, `output_omegas`, `with_N_chemistry`, `log_excluded_species`, clustering, number of clusters, `pv_species`). Training and testing read them there, and use the mechanism copy `mech_detailed.yaml`, so the YAML files of database processing and generation are not read again. Databases processed before this was introduced are still read through their YAML files.
 
 ## 3. ANN model generation
 
-The class `NN_manager` (PyTorch) trains one network per cluster (MLP or DeepONet) to find $Y_k(t+dt)=ANN(T(t), Y_k(t))$. GPU is used if available.
+The class `NN_manager` (PyTorch) trains one network per cluster (MLP or DeepONet) to find $Y_k(t+dt)=ANN(T(t), Y_k(t))$. GPU is used if available. A learning database processed with `rollout: true` is trained on chains of predictions: see [rollout training](docs/theory.md#rollout-training).
 
 Generated files:
 
@@ -170,6 +171,7 @@ MODELS/MODEL_<suffix>/
 ├── kmeans_model.pkl, ...                 copy of the clustering files
 ├── networks_params.yaml, <mechanism>     copies of the inputs
 └── training/cluster_<i>/                 loss.png, mass_conservation.png, elements_conservation.png
+                                          (rollout: rollout_val_loss_per_step.csv, validation loss of each step with the best model)
 ```
 
 ## 4. Model testing
@@ -250,9 +252,11 @@ Multi-dt generation (`generate_multi_dt.py`) reads the same file, with the addit
 
 | Key | Description |
 |-----|-------------|
-| `time_step_type` | `set`: use the $dt$ values listed in `time_step_range`; `random`: draw `nb_dt` values log-uniformly in `time_step_range` |
+| `time_step_type` | `set`: use the $dt$ values listed in `time_step_range`; `random`: draw `nb_dt` values log-uniformly in `time_step_range`; `rollout`: successive steps of constant $dt$ for rollout training |
 | `time_step_range` | List of $dt$ [s] (`set`) or `[dt_min, dt_max]` (`random`) |
 | `nb_dt` | Number of $dt$ per state (`random` only) |
+| `rollout_dt` | Constant $dt$ [s] (`rollout` only) |
+| `rollout_steps` | Length of the rollout: number of successive steps (`rollout` only) |
 | `new_file_name` | Name of the output h5 file |
 
 ## `dtb_params_flmts.yaml` (canonical flames)
@@ -276,9 +280,10 @@ Cases are sampled in the given bounds with Latin hypercube sampling.
 |-----|-------------|
 | `database_params.database_type` | `stoch` or `flamelets` |
 | `database_params.dtb_folder_suffix` | Suffix of the database folder to read |
-| `database_params.dtb_file` | h5 file to read (`solutions.h5` or the multi-dt file) |
+| `database_params.dtb_file` | h5 file to read (`solutions.h5`, the multi-dt file or the rollout file) |
 | `database_params.database_name` | Name of the output subfolder |
 | `database_params.dt_var` | `true` for a multi-dt database ($dt$ is an input, always as $\log(dt)$, whatever `log_transform_X`) |
+| `database_params.rollout` | `true` for a database from `time_step_type: rollout`, for [rollout training](docs/theory.md#rollout-training) (optional, default `false`; not with `dt_var`; not validated with Box-Cox) |
 | `database_params.fuel`, `database_params.mech_file` | Fuel and mechanism |
 | `data_processing.log_transform_X`, `log_transform_Y` | 0: none, 1: log, 2: Box-Cox (with `lambda_bct`, optional, default 0.1) |
 | `data_processing.threshold` | Mass fractions are clipped to this value before log transform (to 0 before Box-Cox) |
@@ -346,4 +351,4 @@ Each series section has `run` (run the series or not) and `plots` (plots of each
 pytest tests/
 ```
 
-Tests 01 to 04 check a small H2 stochastic reactors database, its resampling, its multi-dt version and its processing against reference histograms; the database is built once per session in a temporary folder by the fixtures of `conftest.py` (`h2_stoch_database.py`). All tests are independent: they can run in any order, alone, or in several sessions at the same time. Tests 05 to 23 run on small cases in temporary folders (test 19 runs `mpiexec -n 2` and is skipped without `mpiexec`) (`h2_learning_database.py` builds a small H2 learning database for tests 08, 09, 13, 22 and 23). Each test file starts with a description of what it tests.
+Tests 01 to 04 check a small H2 stochastic reactors database, its resampling, its multi-dt version and its processing against reference histograms; the database is built once per session in a temporary folder by the fixtures of `conftest.py` (`h2_stoch_database.py`). All tests are independent: they can run in any order, alone, or in several sessions at the same time. Tests 05 to 27 run on small cases in temporary folders (test 19 runs `mpiexec -n 2` and is skipped without `mpiexec`) (`h2_learning_database.py` builds a small H2 learning database for tests 08, 09, 13, 22 and 23). Each test file starts with a description of what it tests.

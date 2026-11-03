@@ -57,6 +57,8 @@ class NN_manager():
         params = read_processing_parameters(self.dataset_path, self.run_folder)
 
         self.dt_var = params["dt_var"]
+        self.rollout = params.get("rollout", False)   # Databases processed before rollout do not have this parameter
+        self.threshold = params["threshold"]
         self.remove_N2 = not params["with_N_chemistry"]
         self.log_transform_X = params["log_transform_X"]
         self.log_transform_Y = params["log_transform_Y"]
@@ -95,6 +97,7 @@ class NN_manager():
         self._log(
             "INIT "
             f"dt_var={self.dt_var}, "
+             f"rollout={self.rollout}, "
              f"remove_N2={self.remove_N2}, "
              f"log_transform_X={self.log_transform_X}, "
              f"log_transform_Y={self.log_transform_Y}, "
@@ -141,6 +144,13 @@ class NN_manager():
 
         gas = ct.Solution(self.mechanism)
         self.A_element, self.elements = utils.get_molar_mass_atomic_matrix(gas, not self.remove_N2)
+
+        # Thermodynamics of the temperature update of rollout training, as tensors
+        if self.rollout:
+            self.W_k = torch.tensor(gas.molecular_weights, device=self.device)
+            self.nasa7 = [torch.tensor(a, device=self.device) for a in utils.get_nasa7_coefficients(gas)]
+            self.cols_ANN = [gas.species_index(spec) for spec in self.species_ANN]
+            self.col_N2 = gas.species_index("N2") if self.remove_N2 else None
 
         # Training stats
         if self.new_model_folder:
@@ -246,6 +256,80 @@ class NN_manager():
         return Yk_in, Yk_out
 
 
+    def _temperature_after(self, T, Y_old, Y_new, Y_N2):
+        """Temperature [K] (n) after a chemistry step, from the conservation of enthalpy at constant pressure:
+        same as NNInference.temperature_after, on tensors. T [K] (n), Y_old and Y_new [-] (n, n_species_ANN),
+        Y_N2 [-] (n): mass fraction of N2 if it is not predicted (unchanged: only contributes to cp)."""
+
+        h_k, cp_k = utils.species_h_cp(T, self.W_k, *self.nasa7)
+        cp = torch.sum(cp_k[:, self.cols_ANN] * Y_old, dim=1)
+
+        # N2 not predicted
+        if self.remove_N2:
+            cp = cp + cp_k[:, self.col_N2] * Y_N2
+
+        return T - torch.sum(h_k[:, self.cols_ANN] * (Y_new - Y_old), dim=1) / cp
+
+
+    def _rollout_loss(self, model, loss_fn, X, Y_rollout, Y_N2, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std):
+        """Loss of a rollout: mean over the steps of _rollout_step_losses. With one step, it is the usual loss."""
+
+        return self._rollout_step_losses(model, loss_fn, X, Y_rollout, Y_N2, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std).mean()
+
+
+    def _rollout_step_losses(self, model, loss_fn, X, Y_rollout, Y_N2, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std):
+        """Loss of each step of a rollout, tensor (n_steps): from the states of X, the network is applied n_steps
+        times, each time on its own prediction, with temperatures from enthalpy conservation. Loss on the error of
+        the predicted state, in units of the standard deviation of the outputs (see docs/theory.md). All steps use
+        the network of the cluster of the initial state.
+
+        X: scaled inputs at t (n, n_in), Y_rollout: transformed (not scaled) mass fractions at t+k*dt
+        (n, n_steps, n_species_ANN), Y_N2: mass fractions of N2 [-] (n), not used if N2 is predicted.
+        """
+        n_steps = Y_rollout.shape[1]
+
+        losses = []
+        for k in range(n_steps):
+
+            y_pred = model(X)
+
+            # Current state, as network input: transformed and physical (clipped). Physical state of the next step
+            x_species_t = transforms.unscale(X[:, 1:], Xscaler_mean[1:], Xscaler_std[1:])
+            Y_in, Y_new = self._physical_Yk(X, y_pred, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std)
+
+            # Output that gives the true state at t+k*dt. Differences are taken from the PREDICTED state,
+            # with its gradient: the loss is on the state error, also with output_omegas
+            if self.output_omegas:
+
+                # Differences in transformed space
+                if self.log_transform_Y > 0:
+                    target = Y_rollout[:, k] - x_species_t
+
+                # Differences of mass fractions
+                else:
+                    target = Y_rollout[:, k] - Y_in
+
+            # Outputs are the state at t+k*dt
+            else:
+                target = Y_rollout[:, k]
+
+            losses.append(loss_fn(y_pred, transforms.scale(target, Yscaler_mean, Yscaler_std)))
+
+            # Next input, built as at inference (NNInference.advance): the temperature update uses the predicted
+            # state, not clipped (the clip only applies to the network input)
+            if k < n_steps - 1:
+                T = transforms.unscale(X[:, 0], Xscaler_mean[0], Xscaler_std[0])
+                # Not Y_in after the first step: clipping would add spurious composition changes to the enthalpy budget
+                Y_old = Y_in if k == 0 else Y_previous
+                T_new = self._temperature_after(T, Y_old, Y_new, Y_N2)
+                Y_previous = Y_new
+                x_species_new = transforms.transform_species(Y_new, self.species_ANN, self.log_transform_X, self.threshold,
+                                                             self.lambda_bct, self.log_excluded_species)
+                X = transforms.scale(torch.column_stack([T_new, x_species_new]), Xscaler_mean, Xscaler_std)
+
+        return torch.stack(losses)
+
+
     def train_model(self, i_cluster, model, loss_fn, optimizer, scheduler, X_train, X_val, Y_train, Y_val, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std):
 
         X_train = torch.tensor(X_train, dtype=torch.float64)
@@ -262,6 +346,11 @@ class NN_manager():
         Y_train = Y_train.to(self.device)
         X_val = X_val.to(self.device)
         Y_val = Y_val.to(self.device)
+
+        # Rollout targets, and N2 for the temperature update
+        if self.rollout:
+            Y_rollout_train, Y_rollout_val, Y_N2_train, Y_N2_val = [torch.tensor(data, dtype=torch.float64, device=self.device)
+                                                                    for data in self.read_rollout_data(i_cluster)]
 
         A_element = A_element.to(self.device)    # Array to store the loss and validation loss
 
@@ -310,6 +399,8 @@ class NN_manager():
             # Shuffling training data before each epoch
             perm = torch.randperm(len(X_train), device=self.device)
             X_train, Y_train = X_train[perm], Y_train[perm]
+            if self.rollout:
+                Y_rollout_train, Y_N2_train = Y_rollout_train[perm], Y_N2_train[perm]
 
             # Training parameters
             epoch_loss = 0.0
@@ -317,9 +408,18 @@ class NN_manager():
             for i in range(0, len(X_train), self.batch_size):
 
                 Xbatch = X_train[i:i+self.batch_size]
-                y_pred = model(Xbatch)
-                ybatch = Y_train[i:i+self.batch_size]
-                loss = loss_fn(y_pred, ybatch)
+
+                # Network applied on its own predictions
+                if self.rollout:
+                    loss = self._rollout_loss(model, loss_fn, Xbatch, Y_rollout_train[i:i+self.batch_size], Y_N2_train[i:i+self.batch_size],
+                                              Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std)
+
+                # One step
+                else:
+                    y_pred = model(Xbatch)
+                    ybatch = Y_train[i:i+self.batch_size]
+                    loss = loss_fn(y_pred, ybatch)
+
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
@@ -343,7 +443,10 @@ class NN_manager():
 
                     # VALIDATION LOSS
                     y_val_pred = model(X_val)
-                    val_loss = loss_fn(y_val_pred, Y_val)
+                    if self.rollout:
+                        val_loss = self._rollout_loss(model, loss_fn, X_val, Y_rollout_val, Y_N2_val, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std)
+                    else:
+                        val_loss = loss_fn(y_val_pred, Y_val)
 
                     # Physical mass fractions at t (input) and t+dt (prediction)
                     yval_in, yk_abs = self._physical_Yk(X_val, y_val_pred, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std)
@@ -401,6 +504,19 @@ class NN_manager():
         # Restore best model (based on validation loss) before returning
         if best_state_dict is not None:
             model.load_state_dict(best_state_dict)
+
+        # Postprocessing: validation loss of each step of the rollout, with the best model
+        if self.rollout:
+            model.eval()
+            with torch.no_grad():
+                val_step_losses = self._rollout_step_losses(model, loss_fn, X_val, Y_rollout_val, Y_N2_val, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std)
+            model.train()
+
+            val_step_losses = val_step_losses.cpu().numpy()
+            pd.DataFrame({"step": np.arange(1, len(val_step_losses) + 1), "val_loss": val_step_losses}).to_csv(
+                f"{self.directory}/training/cluster_{i_cluster}/rollout_val_loss_per_step.csv", index=False)
+
+            self._log(f"ROLLOUT_VAL_LOSS_PER_STEP cluster={i_cluster}, val_loss={val_step_losses.tolist()}")
 
         self._log(
             "TRAIN_END "
@@ -554,7 +670,16 @@ class NN_manager():
             Y_val   = grp['Y_val'][:]
 
         return X_train, X_val, Y_train, Y_val
-    
+
+
+    def read_rollout_data(self, i_cluster):
+
+        with h5py.File(f"{self.dataset_path:s}/training_data.h5", 'r') as h5file_r:
+
+            grp = h5file_r[f"CLUSTER_{i_cluster}"]
+
+            return grp['Y_rollout_train'][:], grp['Y_rollout_val'][:], grp['Y_N2_train'][:], grp['Y_N2_val'][:]
+
     def get_scalers_stats(self, i_cluster):
 
         with h5py.File(f"{self.dataset_path:s}/training_data.h5", 'r') as h5file_r:
