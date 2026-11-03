@@ -12,7 +12,7 @@ Transform of mass fractions Y [-], chosen with log_transform:
 Species listed in log_excluded_species are kept on a linear scale. The time step dt [s] always
 has its own logarithm (no threshold), whatever the transform of the mass fractions.
 
-Inverse functions accept numpy arrays and torch tensors (training diagnostics run on tensors).
+Functions accept numpy arrays and torch tensors (training runs on tensors, the rollout loss needs their gradients).
 """
 
 import numpy as np
@@ -32,11 +32,11 @@ def clip(Y, log_transform, threshold):
 
     # Logarithm
     if log_transform == 1:
-        return np.maximum(Y, threshold)
+        return torch.clamp(Y, min=threshold) if isinstance(Y, torch.Tensor) else np.maximum(Y, threshold)
 
     # Box-Cox
     elif log_transform == 2:
-        return np.maximum(Y, 0.0)
+        return torch.clamp(Y, min=0.0) if isinstance(Y, torch.Tensor) else np.maximum(Y, 0.0)
 
     return Y
 
@@ -46,7 +46,7 @@ def forward(Y, log_transform, lambda_bct):
 
     # Logarithm
     if log_transform == 1:
-        return np.log(Y)
+        return torch.log(Y) if isinstance(Y, torch.Tensor) else np.log(Y)
 
     # Box-Cox
     elif log_transform == 2:
@@ -82,7 +82,7 @@ def transform_species(Y, species, log_transform, threshold, lambda_bct, log_excl
     Columns of log_excluded_species are unchanged.
     """
 
-    Y_t = np.array(Y, dtype=float)
+    Y_t = Y.clone() if isinstance(Y, torch.Tensor) else np.array(Y, dtype=float)
     cols = transformed_columns(species, log_excluded_species)
 
     Y_t[:, cols] = forward(clip(Y_t[:, cols], log_transform, threshold), log_transform, lambda_bct)
