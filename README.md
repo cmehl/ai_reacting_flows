@@ -314,6 +314,8 @@ Cases are sampled in the given bounds with Latin hypercube sampling.
 | `learning.batch_size` | Default 2048 |
 | `learning.epochs_list` | Number of epochs, one per cluster |
 | `learning.val_every` | Validation is computed every `val_every` epochs (default 10) |
+| `learning.project_elements` | If `true`, the loss is on the state corrected as with `yk_renormalization: 3`; the saved network and inference do not change, but use `yk_renormalization: 3` in simulations (see [theory](docs/theory.md#element-projection-in-training)). Default `false` |
+| `learning.raw_state_loss_weight` | With `project_elements`: weight $\lambda$ of the loss on the prediction before projection (default 1) |
 
 An MLP definition contains:
 
@@ -351,4 +353,4 @@ Each series section has `run` (run the series or not) and `plots` (plots of each
 pytest tests/
 ```
 
-Tests 01 to 04 check a small H2 stochastic reactors database, its resampling, its multi-dt version and its processing against reference histograms; the database is built once per session in a temporary folder by the fixtures of `conftest.py` (`h2_stoch_database.py`). All tests are independent: they can run in any order, alone, or in several sessions at the same time. Tests 05 to 27 run on small cases in temporary folders (test 19 runs `mpiexec -n 2` and is skipped without `mpiexec`) (`h2_learning_database.py` builds a small H2 learning database for tests 08, 09, 13, 22 and 23). Each test file starts with a description of what it tests.
+Tests 01 to 04 check a small H2 stochastic reactors database, its resampling, its multi-dt version and its processing against reference histograms; the database is built once per session in a temporary folder by the fixtures of `conftest.py` (`h2_stoch_database.py`). All tests are independent: they can run in any order, alone, or in several sessions at the same time. Tests 05 to 28 run on small cases in temporary folders (test 19 runs `mpiexec -n 2` and is skipped without `mpiexec`) (`h2_learning_database.py` builds a small H2 learning database for tests 08, 09, 13, 22 and 23). Each test file starts with a description of what it tests.

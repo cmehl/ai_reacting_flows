@@ -8,6 +8,7 @@ Models and algorithms used in ARF, with their equations. The [README](../README.
 + [Element conservation of the ANN mass fractions (`yk_renormalization`)](#element-conservation-of-the-ann-mass-fractions-yk_renormalization)
 + [Hybrid ANN/CVODE model (`hybrid_ann_cvode`)](#hybrid-anncvode-model-hybrid_ann_cvode)
 + [Rollout training](#rollout-training)
++ [Element projection in training](#element-projection-in-training)
 + [Simulation error](#simulation-error)
 + [Speed-up benchmark](#speed-up-benchmark)
 
@@ -123,7 +124,7 @@ The network is usually trained on one step: from a true state at $t$, it predict
 
 $$\hat{T}^{(k)} = \hat{T}^{(k-1)} - \frac{\sum_i h_i(\hat{T}^{(k-1)}) \left( \hat{Y}_i^{(k)} - \hat{Y}_i^{(k-1)} \right)}{\sum_i c_{p,i}(\hat{T}^{(k-1)}) \, \hat{Y}_i^{(k-1)}}$$
 
-N2, if not predicted, keeps its value at $t$ (`Y_N2_train`, `Y_N2_val` in `training_data.h5`); it only contributes to $c_p$. No element correction is applied in the chain.
+N2, if not predicted, keeps its value at $t$ (`Y_N2_train`, `Y_N2_val` in `training_data.h5`); it only contributes to $c_p$. No element correction is applied in the chain, unless the networks are trained with the [element projection](#element-projection-in-training).
 
 **Loss.** The loss is on the error of the predicted state, for outputs as mass fractions or as differences. With $f$ the transform of the outputs, $Y_k(t + k\,dt)$ the reference (`Y_rollout_train`, `Y_rollout_val`: transformed, not scaled) and $\sigma$ the standard deviation of each output (`Yscaler`):
 
@@ -139,6 +140,22 @@ with $\ell$ the loss function (`loss`: MSE, L1 or Huber). With `output_omegas: t
 + If $1/\lambda$ is an even integer (e.g. the default $\lambda = 0.1$), the result is valid but mirrored around the limit: $y = -11$ behaves like $y = -9$. The gradient of the next input with respect to the output changes sign, and large undershoots give non-physical values ($y = -25$ gives $Y \approx 58$).
 
 The same formula is used at inference, but in rollout training it also enters the gradients and the temperature update. Limiting the base in `transforms.inverse` would have to use a small positive value and not 0: at $Y = 0$ the derivative of $Y^\lambda$ is infinite, and the gradient becomes NaN.
+
+# Element projection in training
+
+With `project_elements: true` in `learning` (`NN_manager._one_step_loss`, `tools/element_projection.py`), the correction `3` of [`yk_renormalization`](#element-conservation-of-the-ann-mass-fractions-yk_renormalization), noted $P$, is used in the training loss. It is not a layer of the network: the network still predicts the state $Y^*$ before correction, so the saved models and inference do not change. With $\ell$ the loss function, on scaled outputs:
+
+$$\mathcal{L} = \ell\big(P(Y^*)\big) + \lambda\, \ell\big(Y^*\big), \qquad \lambda = \texttt{raw\_state\_loss\_weight}$$
+
+$P(Y^*)$ is converted back to a network output (`transforms.Yk_to_output`) to be compared with the usual target, whatever the outputs (mass fractions or differences). The mass fractions are clipped before the transform, as the network inputs: errors below `threshold` do not count, and species clipped in the term $\ell(P(Y^*))$ have no gradient. The gradient goes through the solution of the linear system of $P$. Without N chemistry, N is not considered: it is carried by N2, not predicted.
+
+**Term $\lambda\, \ell(Y^*)$.** The true state conserves the elements, so both terms have the same minimum. With $\lambda = 0$, the loss barely controls the error of $Y^*$ along the directions removed by $P$ (common rescaling of the species containing an element): the conservation error of $Y^*$ can drift. It would make the correction larger and the error proxy of the [hybrid model](#hybrid-anncvode-model-hybrid_ann_cvode) less reliable, as this proxy is computed before correction. A very large $\lambda$ is the usual training, with the correction at inference only.
+
+**Validation.** The validation loss (best model, `ReduceLROnPlateau`, per-step losses of rollouts) is $\ell(P(Y^*))$, the state used at inference. The conservation diagnostics of training (`mass_conservation.png`, `elements_conservation.png`) stay on $Y^*$: they show the drift, not the conservation of the corrected state, which is exact.
+
+**Rollout.** The chain carries the projected state, and the temperature update uses it, as at inference with `yk_renormalization: 3`. Each step has the loss above.
+
+**Inference.** Networks trained this way should be used with `yk_renormalization: 3`; `NNInference` prints a warning otherwise (legitimate for comparisons). The correction factors $1 + \sum_B \mu_B c_{B,k}$ can be far from 1 early in training, where positivity is not guaranteed; negative mass fractions are then clipped by the transform.
 
 # Simulation error
 

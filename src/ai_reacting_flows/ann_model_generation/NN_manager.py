@@ -18,6 +18,7 @@ import torch.optim as optim
 
 import ai_reacting_flows.tools.utilities as utils
 import ai_reacting_flows.tools.transforms as transforms
+from ai_reacting_flows.tools.element_projection import project_elements
 from ai_reacting_flows.ann_model_generation.NN_models import MLPModel, PerSpeciesMLP, DeepONet, DeepONet_shift
 from ai_reacting_flows.databases_processing.processing_parameters import read_processing_parameters, MECHANISM_FILE
 
@@ -91,6 +92,8 @@ class NN_manager():
         self.batch_size = learning_data.get("batch_size", 2048)
         self.epochs_list = learning_data["epochs_list"]
         self.val_every = learning_data.get("val_every", 10)
+        self.project_elements = learning_data.get("project_elements", False)              # Element projection in the loss
+        self.raw_state_loss_weight = learning_data.get("raw_state_loss_weight", 1.0)      # Weight of the prediction before projection
 
 
         # Log high-level dataset and processing configuration.
@@ -98,6 +101,7 @@ class NN_manager():
             "INIT "
             f"dt_var={self.dt_var}, "
              f"rollout={self.rollout}, "
+            f"project_elements={self.project_elements}, "
              f"remove_N2={self.remove_N2}, "
              f"log_transform_X={self.log_transform_X}, "
              f"log_transform_Y={self.log_transform_Y}, "
@@ -151,6 +155,18 @@ class NN_manager():
             self.nasa7 = [torch.tensor(a, device=self.device) for a in utils.get_nasa7_coefficients(gas)]
             self.cols_ANN = [gas.species_index(spec) for spec in self.species_ANN]
             self.col_N2 = gas.species_index("N2") if self.remove_N2 else None
+
+        # Coefficients of the element projection, as tensors: a_Ai = n_Ai W_A / W_i and c_Ai (n_elements, n_species_ANN)
+        if self.project_elements:
+            cols = [gas.species_index(spec) for spec in self.species_ANN]
+            atomic_array = utils.get_atomic_array(gas)[:, cols]
+            a_Ai = utils.get_atomic_weights()[:, None] * atomic_array / gas.molecular_weights[cols]
+
+            # N not considered without N chemistry, as for the conservation diagnostics (order C, H, O, N)
+            elements = [0, 1, 2] if self.remove_N2 else [0, 1, 2, 3]
+
+            self.a_Ai = torch.tensor(a_Ai[elements], dtype=torch.float64, device=self.device)
+            self.c_Ai = torch.tensor((atomic_array[elements] > 0).astype(float), dtype=torch.float64, device=self.device)
 
         # Training stats
         if self.new_model_folder:
@@ -271,17 +287,48 @@ class NN_manager():
         return T - torch.sum(h_k[:, self.cols_ANN] * (Y_new - Y_old), dim=1) / cp
 
 
-    def _rollout_loss(self, model, loss_fn, X, Y_rollout, Y_N2, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std):
+    def _projected_output(self, X, Y_old, Y_new, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std):
+        """Mass fractions Y_new [-] (n, n_species_ANN) projected on the elements of Y_old [-] (as yk_renormalization: 3
+        at inference), and the scaled network output that would give them, to compare with the scaled targets."""
+
+        # Species columns of X (temperature first, time step last when dt_var is used)
+        sl = slice(1, -1) if self.dt_var else slice(1, None)
+        x_species_t = transforms.unscale(X[:, sl], Xscaler_mean[sl], Xscaler_std[sl])
+
+        Y_projected = project_elements(Y_old, Y_new, self.a_Ai, self.c_Ai)
+        y_t = transforms.Yk_to_output(x_species_t, Y_projected, self.species_ANN, self.output_omegas, self.log_transform_X,
+                                      self.log_transform_Y, self.threshold, self.lambda_bct, self.log_excluded_species)
+
+        return Y_projected, transforms.scale(y_t, Yscaler_mean, Yscaler_std)
+
+
+    def _one_step_loss(self, loss_fn, X, y_pred, y_target, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std, raw_weight=0.0):
+        """Loss of one step, from scaled network outputs y_pred and targets y_target. With project_elements: loss on
+        the projected state, plus raw_weight times the loss on the prediction before projection (see docs/theory.md)."""
+
+        if self.project_elements:
+            Y_in, Y_new = self._physical_Yk(X, y_pred, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std)
+            _, y_projected = self._projected_output(X, Y_in, Y_new, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std)
+
+            return loss_fn(y_projected, y_target) + raw_weight * loss_fn(y_pred, y_target)
+
+        # Usual loss
+        else:
+            return loss_fn(y_pred, y_target)
+
+
+    def _rollout_loss(self, model, loss_fn, X, Y_rollout, Y_N2, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std, raw_weight=0.0):
         """Loss of a rollout: mean over the steps of _rollout_step_losses. With one step, it is the usual loss."""
 
-        return self._rollout_step_losses(model, loss_fn, X, Y_rollout, Y_N2, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std).mean()
+        return self._rollout_step_losses(model, loss_fn, X, Y_rollout, Y_N2, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std, raw_weight).mean()
 
 
-    def _rollout_step_losses(self, model, loss_fn, X, Y_rollout, Y_N2, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std):
+    def _rollout_step_losses(self, model, loss_fn, X, Y_rollout, Y_N2, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std, raw_weight=0.0):
         """Loss of each step of a rollout, tensor (n_steps): from the states of X, the network is applied n_steps
         times, each time on its own prediction, with temperatures from enthalpy conservation. Loss on the error of
         the predicted state, in units of the standard deviation of the outputs (see docs/theory.md). All steps use
-        the network of the cluster of the initial state.
+        the network of the cluster of the initial state. With project_elements, the chain carries the projected state,
+        and each step has the loss of _one_step_loss.
 
         X: scaled inputs at t (n, n_in), Y_rollout: transformed (not scaled) mass fractions at t+k*dt
         (n, n_steps, n_species_ANN), Y_N2: mass fractions of N2 [-] (n), not used if N2 is predicted.
@@ -313,14 +360,24 @@ class NN_manager():
             else:
                 target = Y_rollout[:, k]
 
-            losses.append(loss_fn(y_pred, transforms.scale(target, Yscaler_mean, Yscaler_std)))
+            y_target = transforms.scale(target, Yscaler_mean, Yscaler_std)
+
+            # Physical state before this step, for the element projection and the temperature update.
+            # Not Y_in after the first step: clipping would add spurious composition changes to the enthalpy budget
+            Y_old = Y_in if k == 0 else Y_previous
+
+            if self.project_elements:
+                Y_new, y_projected = self._projected_output(X, Y_old, Y_new, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std)
+                losses.append(loss_fn(y_projected, y_target) + raw_weight * loss_fn(y_pred, y_target))
+
+            # Usual loss
+            else:
+                losses.append(loss_fn(y_pred, y_target))
 
             # Next input, built as at inference (NNInference.advance): the temperature update uses the predicted
             # state, not clipped (the clip only applies to the network input)
             if k < n_steps - 1:
                 T = transforms.unscale(X[:, 0], Xscaler_mean[0], Xscaler_std[0])
-                # Not Y_in after the first step: clipping would add spurious composition changes to the enthalpy budget
-                Y_old = Y_in if k == 0 else Y_previous
                 T_new = self._temperature_after(T, Y_old, Y_new, Y_N2)
                 Y_previous = Y_new
                 x_species_new = transforms.transform_species(Y_new, self.species_ANN, self.log_transform_X, self.threshold,
@@ -412,13 +469,13 @@ class NN_manager():
                 # Network applied on its own predictions
                 if self.rollout:
                     loss = self._rollout_loss(model, loss_fn, Xbatch, Y_rollout_train[i:i+self.batch_size], Y_N2_train[i:i+self.batch_size],
-                                              Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std)
+                                              Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std, self.raw_state_loss_weight)
 
                 # One step
                 else:
                     y_pred = model(Xbatch)
                     ybatch = Y_train[i:i+self.batch_size]
-                    loss = loss_fn(y_pred, ybatch)
+                    loss = self._one_step_loss(loss_fn, Xbatch, y_pred, ybatch, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std, self.raw_state_loss_weight)
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -441,12 +498,12 @@ class NN_manager():
                 model.eval()  # evaluation mode
                 with torch.no_grad():
 
-                    # VALIDATION LOSS
+                    # VALIDATION LOSS (with project_elements: on the projected state only, used at inference)
                     y_val_pred = model(X_val)
                     if self.rollout:
                         val_loss = self._rollout_loss(model, loss_fn, X_val, Y_rollout_val, Y_N2_val, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std)
                     else:
-                        val_loss = loss_fn(y_val_pred, Y_val)
+                        val_loss = self._one_step_loss(loss_fn, X_val, y_val_pred, Y_val, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std)
 
                     # Physical mass fractions at t (input) and t+dt (prediction)
                     yval_in, yk_abs = self._physical_Yk(X_val, y_val_pred, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std)
