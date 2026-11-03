@@ -59,6 +59,7 @@ class LearningDatabase(object):
         self.database_name = database_params["database_name"]
         self.input_dtb_file = database_params["dtb_file"]
         self.dt_var = database_params['dt_var']
+        self.rollout = database_params.get("rollout", False)   # Database from time_step_type: rollout (generate_var_dt_dtb.py)
         self.detailed_mechanism  = database_params["mech_file"]
         self.fuel  = database_params["fuel"]
 
@@ -155,6 +156,8 @@ class LearningDatabase(object):
         list_df_Y = []
         if self.dt_var:
             list_dt_arrays = []
+        if self.rollout:
+            list_Y_rollout = []
 
         # Loop on solutions
         for i in range(self.nb_solutions):
@@ -171,8 +174,17 @@ class LearningDatabase(object):
             if self.dt_var:
                 list_dt_arrays.append(data_dt)
                 list_df_Y.append(data_Y)    # 3D array cannot be stored in pandas dataframe
+
             else:
-                list_df_Y.append(pd.DataFrame(data=data_Y, columns=self.col_names_Y))
+
+                # Y is the first step (usual X, Y pairs), Y_rollout all steps, shape (n, n_steps, n_var)
+                if self.rollout:
+                    list_df_Y.append(pd.DataFrame(data=data_Y[:, :, 0], columns=self.col_names_Y))
+                    list_Y_rollout.append(np.moveaxis(data_Y, 2, 1))
+
+                # One step
+                else:
+                    list_df_Y.append(pd.DataFrame(data=data_Y, columns=self.col_names_Y))
 
         h5file_r.close()
 
@@ -184,6 +196,8 @@ class LearningDatabase(object):
             self.dt_array = np.concatenate(list_dt_arrays, axis=0)
         else:
             self.Y = pd.concat(list_df_Y, ignore_index=True)
+        if self.rollout:
+            self.Y_rollout = np.concatenate(list_Y_rollout, axis=0)
 
         print("End of concatenation ! \n")
 
@@ -242,6 +256,9 @@ class LearningDatabase(object):
             self.dt_array = self.dt_array[is_above_temp.values]
         else:
             self.Y = self.Y[is_above_temp].reset_index(drop=True)
+
+        if self.rollout:
+            self.Y_rollout = self.Y_rollout[is_above_temp.values]
 
 
     def clusterize_dataset(self, c_bounds=None):
@@ -520,6 +537,8 @@ class LearningDatabase(object):
             self.Y = self.Y.iloc[choice]
             self.Y = self.Y.reset_index(drop=True)
 
+        if self.rollout:
+            self.Y_rollout = self.Y_rollout[choice]
 
         self.is_resampled = True
 
@@ -607,6 +626,9 @@ class LearningDatabase(object):
             self.dt_array = self.dt_array[selected]
         else:
             self.Y = self.Y.iloc[selected].reset_index(drop=True)
+
+        if self.rollout:
+            self.Y_rollout = self.Y_rollout[selected]
 
         self.is_resampled = True
 
@@ -706,6 +728,9 @@ class LearningDatabase(object):
             self.dt_array = self.dt_array[selected]
         else:
             self.Y = self.Y.iloc[selected].reset_index(drop=True)
+
+        if self.rollout:
+            self.Y_rollout = self.Y_rollout[selected]
 
         self.is_resampled = True
 
@@ -825,6 +850,18 @@ class LearningDatabase(object):
             X_p[cols_to_log_X] = transforms.clip(X_p[cols_to_log_X], self.log_transform_X, self.threshold)
             Y_p[cols_to_log_Y] = transforms.clip(Y_p[cols_to_log_Y], self.log_transform_Y, self.threshold)
 
+            # Rollout targets: states at t+k*dt, transformed as Y, never as differences nor scaled (the rollout loss
+            # compares absolute states, see docs/theory.md). Y_N2: N2 at t, constant if not predicted, for cp in the
+            # temperature update (0 if predicted, then not used).
+            if self.rollout:
+                in_cluster = (X["cluster"]==i_cluster).values
+                species_network = [c for c in Y_cols if self.with_N_chemistry or c != "N2"]
+                columns = [list(self.col_names_Y).index(c) for c in species_network]
+                Y_rollout_p = np.stack([transforms.transform_species(self.Y_rollout[in_cluster, k][:, columns], species_network, self.log_transform_Y,
+                                                                     self.threshold, self.lambda_bct, self.log_excluded_species)
+                                        for k in range(self.Y_rollout.shape[1])], axis=1)
+                Y_N2_p = np.zeros(in_cluster.sum()) if self.with_N_chemistry else X.loc[in_cluster, "N2"].values
+
             # If log transform at input and not at output and output_omega, we need to save un-transformed data
             if self.log_transform_X>0 and self.log_transform_Y==0 and self.output_omegas:
                 if self.dt_var:
@@ -861,7 +898,11 @@ class LearningDatabase(object):
 
 
             # Train validation split
-            X_train, X_val, Y_train, Y_val = train_test_split(X_p, Y_p, train_size=self.train_set_size, random_state=seed)
+            if self.rollout:
+                # Same draw for all arrays: rows stay aligned
+                X_train, X_val, Y_train, Y_val, Y_rollout_train, Y_rollout_val, Y_N2_train, Y_N2_val = train_test_split(X_p, Y_p, Y_rollout_p, Y_N2_p, train_size=self.train_set_size, random_state=seed)
+            else:
+                X_train, X_val, Y_train, Y_val = train_test_split(X_p, Y_p, train_size=self.train_set_size, random_state=seed)
 
             # === SCALERS ===
             # NORMALIZING X
@@ -907,6 +948,12 @@ class LearningDatabase(object):
             #
             dset_Y_val = grp.create_dataset('Y_val', data = Y_val)
             dset_Y_val.attrs['cols'] = np.array(Y_val.columns, dtype=object)
+            #
+            if self.rollout:
+                grp.create_dataset('Y_rollout_train', data = Y_rollout_train).attrs['cols'] = np.array(Y_train.columns, dtype=object)
+                grp.create_dataset('Y_rollout_val', data = Y_rollout_val).attrs['cols'] = np.array(Y_val.columns, dtype=object)
+                grp.create_dataset('Y_N2_train', data = Y_N2_train)
+                grp.create_dataset('Y_N2_val', data = Y_N2_val)
 
             print(f">> Analyze statistics of database for cluster {i_cluster}")
             self.compute_statistical_analysis(X_train, Xscaler, i_cluster)
@@ -940,6 +987,7 @@ class LearningDatabase(object):
 
         return {
             "dt_var": self.dt_var,
+            "rollout": self.rollout,
             "fuel": self.fuel,
             "log_transform_X": self.log_transform_X,
             "log_transform_Y": self.log_transform_Y,
@@ -1161,6 +1209,9 @@ class LearningDatabase(object):
 
         if self.log_transform_X==0 and self.log_transform_Y>0:
             sys.exit("ERROR: log_transform_Y cannot be active if log_transform_X==0 !")
+
+        if self.rollout and self.dt_var:
+            sys.exit("ERROR: rollout is done with a constant dt, it cannot be used with dt_var !")
 
     # 2-D joint PDF plotting of two variable
     def density_scatter(self, var_x , var_y, sort = True, bins = 100):

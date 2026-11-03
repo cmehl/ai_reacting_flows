@@ -7,7 +7,7 @@ of database processing and generation. Databases processed before this was intro
 such attributes: their parameters are then read from the YAML files, as before.
 
 Parameters (keys of the dictionary):
-    dt_var, fuel                                 database_params of dtb_processing.yaml
+    dt_var, rollout, fuel                        database_params of dtb_processing.yaml
     log_transform_X, log_transform_Y, lambda_bct,
     threshold, output_omegas, with_N_chemistry,
     log_excluded_species                         data_processing of dtb_processing.yaml
@@ -95,6 +95,7 @@ def _read_yaml_parameters(dataset_path, run_folder):
 
     return {
         "dt_var": database_params["dt_var"],
+        "rollout": database_params.get("rollout", False),
         "fuel": database_params["fuel"],
         "log_transform_X": data_processing["log_transform_X"],
         "log_transform_Y": data_processing["log_transform_Y"],
