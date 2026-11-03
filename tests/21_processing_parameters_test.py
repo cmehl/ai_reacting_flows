@@ -30,7 +30,7 @@ dtb_processing_parameters = {
     "train_set_size": 0.75,
 }
 
-expected = {"dt_var": False, "fuel": "H2", "log_transform_X": 2, "log_transform_Y": 2, "lambda_bct": 0.2,
+expected = {"dt_var": False, "rollout": False, "fuel": "H2", "log_transform_X": 2, "log_transform_Y": 2, "lambda_bct": 0.2,
             "threshold": 1.0e-10, "output_omegas": True, "with_N_chemistry": False, "log_excluded_species": ["H2O"],
             "clustering_method": "kmeans", "clusterize_on": "phys", "nb_clusters": 1, "pv_species": ["H2O"]}
 

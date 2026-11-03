@@ -10,6 +10,7 @@ import sys
 import numpy as np
 from scipy.stats import gaussian_kde
 import cantera as ct
+import torch
 
 #==============================================================================
 # COMBUSTION RELATED FUNCTIONS
@@ -223,6 +224,7 @@ def species_h_cp(T, W_k, T_mid, a_low, a_high):
     temperatures T [K] (n), from their NASA 7-coefficient polynomials (see get_nasa7_coefficients), with
     W_k: molar masses [kg/kmol] (n_species). Ideal gas: they do not depend on pressure. Vectorized
     equivalent of the Cantera properties of a SolutionArray, which loops over the states.
+    All arguments are numpy arrays, or all torch tensors (rollout training).
 
         cp_k / r_k = a0 + a1 T + a2 T^2 + a3 T^3 + a4 T^4
         h_k / r_k = a0 T + a1 T^2/2 + a2 T^3/3 + a3 T^4/4 + a4 T^5/5 + a5,     r_k = R / W_k
@@ -230,7 +232,10 @@ def species_h_cp(T, W_k, T_mid, a_low, a_high):
     (McBride, Gordon & Reno, NASA TM-4513, 1993, https://ntrs.nasa.gov/citations/19940013151)
     """
 
-    T = np.asarray(T, dtype=float)[:, None]
+    is_tensor = isinstance(T, torch.Tensor)
+    where = torch.where if is_tensor else np.where
+
+    T = T[:, None] if is_tensor else np.asarray(T, dtype=float)[:, None]
     r_k = ct.gas_constant / W_k
 
     # Polynomials of one temperature range, for all states and species
@@ -244,8 +249,8 @@ def species_h_cp(T, W_k, T_mid, a_low, a_high):
 
     # Range of each species at each temperature (as in Cantera: low range up to T_mid included)
     high = T > T_mid
-    h_k = r_k * np.where(high, h_high, h_low)
-    cp_k = r_k * np.where(high, cp_high, cp_low)
+    h_k = r_k * where(high, h_high, h_low)
+    cp_k = r_k * where(high, cp_high, cp_low)
 
     return h_k, cp_k
 

@@ -7,6 +7,7 @@ Models and algorithms used in ARF, with their equations. The [README](../README.
 + [Temperature update of the ANN chemistry step](#temperature-update-of-the-ann-chemistry-step)
 + [Element conservation of the ANN mass fractions (`yk_renormalization`)](#element-conservation-of-the-ann-mass-fractions-yk_renormalization)
 + [Hybrid ANN/CVODE model (`hybrid_ann_cvode`)](#hybrid-anncvode-model-hybrid_ann_cvode)
++ [Rollout training](#rollout-training)
 + [Simulation error](#simulation-error)
 + [Speed-up benchmark](#speed-up-benchmark)
 
@@ -111,6 +112,33 @@ In the paper (H2 ignition in 2-D turbulence), both criteria correlate with the e
 $$E = \frac{1}{N_S + 1} \left( \sum_{k=1}^{N_S} \frac{|f(Y_k^{NN}) - f(Y_k^{ref})|}{\sigma_k} + \frac{|T^{NN} - T^{ref}|}{\sigma_T} \right)$$
 
 with $f$ the transform of the network inputs and $\sigma$ the standard deviations of the training inputs. The database targets contain only the species: $T^{ref}$ and $T^{NN}$ at $t+dt$ both follow from the enthalpy conservation from the state at $t$ (`NNInference.temperature_after`). $e_\Sigma$ and $e_e$ of the prediction (before element correction) are plotted against $E$ in `plots_validation/hybrid_e_sum.png` and `hybrid_e_elements.png`, colored by the temperature at $t$. The plot of the selected criterion shows `hybrid_ann_cvode_tol` and the fraction of states above it, i.e. the fraction $\alpha$ of CVODE calls expected on states like those of the database. A criterion is useful if large $E$ go with large proxies.
+
+# Rollout training
+
+The network is usually trained on one step: from a true state at $t$, it predicts the state at $t+dt$. In a simulation it is applied on its own predictions, on states slightly different from the database. Rollout training (`rollout: true` in `dtb_processing.yaml`, `NN_manager._rollout_loss`) applies it $n$ times in a row during training, and the gradient goes through the whole chain.
+
+**Database.** From each state of the database, `generate_multi_dt.py` with `time_step_type: rollout` integrates a constant-pressure reactor over $k\,dt$, $k = 1 \dots n$ (`rollout_dt`, `rollout_steps`): chemistry only, without mixing. Integrating from the initial state to $k\,dt$ gives the same trajectory as $k$ successive steps of $dt$.
+
+**Chain.** Noting $\hat{Y}^{(0)} = Y(t)$ and $\hat{T}^{(0)} = T(t)$, at step $k$ the network input is built from $\hat{Y}^{(k-1)}$ and $\hat{T}^{(k-1)}$ exactly as at inference (`NNInference.advance`), and its output gives $\hat{Y}^{(k)}$. The temperature follows from the [conservation of enthalpy](#temperature-update-of-the-ann-chemistry-step), with the same formula as at inference, so that the network sees its own temperature errors:
+
+$$\hat{T}^{(k)} = \hat{T}^{(k-1)} - \frac{\sum_i h_i(\hat{T}^{(k-1)}) \left( \hat{Y}_i^{(k)} - \hat{Y}_i^{(k-1)} \right)}{\sum_i c_{p,i}(\hat{T}^{(k-1)}) \, \hat{Y}_i^{(k-1)}}$$
+
+N2, if not predicted, keeps its value at $t$ (`Y_N2_train`, `Y_N2_val` in `training_data.h5`); it only contributes to $c_p$. No element correction is applied in the chain.
+
+**Loss.** The loss is on the error of the predicted state, for outputs as mass fractions or as differences. With $f$ the transform of the outputs, $Y_k(t + k\,dt)$ the reference (`Y_rollout_train`, `Y_rollout_val`: transformed, not scaled) and $\sigma$ the standard deviation of each output (`Yscaler`):
+
+$$\mathcal{L} = \frac{1}{n} \sum_{k=1}^{n} \ell \left( \frac{f(\hat{Y}^{(k)}) - f(Y(t + k\,dt))}{\sigma} \right)$$
+
+with $\ell$ the loss function (`loss`: MSE, L1 or Huber). With `output_omegas: true`, the network output is compared to the difference from the *predicted* state, $f(Y(t + k\,dt)) - f(\hat{Y}^{(k-1)})$, with the gradient of $\hat{Y}^{(k-1)}$. The errors accumulated over the previous steps therefore stay in the loss, as with `output_omegas: false`. Comparing it to the true increment $f(Y(t + k\,dt)) - f(Y(t + (k-1)\,dt))$ would only penalize the error made at each step, not its accumulation. For $n=1$, $\mathcal{L}$ is the usual loss. The validation loss, which selects the best model and drives `ReduceLROnPlateau`, is the same rollout loss; the conservation diagnostics of training stay on the first step. After training, the validation loss of each step $k$ with the best model is written in `training/cluster_<i>/rollout_val_loss_per_step.csv` and in the training log: it shows how the error grows along the chain.
+
+**Clusters.** Networks are trained one cluster at a time: a chain uses the network of the cluster of its initial state at all steps, even if the state moves to another cluster, while inference picks the cluster at each step.
+
+**Limitation with Box-Cox.** Rollout is not validated with Box-Cox (`log_transform: 2`); with the logarithm, the inverse $\exp(y)$ is always valid and positive. The inverse Box-Cox is $Y = (\lambda y + 1)^{1/\lambda}$, and nothing keeps the network output above $y = -1/\lambda$, which corresponds to $Y = 0$. Below this limit the base $\lambda y + 1$ is negative:
+
++ If $1/\lambda$ is not an integer (e.g. $\lambda = 0.3$), $Y$ is NaN.
++ If $1/\lambda$ is an even integer (e.g. the default $\lambda = 0.1$), the result is valid but mirrored around the limit: $y = -11$ behaves like $y = -9$. The gradient of the next input with respect to the output changes sign, and large undershoots give non-physical values ($y = -25$ gives $Y \approx 58$).
+
+The same formula is used at inference, but in rollout training it also enters the gradients and the temperature update. Limiting the base in `transforms.inverse` would have to use a small positive value and not 0: at $Y = 0$ the derivative of $Y^\lambda$ is infinite, and the gradient becomes NaN.
 
 # Simulation error
 

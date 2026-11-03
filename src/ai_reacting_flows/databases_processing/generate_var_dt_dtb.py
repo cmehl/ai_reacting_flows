@@ -1,7 +1,8 @@
 """Generate variable-∆t learning database from stochastic or flamelet HDF5 data.
 
 This script reacts each state for multiple time steps using Cantera and writes
-an augmented database including the chosen ∆t values.
+an augmented database including the chosen ∆t values. With time_step_type "rollout",
+these values are dt, 2 dt, ..., n dt: the reference trajectory of rollout training.
 
 The main entry point is `GenerateVariable_dt`, typically called from a driver
 script with MPI (see `scripts/NH3_0D_REACTORS/generate_multi_dt.py`).
@@ -28,7 +29,6 @@ def _validate_params(params: dict) -> None:
         "dtb_file",
         "mech_file",
         "time_step_type",
-        "time_step_range",
         "new_file_name",
     ]
 
@@ -36,8 +36,18 @@ def _validate_params(params: dict) -> None:
         if key not in params:
             raise KeyError(f"Missing required parameter '{key}' in data-gen configuration")
 
-    if params["time_step_type"] not in {"set", "random"}:
-        raise ValueError("time_step_type must be either 'set' or 'random'")
+    if params["time_step_type"] not in {"set", "random", "rollout"}:
+        raise ValueError("time_step_type must be either 'set', 'random' or 'rollout'")
+
+    # Keys of each type of time steps
+    if params["time_step_type"] == "rollout":
+        type_keys = ["rollout_dt", "rollout_steps"]
+    else:
+        type_keys = ["time_step_range"]
+
+    for key in type_keys:
+        if key not in params:
+            raise KeyError(f"Missing required parameter '{key}' for time_step_type '{params['time_step_type']}'")
 
 
 def _build_dtb_folder(dtb_type: str, results_folder_suffix: str) -> str:
@@ -112,6 +122,9 @@ def GenerateVariable_dt(dtb_type: str, params: dict, comm: "MPI.Comm") -> str:
         dt_list = list(params["time_step_range"])
         # if dt_simu not in dt_list: #Not OK if time_step is a dict (multi dt), so we let the user make sure to manually enter the dt_simu he wants
         #     dt_list.append(dt_simu)
+    elif time_step_type == "rollout":
+        # States after 1, 2, ..., rollout_steps successive steps of rollout_dt [s]
+        dt_list = float(params["rollout_dt"]) * np.arange(1, int(params["rollout_steps"]) + 1)
     else:  # "random"
         dt_range = params["time_step_range"]
         nb_dt = params["nb_dt"]
