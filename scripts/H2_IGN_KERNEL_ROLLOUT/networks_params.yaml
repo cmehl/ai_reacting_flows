@@ -39,3 +39,5 @@ learning:
   - 500
   - 500
   decay_rate: 0.9991
+  project_elements: false      # Element projection in the loss; if true, use yk_renormalization: 3 in simulations
+  raw_state_loss_weight: 1.0   # Weight of the loss on the prediction before projection, only used with project_elements
