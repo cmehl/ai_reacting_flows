@@ -139,7 +139,7 @@ These exchanges happen once per step of the generation, not at each time step: p
 `generate_var_dt_dtb.py` (`GenerateVariable_dt`):
 
 + **Split**: rank 0 reads the database and sends a contiguous block of states to each rank (`comm.scatter`, once).
-+ **Time steps**: each rank draws its own random $dt$ (seed `1234 + rank`), and integrates its states over each of them.
++ **Time steps**: each rank draws its own random $dt$ (seed `1234 + rank`), and integrates its states over each of them. With `set` and `rollout`, all ranks use the same list of $dt$.
 + **Writing**: gathering all results on rank 0 is not possible for large databases (mpi4py messages are limited to 2 GB). Each rank therefore writes its own group `ITERATION_<rank>` in the h5 file, in turn: rank 0 creates the file, and each rank waits for a message (token) from the previous rank before writing, then sends it to the next one (`comm.recv`, `comm.send`). The file has one group per rank.
 
 # Tests
