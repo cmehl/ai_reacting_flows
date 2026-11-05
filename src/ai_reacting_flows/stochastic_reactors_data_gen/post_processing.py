@@ -5,6 +5,7 @@ import pandas as pd
 from scipy.interpolate import interpn
 import cantera as ct
 import h5py
+import oyaml as yaml
 
 import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize 
@@ -557,6 +558,36 @@ class StochDatabase(object):
             
         fig.savefig(self.save_folder + f"/PDF_{var}_plot.png")
     
+
+    #--------------------------------------------------------
+    # Age of the particles
+    #--------------------------------------------------------
+
+    def plot_age_time(self):
+        """Evolution of the mean and standard deviation of the age [s] of the active particles, with the constant
+        residence time residence_time [s] of dtb_params.yaml (dashed line), if there is one."""
+
+        stats = self.df.groupby("Time")["Age"].agg(["mean", "std"])
+
+        fig, ax = plt.subplots()
+        ax.plot(stats.index, stats["mean"], color="k", label="mean")
+        ax.plot(stats.index, stats["std"], color="b", label="std")
+
+        # Residence time (none in a closed reactor)
+        with open(self.stoch_dtb_folder + "/dtb_params.yaml", "r") as file:
+            residence_time = yaml.safe_load(file).get("residence_time")
+
+        if residence_time is not None:
+            ax.axhline(float(residence_time), color="r", ls="--", label=r"$\tau_{res}$")
+
+        ax.set_xlabel(r"$t$ $[s]$")
+        ax.set_ylabel(r"$a$ $[s]$")
+        ax.legend()
+
+        fig.tight_layout()
+
+        fig.savefig(self.save_folder + "/age_time_plot.png")
+
 
     #--------------------------------------------------------
     # Points density

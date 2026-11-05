@@ -5,6 +5,7 @@ Models and algorithms used in ARF, with their equations. The [README](../README.
 
 + [EMST mixing model (`EMST_POPE`)](#emst-mixing-model-emst_pope): stochastic reactors
 + [Temperature update of the ANN chemistry step](#temperature-update-of-the-ann-chemistry-step)
++ [Renewal of the particles (`residence_time`)](#renewal-of-the-particles-residence_time)
 + [Element conservation of the ANN mass fractions (`yk_renormalization`)](#element-conservation-of-the-ann-mass-fractions-yk_renormalization)
 + [Hybrid ANN/CVODE model (`hybrid_ann_cvode`)](#hybrid-anncvode-model-hybrid_ann_cvode)
 + [Rollout training](#rollout-training)
@@ -18,7 +19,7 @@ Model of S. Subramaniam & S.B. Pope, Combust. Flame 115 (1998) 487-514, translat
 
 **Variables.** The particles have compositions $f_{ij}$ ($Y_k$, $h_s$ and $Y_{c,u}$ are mixed), weights $w_i$ (`Mass`) and an age property $a_i$. The tree is built on the scaled compositions $g_{ij} = f_{ij} / f_j^{scale}$: as in the example of `emst.f`, $f^{scale} = 0.1$ for the mass fractions, and $h_s$ and $Y_{c,u}$ are not used for the tree ($f^{scale} = 10^{16}$). The variance function $VF = \sum_j \mathrm{var}(g_j)$ (weighted) decays as $\exp(-\Delta s)$ in expectation.
 
-**Age property** (`EMST_age` in `solutions.h5`, `Particle.emst_age`): remaining time of the current state, in units of $\tau$; $a_i > 0$: the particle is mixing, $a_i < 0$: it is not. The durations of the states are uniform in $[0.0178, 0.3157]$ (mixing) and $[0.1666, 0.1667]$ (non-mixing). Initially, a particle is mixing with the probability $p_0 = \langle Z_1 \rangle / (\langle Z_0 \rangle + \langle Z_1 \rangle) \approx 0.5$, with an age drawn from the stationary distribution of the remaining time (density $\propto 1$ below the shortest duration, decreasing linearly to 0 at the longest). After mixing over $\Delta s$, $|a_i|$ decreases by $\Delta s$; a particle whose state ends switches to the other state with a new duration.
+**Age property** (`Particle.emst_age`, internal to the model, not the age `Age` of `solutions.h5`): remaining time of the current state, in units of $\tau$; $a_i > 0$: the particle is mixing, $a_i < 0$: it is not. The durations of the states are uniform in $[0.0178, 0.3157]$ (mixing) and $[0.1666, 0.1667]$ (non-mixing). Initially, a particle is mixing with the probability $p_0 = \langle Z_1 \rangle / (\langle Z_0 \rangle + \langle Z_1 \rangle) \approx 0.5$, with an age drawn from the stationary distribution of the remaining time (density $\propto 1$ below the shortest duration, decreasing linearly to 0 at the longest). After mixing over $\Delta s$, $|a_i|$ decreases by $\Delta s$; a particle whose state ends switches to the other state with a new duration.
 
 **Mixing step** (repeated until $\Delta s$ is mixed, each over at most $0.0178$, the shortest mixing duration):
 
@@ -34,6 +35,19 @@ $$w_i \frac{d\phi_i}{ds} = -\alpha \sum_{\nu \ni i} B_\nu (\phi_i - \phi_{j_\nu}
 
 When the range of the scaled compositions is below $4 \times 10^{-4}$ (or the largest variance below $10^{-12}$), the IEM model is used instead ($g \leftarrow g - (1 - e^{-\Delta s/2})(g - \langle g \rangle)$). Steps smaller than $10^{-6}$ are done by mixing over $2 \times 10^{-6}$, accepted with a probability.
 
+
+# Renewal of the particles (`residence_time`)
+
+Without renewal the particles form a closed reactor: once all have burnt and mixed, only near-equilibrium states are added to the database. With `residence_time` $\tau_{res}$ (`ParticlesCloud._renew_particles`), the particles form a partially stirred reactor: from `renewal_start_time`, during each $dt$ each active particle returns to the state of its inlet with the probability
+
+$$p = 1 - \exp(-dt / \tau_{res})$$
+
+The residence times then follow an exponential distribution of mean $\tau_{res}$. Fresh gases keep mixing with hot products, so partially reacted states keep being produced, and a few old particles still sample slow chemistry in burnt gases. Particles are not selected by their state.
+
++ **Database pairs.** Renewal is done after mixing, so the pairs $X \to Y$ of the database, stored around the reaction step, stay pure chemistry.
++ **State of a renewed particle.** $h_s$, $P$, $Y_k$ and $Y_{c,u}$ of its inlet, mass 1; age 0; a new age property is drawn as at initialization with `EMST_POPE`. Its inlet keeps its share of the inflow: a hot inlet acts as a permanent pilot.
++ **Age.** The age $a$ of a particle (`Age` in `solutions.h5`) adds up $dt$ while it is active and is reset to 0 at renewal, also in a closed reactor. With renewal, its distribution tends to an exponential: after the step, the mean and the standard deviation of $a$ tend to about $\tau_{res}$ (for the mean, $dt / (e^{dt/\tau_{res}} - 1) \approx \tau_{res} - dt/2$). `StochDatabase.plot_age_time` plots their evolution.
++ **Choice of $\tau_{res}$.** If it is too short the reactor can blow out, if it is too long the particles are mostly burnt. It is compared to the mixing time and the chemical times.
 
 # Element conservation of the ANN mass fractions (`yk_renormalization`)
 

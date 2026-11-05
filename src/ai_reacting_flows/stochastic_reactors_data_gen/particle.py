@@ -49,6 +49,10 @@ class Particle(object):
         # Number of state variables
         self.nb_state_vars = len(state_ini)
         
+        # Inlet state [T, P, Y] and Yc_u, kept for the renewal of the particle (residence_time)
+        self.state_ini = state_ini
+        self.Yc_u_ini = Yc_u_ini
+
         # Get temperature and mass fractions from state_ini
         self.T = state_ini[0]
         self.P = state_ini[1]
@@ -92,6 +96,9 @@ class Particle(object):
         # Age property of the EMST_POPE mixing model [-] (see emst_pope.py): remaining time of the mixing
         # (> 0) or non-mixing (< 0) state, in units of mixing_time. Set by ParticlesCloud, NaN for other models.
         self.emst_age = np.nan
+
+        # Age [s]: time since the particle entered the reactor, reset to 0 at renewal (residence_time)
+        self.age = 0.0
         self.compute_progress_variable(parent)
         #
         self.compute_heat_release_rate(parent)
@@ -270,6 +277,35 @@ class Particle(object):
         # Add required states if needed
         self.T = parent.gas.T
         self.X = parent.gas.X
+
+
+    def renew(self, parent : 'ParticlesCloud'):
+        """Particle back to the state of its inlet (residence_time, see docs/theory.md). The derived variables
+        (progress variable, mixture fraction, HRR...) are updated with those of the other particles after mixing.
+        Its age [s] is reset to 0."""
+
+        self.T = self.state_ini[0]
+        self.P = self.state_ini[1]
+        self.Y = self.state_ini[2:].copy()
+
+        parent.gas.TPY = self.T, self.P, self.Y
+        self.X = parent.gas.X
+        self.hs = parent.gas.HP[0]
+
+        self.mass = 1.0
+        self.mass_k = self.mass * self.Y
+        self.Hs = self.mass * self.hs
+
+        self.state = np.empty(self.nb_state_vars)
+        self.state[0] = self.hs
+        self.state[1] = self.P
+        self.state[2:] = self.Y
+
+        # Progress variable of the inlet mixture
+        self.Yc_u = self.Yc_u_ini
+        self.recompute_Yc_eq = True
+
+        self.age = 0.0
 
 
     def compute_lewis_numbers(self, parent : 'ParticlesCloud'):

@@ -29,7 +29,7 @@ sns.set()
 # Attributes of the particles changed during the simulation, exchanged between MPI ranks as one array of floats
 # per particle (each rank keeps its own copy of the particles; the other attributes are constant)
 EXCHANGED_SCALARS = ["T", "P", "hs", "Hs", "mass", "Yc_u", "Yc_eq", "recompute_Yc_eq", "prog_var", "equiv_ratio",
-                     "mix_frac", "hrr", "emst_age"]
+                     "mix_frac", "hrr", "emst_age", "age"]
 EXCHANGED_ARRAYS = ["Y", "X", "mass_k", "state"]
 
 # EMST_POPE: scale of the mass fractions for the tree [-] (example of emst.f: the tree is built on Y / 0.1,
@@ -205,6 +205,14 @@ class ParticlesCloud(object):
         # Chemistry temperature threshold
         self.T_threshold = float(data_gen_parameters["T_threshold"])
 
+        # Renewal of the particles: mean residence time [s] (None: closed reactor), from renewal_start_time [s].
+        # Particles drawn by rank 0 only, as for mixing
+        self.residence_time = data_gen_parameters.get("residence_time")
+        if self.residence_time is not None:
+            self.residence_time = float(self.residence_time)
+        self.renewal_start_time = float(data_gen_parameters.get("renewal_start_time", 0.0))
+        self.renewal_rng = np.random.default_rng(0)
+
         # CURL with differential diffusion
         if self.mixing_model=="CURL_MODIFIED_DD":
             
@@ -320,7 +328,7 @@ class ParticlesCloud(object):
         # =====================================================================
 
         # Columns of data array with solution and post-processing variables
-        self.cols_all_states = ['Temperature'] + ['Pressure'] + self.species_names + ['Mix_frac'] + ['Equiv_ratio'] + ['Prog_var'] + ['HRR'] +  ['Time'] + ['Particle_number'] + ['Inlet_number'] + ['Y_C', 'Y_H', 'Y_O', 'Y_N'] + ['Mass'] + ['EMST_age']
+        self.cols_all_states = ['Temperature'] + ['Pressure'] + self.species_names + ['Mix_frac'] + ['Equiv_ratio'] + ['Prog_var'] + ['HRR'] +  ['Time'] + ['Particle_number'] + ['Inlet_number'] + ['Y_C', 'Y_H', 'Y_O', 'Y_N'] + ['Mass'] + ['Age']
         
         # Initialize mean trajectories
         if self.calc_mean_traj:
@@ -459,8 +467,11 @@ class ParticlesCloud(object):
         
         # Advance molecular diffusion
         # Diffusion is applied by rank 0, the mixed states are then sent to every processor
+        # Renewal of particles after mixing, outside of the X -> Y chemistry pairs of the database
         if self.rank==0:
             self._apply_diffusion()
+            self._increase_ages(dt)
+            self._renew_particles()
         self._share_states_of_root()
 
         t3 = perf_counter()
@@ -570,6 +581,41 @@ class ParticlesCloud(object):
         elif self.mixing_model=="EMST_POPE":
             self._mix_emst_pope()
 
+
+
+    def _increase_ages(self, dt):
+        """Age [s] of the active particles (time since they entered the reactor) increased by dt [s]."""
+
+        for part in self.particles_list:
+            if part.is_active:
+                part.age += dt
+
+
+    def _renew_particles(self):
+        """Partially stirred reactor: during dt, each active particle returns to the state of its inlet with the
+        probability 1 - exp(-dt / residence_time), which gives an exponential distribution of the residence times,
+        of mean residence_time [s]. See docs/theory.md."""
+
+        # Closed reactor
+        if self.residence_time is None:
+            return
+
+        # Renewal not started
+        if self.time < self.renewal_start_time:
+            return
+
+        probability = 1.0 - math.exp(-self.dt[self.iteration] / self.residence_time)
+
+        active_particles = [p for p in self.particles_list if p.is_active]
+        renewed = [p for p in active_particles if self.renewal_rng.random() < probability]
+
+        for part in renewed:
+            part.renew(self)
+
+        # EMST_POPE: new ages, drawn as at initialization
+        if self.mixing_model == "EMST_POPE":
+            for part, age in zip(renewed, emst_pope.init_ages(len(renewed), self.emst_rng)):
+                part.emst_age = age
 
 
     def _count_active_particles(self) -> None:
@@ -1061,7 +1107,7 @@ class ParticlesCloud(object):
             arr[i,part.nb_state_vars+6] = part.num_inlet
             arr[i,part.nb_state_vars+7:part.nb_state_vars+11] = np.dot(self.A_atomic, part.Y)   # Elements mass fractions (C, H, O, N)
             arr[i,part.nb_state_vars+11] = part.mass
-            arr[i,part.nb_state_vars+12] = part.emst_age   # Age property of EMST_POPE (NaN for other mixing models)
+            arr[i,part.nb_state_vars+12] = part.age
 
         # Store initial solution in h5 file
         f = h5py.File(f"{self.results_folder}/{self.solution_file}","a")
@@ -1109,6 +1155,11 @@ class ParticlesCloud(object):
         self.mean_T_vect.append(self.mean_T)
         self.stdev_T_vect.append(self.stdev_T)
         self.ratio_T_stdev = self.stdev_T / self.mean_T
+
+        # Mean and standard deviation of the age [s] (active particles only)
+        Age_vect = np.array([part.age for part in self.particles_list if part.is_active])
+        self.mean_age = Age_vect.mean()
+        self.stdev_age = Age_vect.std()
 
     def plot_stats(self):
             
@@ -1177,6 +1228,8 @@ class ParticlesCloud(object):
         PRINT(f"  >> Mean temperature of particles: {self.mean_T:4.1f} K")
         PRINT(f"  >> Temperature standard deviation: {self.stdev_T:4.1f} K")
         PRINT(f"             => Ratio: {self.ratio_T_stdev:4.3f}")
+        PRINT(f"  >> Mean age of particles: {self.mean_age:6.5e} s")
+        PRINT(f"  >> Age standard deviation: {self.stdev_age:6.5e} s")
         PRINT("CPU costs:")
         PRINT(f"  >> Time spent for diffusion: {last_line['Diffusion']:5.4f} s")
         PRINT(f"  >> Time spent for reactions: {last_line['Reaction']:5.4f} s")

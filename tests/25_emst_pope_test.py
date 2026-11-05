@@ -9,8 +9,8 @@ Check:
 - test case of emst_test.f (Ren, Subramaniam & Pope): 100 particles, 3 compositions, random weights and
   scales, one composition initially a delta function, random time steps: the variance function decays
   as exp(-s), the means are conserved;
-- stochastic reactors with EMST_POPE (air and H2 inlets): EMST_age written in solutions.h5 with ages in
-  their bounds, H element and enthalpy means conserved, mixture fraction variance decreasing;
+- stochastic reactors with EMST_POPE (air and H2 inlets): age property of the particles in its bounds, H element
+  and enthalpy means conserved, mixture fraction variance decreasing;
   EMST_SIMPLIFIED still runs, an unknown mixing model raises an error.
 
 Independent of the other tests.
@@ -23,6 +23,7 @@ import oyaml as yaml
 import pytest
 import ai_reacting_flows.stochastic_reactors_data_gen.emst_pope as ep
 from ai_reacting_flows.stochastic_reactors_data_gen.main import generate_stochastic_database
+from ai_reacting_flows.stochastic_reactors_data_gen.particles_cloud import ParticlesCloud
 
 import DummyComm as dc
 
@@ -103,8 +104,15 @@ def run_stochastic_reactors(tmp_path, mixing_model):
 def test_stochastic_reactors_emst_pope(tmp_path):
     states = run_stochastic_reactors(tmp_path, "EMST_POPE")
 
-    # Ages written, within the durations of the states
-    ages = np.concatenate([df["EMST_age"].values for df in states])
+    # Age property of the particles, within the durations of the states
+    with open("dtb_params.yaml", "r") as file:
+        params = yaml.safe_load(file)
+    params["results_folder_suffix"] = "EMST_AGES"
+    os.makedirs("STOCH_DTB_EMST_AGES")
+    cloud = ParticlesCloud(params, dc.DummyComm())
+    for _ in range(5):
+        cloud.advance_time(1.0e-6)
+    ages = np.array([part.emst_age for part in cloud.particles_list])
     assert np.all(np.isfinite(ages))
     assert ages.max() <= ep.Z1_UPPER and ages.min() >= -ep.Z0_UPPER
 
@@ -120,7 +128,6 @@ def test_stochastic_reactors_emst_pope(tmp_path):
 
 def test_stochastic_reactors_other_models(tmp_path):
     states = run_stochastic_reactors(tmp_path, "EMST_SIMPLIFIED")
-    assert np.all(np.isnan(states[-1]["EMST_age"]))
     assert states[-1]["Mix_frac"].var() < states[0]["Mix_frac"].var()
 
     with pytest.raises(ValueError, match="Input error"):

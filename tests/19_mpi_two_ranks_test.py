@@ -125,7 +125,7 @@ def test_two_ranks(tmp_path):
         # HRR of nearly unreacted particles (sum of terms that cancel) has no relative accuracy: absolute
         # tolerance from the largest HRR
         hrr = cols.index("HRR")
-        assert np.allclose(np.delete(x, hrr, axis=1), np.delete(y, hrr, axis=1), rtol=1.0e-5, atol=1.0e-12, equal_nan=True), name   # EMST_age NaN (CURL)
+        assert np.allclose(np.delete(x, hrr, axis=1), np.delete(y, hrr, axis=1), rtol=1.0e-5, atol=1.0e-12), name
         assert np.allclose(x[:, hrr], y[:, hrr], rtol=1.0e-5, atol=1.0e-5 * np.max(np.abs(x[:, hrr]))), name
 
     # Multi-dt generation on 2 ranks
