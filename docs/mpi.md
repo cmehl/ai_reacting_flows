@@ -19,16 +19,16 @@ Training and testing do not use MPI.
 
 + **Each rank keeps its own copy of all the particles for the whole run.** All ranks build the same particles at initialization (same inputs; the ages of `EMST_POPE` are drawn with the same seed on all ranks). The attributes that never change (species names, molar masses, atomic matrices, inlet number, ...) are therefore never exchanged.
 + **The chemistry and the derived variables are distributed**: each rank computes its share of the particles. The derived variables are the equivalence ratio, the progress variable (which needs an equilibrium computation, the most expensive part), the mixture fraction and the heat release rate.
-+ **Mixing and writing are done by rank 0 only.** The mixing pairs of `CURL` and `CURL_MODIFIED` are also drawn by rank 0 only.
++ **Mixing and writing are done by rank 0 only.** The mixing pairs of `CURL` and `CURL_MODIFIED` are also drawn by rank 0 only, as well as the particles renewed after mixing (`residence_time`), which only change exchanged attributes. Rank 0 also increases the ages of the particles.
 + **After each step, all ranks get the states of all particles**: only the attributes that change during the simulation are exchanged, packed as an array of floats with one row per particle.
 
 Exchanged attributes (`EXCHANGED_SCALARS` and `EXCHANGED_ARRAYS`, top of `particles_cloud.py`), for example with the H2 mechanism (9 species):
 
-| Scalars (13) | `T`, `P`, `hs`, `Hs`, `mass`, `Yc_u`, `Yc_eq`, `recompute_Yc_eq` (flag, sent as 0.0 or 1.0), `prog_var`, `equiv_ratio`, `mix_frac`, `hrr`, `emst_age` |
+| Scalars (14) | `T`, `P`, `hs`, `Hs`, `mass`, `Yc_u`, `Yc_eq`, `recompute_Yc_eq` (flag, sent as 0.0 or 1.0), `prog_var`, `equiv_ratio`, `mix_frac`, `hrr`, `emst_age`, `age` |
 |---|---|
 | Arrays | `Y` (9), `X` (9), `mass_k` (9), `state` (2 + 9: $h_s$, $P$, $Y_k$) |
 
-One row per particle: 13 + 9 + 9 + 9 + 11 = 51 floats.
+One row per particle: 14 + 9 + 9 + 9 + 11 = 52 floats.
 
 **Warning:** a particle attribute that starts changing during the simulation (e.g. in a new mixing model) must be added to `EXCHANGED_SCALARS` or `EXCHANGED_ARRAYS`. Otherwise the other ranks keep its old value, without any error. Test 19 (1 against 2 ranks) only detects it if the attribute changes what is written in `solutions.h5`. Attributes used only by rank 0 need not be exchanged, as the particles of rank 0 are never replaced: e.g. `Le_k` of `CURL_MODIFIED_DD`, used in mixing.
 
@@ -40,7 +40,7 @@ rank 0 writes the states in solutions.h5 (and X)       identical
 _apply_reactions: each rank its share, _gather_states  identical
 _update_vars:     each rank its share, _gather_states  identical
 rank 0 writes the Y states (build_ml_dtb)
-rank 0 mixes (_apply_diffusion)                        rank 0 differs
+rank 0 mixes (_apply_diffusion), renews particles      rank 0 differs
 _share_states_of_root                                  identical
 _update_vars:     each rank its share, _gather_states  identical
 statistics and termination check, on every rank
@@ -120,7 +120,7 @@ Measured on the H2 ignition case (`scripts/H2_IGN_KERNEL` inputs: 600 particles,
 | Arrays (`Allgatherv`, `Bcast`), contiguous blocks | 112 ms | 71 ms | 114 ms |
 | Arrays, round-robin | 118 ms | 63 ms | 99 ms |
 
-Pickling cost even on one rank (mpi4py serializes the objects anyway): a particle is 1.9 kB pickled, mostly constants, against 51 floats (0.4 kB) exchanged now. With more ranks, the time left in the exchanges is mostly waiting: for the slowest rank in the chemistry, and for rank 0, which mixes and writes alone.
+Pickling cost even on one rank (mpi4py serializes the objects anyway): a particle is 1.9 kB pickled, mostly constants, against 52 floats (0.4 kB) exchanged now. With more ranks, the time left in the exchanges is mostly waiting: for the slowest rank in the chemistry, and for rank 0, which mixes and writes alone.
 
 # Canonical flames
 

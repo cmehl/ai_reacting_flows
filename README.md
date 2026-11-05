@@ -57,7 +57,7 @@ python ann_model_testing.py                # 4. testing on simple cases  (nn_tes
 
 ## 1. Database generation
 
-+ **Stochastic reactors**: 0-D stochastic particles following [Wan *et al.*](https://www.sciencedirect.com/science/article/pii/S0010218020302170). Each particle is a chemical state; particles mix (CURL, CURL_MODIFIED, CURL_MODIFIED_DD (work in progress), EMST_SIMPLIFIED or EMST_POPE models, see [theory](docs/theory.md#emst-mixing-model-emst_pope)) to mimic diffusion.
++ **Stochastic reactors**: 0-D stochastic particles following [Wan *et al.*](https://www.sciencedirect.com/science/article/pii/S0010218020302170). Each particle is a chemical state; particles mix (CURL, CURL_MODIFIED, CURL_MODIFIED_DD (work in progress), EMST_SIMPLIFIED or EMST_POPE models, see [theory](docs/theory.md#emst-mixing-model-emst_pope)) to mimic diffusion. By default the reactor is closed; with `residence_time`, particles are renewed to their inlet state, so that fresh gases keep mixing with hot products (example: `scripts/H2_IGN_KERNEL_RESIDENCE_TIME`).
 + **Canonical flames**: 0-D reactors, 1-D premixed and 1-D diffusion flames, launched with `generate_0D_dtb.py` and `dtb_params_flmts.yaml`.
 + **Multiple time steps** (optional): `generate_multi_dt.py` re-integrates the database states with several $dt$, so that $dt$ becomes a network input. With `time_step_type: rollout`, it instead computes the states after 1, 2, ..., $n$ steps of constant $dt$, for [rollout training](docs/theory.md#rollout-training) (example: `scripts/H2_IGN_KERNEL_ROLLOUT`).
 
@@ -82,14 +82,14 @@ STOCH_DTB_<suffix>/                 (FLAMELETS_DTB_<suffix>/ for canonical flame
 
 In `solutions.h5`, each group `ITERATION_<n>` contains:
 
-+ `all_states`: state of all active particles: `Temperature` [K], `Pressure` [Pa], species mass fractions $Y_k$, `Mix_frac`, `Equiv_ratio`, `Prog_var`, `HRR` [W/m³], `Time` [s], `Particle_number`, `Inlet_number`, atomic mass fractions `Y_C`, `Y_H`, `Y_O`, `Y_N`, `Mass`, `EMST_age` (age property of `EMST_POPE`, NaN for other mixing models).
++ `all_states`: state of all active particles: `Temperature` [K], `Pressure` [Pa], species mass fractions $Y_k$, `Mix_frac`, `Equiv_ratio`, `Prog_var`, `HRR` [W/m³], `Time` [s], `Particle_number`, `Inlet_number`, atomic mass fractions `Y_C`, `Y_H`, `Y_O`, `Y_N`, `Mass`, `Age` [s] (time since the particle entered the reactor, reset to 0 at renewal).
 + `X` and `Y` (if `build_ml_dtb: true`): states before and after the chemistry step $dt$ (`Temperature`, `Pressure`, $Y_k$, `Prog_var`, `HRR`). These are the ML input/output pairs.
 
 Column names are stored in the `cols` attribute of each dataset. For canonical flames, the file has a single group `ITERATION_00000` with `X` and `Y`, and the simulated cases are listed in `sim_train_*.csv` / `sim_test_*.csv`. The multi-dt file has one group per MPI rank with `X`, `Y` (one set of outputs per $dt$) and `DT` (the $dt$ values [s]).
 
-Post-processing of a stochastic database is shown in `post_processing_stoch_reac.py`.
+Post-processing of a stochastic database is shown in `post_processing_stoch_reac.py`. `StochDatabase.plot_age_time` plots the mean and standard deviation of `Age` over time, with `residence_time` as a dashed line.
 
-The `EMST_POPE` mixing model (Subramaniam & Pope, with an age property of the particles, written as `EMST_age`) is described in [theory: EMST mixing model](docs/theory.md#emst-mixing-model-emst_pope).
+The `EMST_POPE` mixing model (Subramaniam & Pope, with an age property of the particles) is described in [theory: EMST mixing model](docs/theory.md#emst-mixing-model-emst_pope).
 
 ## 2. Learning database
 
@@ -228,11 +228,13 @@ Examples of all files can be found in `scripts/<CASE>/`. Units are SI.
 | `build_ml_dtb` | If `true`, store `X`/`Y` pairs for ML |
 | `time_step` | Constant $dt$ [s], or dict `{t_start: dt}` to change $dt$ over time (first key must be 0). Write `1.0e-5`, not `1e-5` (read as a string by YAML) |
 | `time_max` | End time [s] |
-| `automatic_termination` | Stop when temperature variance is low (optional, default `true`) |
+| `automatic_termination` | Stop when temperature variance is low (optional, default `true`; set to `false` with `renewal_start_time`, as the run could stop before renewal starts) |
 | `mixing_model` | `CURL`, `CURL_MODIFIED`, `CURL_MODIFIED_DD` (work in progress), `EMST_SIMPLIFIED` (minimum spanning tree on $Y_k$, each edge mixed in turn with the coefficient $\min(dt/\tau, 0.5)$) or `EMST_POPE` (model of Subramaniam & Pope, see [theory](docs/theory.md#emst-mixing-model-emst_pope)) |
 | `mixing_time` | Mixing time scale $\tau$ [s] (for `EMST_POPE`, the variance function decays as $\exp(-t/\tau)$) |
 | `read_mixing` | If `true`, read mixing pairs from `pairs_list.pkl` in the case folder |
 | `T_threshold` | Chemistry is not computed below this temperature [K] |
+| `residence_time` | Mean residence time [s] of the particles: each active particle returns to the state of its inlet at this rate, which gives a partially stirred reactor ([theory](docs/theory.md#renewal-of-the-particles-residence_time)). Optional, closed reactor if absent |
+| `renewal_start_time` | Time [s] from which particles are renewed, e.g. to keep the ignition transient (optional, default 0) |
 | `pv_species` | Species defining the progress variable $c = (Y_c - Y_{c,u})/(Y_{c,eq} - Y_{c,u})$, with $Y_c$ the sum of their mass fractions, $u$ the unburnt mixture and $eq$ the equilibrium (e.g. `[H2O]`) |
 | `fuel` | List of fuels (e.g. `[H2]`) |
 | `calc_mean_traj` | If `true`, write mean trajectories of each inlet |
@@ -353,4 +355,4 @@ Each series section has `run` (run the series or not) and `plots` (plots of each
 pytest tests/
 ```
 
-Tests 01 to 04 check a small H2 stochastic reactors database, its resampling, its multi-dt version and its processing against reference histograms; the database is built once per session in a temporary folder by the fixtures of `conftest.py` (`h2_stoch_database.py`). All tests are independent: they can run in any order, alone, or in several sessions at the same time. Tests 05 to 28 run on small cases in temporary folders (test 19 runs `mpiexec -n 2` and is skipped without `mpiexec`) (`h2_learning_database.py` builds a small H2 learning database for tests 08, 09, 13, 22 and 23). Each test file starts with a description of what it tests.
+Tests 01 to 04 check a small H2 stochastic reactors database, its resampling, its multi-dt version and its processing against reference histograms; the database is built once per session in a temporary folder by the fixtures of `conftest.py` (`h2_stoch_database.py`). All tests are independent: they can run in any order, alone, or in several sessions at the same time. Tests 05 to 29 run on small cases in temporary folders (test 19 runs `mpiexec -n 2` and is skipped without `mpiexec`) (`h2_learning_database.py` builds a small H2 learning database for tests 08, 09, 13, 22 and 23). Each test file starts with a description of what it tests.
