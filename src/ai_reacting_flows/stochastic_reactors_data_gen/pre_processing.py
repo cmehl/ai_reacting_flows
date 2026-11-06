@@ -1,9 +1,5 @@
-import sys
-
 import numpy as np
 import cantera as ct
-
-import ai_reacting_flows.tools.utilities as utils
 
 # =============================================================================
 # INLET CLASS TO DEFINE STOCHASTIC REACTORS INITIAL STATE

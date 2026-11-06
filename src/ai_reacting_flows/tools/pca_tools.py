@@ -7,7 +7,6 @@ Created on Thu Feb  4 18:37:28 2021
 """
 
 import pandas as pd 
-import numpy as np
 
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
