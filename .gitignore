@@ -158,3 +158,6 @@ dmypy.json
 testing*
 
 pip_download/
+
+# Claude Code personal instructions (machine and cluster specific)
+CLAUDE.local.md
