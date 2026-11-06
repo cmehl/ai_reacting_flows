@@ -35,6 +35,7 @@ from sklearn.model_selection import train_test_split
 import ai_reacting_flows.tools.utilities as utils
 import ai_reacting_flows.tools.transforms as transforms
 from ai_reacting_flows.databases_processing.processing_parameters import write_processing_parameters
+from ai_reacting_flows.databases_processing.read_solutions import read_solutions
 
 sns.set_style("darkgrid")
 
@@ -106,9 +107,6 @@ class LearningDatabase(object):
             sys.exit("ERROR: chemical mechanism should be in yaml format !")
 
         # Read H5 files to get databases in pandas format
-        with h5py.File(os.path.join(self.dtb_folder, self.input_dtb_file), 'r') as h5file_r:
-            names = h5file_r.keys()
-            self.nb_solutions = len(names)
         self.get_database_from_h5()
 
         # Extracting some information
@@ -145,63 +143,29 @@ class LearningDatabase(object):
     
     def get_database_from_h5(self):
 
-        print(f">> Reading database in file {os.path.join(self.dtb_folder, self.input_dtb_file)}")
+        file_h5 = os.path.join(self.dtb_folder, self.input_dtb_file)
+        print(f">> Reading database in file {file_h5}")
 
-        # Opening h5 file
-        h5file_r = h5py.File(os.path.join(self.dtb_folder, self.input_dtb_file), 'r')
+        X, self.col_names_X, Y, self.col_names_Y, dt_array = read_solutions(file_h5)
+        self.X = pd.DataFrame(data=X, columns=self.col_names_X)
 
-        # Solution 0 read to get columns names
-        self.col_names_X = h5file_r["ITERATION_00000/X"].attrs["cols"]
-        self.col_names_Y = h5file_r["ITERATION_00000/Y"].attrs["cols"]
-
-        list_df_X = []
-        list_df_Y = []
+        # Multi-dt: one output per dt, shape (n, n_var, n_dt) (3D array cannot be stored in pandas dataframe)
         if self.dt_var:
-            list_dt_arrays = []
-        if self.rollout:
-            list_Y_rollout = []
+            self.Y = Y
+            self.dt_array = dt_array
 
-        # Loop on solutions
-        for i in range(self.nb_solutions):
-
-            if i%100==0:
-                print(f"Opening solution: {i} / {self.nb_solutions}")
-
-            data_X = h5file_r.get(f"ITERATION_{i:05d}/X")[()]
-            data_Y = h5file_r.get(f"ITERATION_{i:05d}/Y")[()]
-            if self.dt_var:
-                data_dt = h5file_r.get(f"ITERATION_{i:05d}/DT")[()]
-
-            list_df_X.append(pd.DataFrame(data=data_X, columns=self.col_names_X))
-            if self.dt_var:
-                list_dt_arrays.append(data_dt)
-                list_df_Y.append(data_Y)    # 3D array cannot be stored in pandas dataframe
-
-            else:
-
-                # Y is the first step (usual X, Y pairs), Y_rollout all steps, shape (n, n_steps, n_var)
-                if self.rollout:
-                    list_df_Y.append(pd.DataFrame(data=data_Y[:, :, 0], columns=self.col_names_Y))
-                    list_Y_rollout.append(np.moveaxis(data_Y, 2, 1))
-
-                # One step
-                else:
-                    list_df_Y.append(pd.DataFrame(data=data_Y, columns=self.col_names_Y))
-
-        h5file_r.close()
-
-        print("\n Performing concatenation of dataframes...")
-
-        self.X = pd.concat(list_df_X, ignore_index=True)
-        if self.dt_var:
-            self.Y = np.concatenate(list_df_Y, axis=0)
-            self.dt_array = np.concatenate(list_dt_arrays, axis=0)
         else:
-            self.Y = pd.concat(list_df_Y, ignore_index=True)
-        if self.rollout:
-            self.Y_rollout = np.concatenate(list_Y_rollout, axis=0)
 
-        print("End of concatenation ! \n")
+            # Y is the first step (usual X, Y pairs), Y_rollout all steps, shape (n, n_steps, n_var)
+            if self.rollout:
+                self.Y = pd.DataFrame(data=Y[:, :, 0], columns=self.col_names_Y)
+                self.Y_rollout = np.moveaxis(Y, 2, 1)
+
+            # One step
+            else:
+                self.Y = pd.DataFrame(data=Y, columns=self.col_names_Y)
+
+        print("End of reading ! \n")
 
 
     def database_to_h5(self, file_path, file_name):

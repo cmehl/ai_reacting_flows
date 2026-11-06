@@ -12,10 +12,11 @@ import os
 
 import numpy as np
 import h5py
-import pandas as pd
 import cantera as ct
 
 from mpi4py import MPI
+
+from ai_reacting_flows.databases_processing.read_solutions import read_solutions
 
 
 def _validate_params(params: dict) -> None:
@@ -96,11 +97,8 @@ def GenerateVariable_dt(dtb_type: str, params: dict, comm: "MPI.Comm") -> str:
     if not os.path.isfile(file_h5):
         raise FileNotFoundError(f"Input database file not found: {file_h5}")
 
-    # Stochastic or merged database: all iterations; flamelets: one iteration
-    if dtb_type in {"stoch", "merged"}:
-        X, col_names_X, col_names_Y = read_database_stoch(file_h5)
-    elif dtb_type == "flamelets":
-        X, col_names_X, col_names_Y = read_database_flmts(file_h5)
+    # States of all iterations (Y is recomputed for each dt)
+    X, col_names_X, _, col_names_Y, _ = read_solutions(file_h5, read_Y=False)
 
     if rank == 0:
         print(f"X columns: {col_names_X} \n")
@@ -226,70 +224,6 @@ def GenerateVariable_dt(dtb_type: str, params: dict, comm: "MPI.Comm") -> str:
         print(f"All {size} processors have written their groups to: {output_path}\n", flush=True)
 
     return "Done"
-
-
-#TODO : mutualize these 2 functions with other scripts (e.g. data processing) by adding them to utilities
-
-def read_database_stoch(file_h5: str):
-
-    """Read stochastic database from HDF5 into a NumPy array.
-
-    Returns
-    -------
-    X : ndarray
-        Concatenated feature matrix.
-    col_names_X : ndarray
-        Column names for X as stored in HDF5 attributes.
-    col_names_Y : ndarray
-        Column names for Y (returned for consistency, although Y is not read).
-    """
-
-    h5file_r = h5py.File(file_h5, "r")
-
-    col_names_X = h5file_r["ITERATION_00000/X"].attrs["cols"]
-    col_names_Y = h5file_r["ITERATION_00000/Y"].attrs["cols"]
-
-    # Loop on solutions
-    list_df_X = []
-
-    nb_solutions = len(h5file_r.keys())
-
-    for i in range(nb_solutions):
-        data_X = h5file_r.get(f"ITERATION_{i:05d}/X")[()]
-        list_df_X.append(pd.DataFrame(data=data_X, columns=col_names_X))
-
-    h5file_r.close()
-
-    X = pd.concat(list_df_X, ignore_index=True).to_numpy().copy()
-
-    return X, col_names_X, col_names_Y
-
-
-def read_database_flmts(file_h5: str):
-
-    """Read flamelet database from HDF5 into a NumPy array.
-
-    Returns
-    -------
-    X : ndarray
-        Feature matrix.
-    col_names_X : ndarray
-        Column names for X as stored in HDF5 attributes.
-    col_names_Y : ndarray
-        Column names for Y (returned for consistency, although Y is not read).
-    """
-
-    h5file_r = h5py.File(file_h5, "r")
-
-    col_names_X = h5file_r["ITERATION_00000/X"].attrs["cols"]
-    col_names_Y = h5file_r["ITERATION_00000/Y"].attrs["cols"]
-
-    data_X = h5file_r.get("ITERATION_00000/X")[()]
-    X = pd.DataFrame(data=data_X, columns=col_names_X).to_numpy().copy()
-
-    h5file_r.close()
-
-    return X, col_names_X, col_names_Y
 
 
 def react_multi_dt(state: np.ndarray, gas: ct.Solution, dt_list: np.ndarray):

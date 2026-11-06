@@ -158,16 +158,19 @@ def output_to_Yk(x_species_t, y_t, species, output_omegas, log_transform_X, log_
         - otherwise: f(Y(t+dt))
     """
 
-    # Outputs are differences in transformed space
-    if output_omegas and log_transform_Y > 0:
-        return inverse_species(x_species_t + y_t, species, log_transform_Y, lambda_bct, log_excluded_species)
+    if output_omegas:
 
-    # Outputs are differences of mass fractions
-    elif output_omegas:
-        return inverse_species(x_species_t, species, log_transform_X, lambda_bct, log_excluded_species) + y_t
+        # Differences in transformed space
+        if log_transform_Y > 0:
+            return inverse_species(x_species_t + y_t, species, log_transform_Y, lambda_bct, log_excluded_species)
 
-    # Outputs are mass fractions at t+dt
-    return inverse_species(y_t, species, log_transform_Y, lambda_bct, log_excluded_species)
+        # Differences of mass fractions
+        else:
+            return inverse_species(x_species_t, species, log_transform_X, lambda_bct, log_excluded_species) + y_t
+
+    # Mass fractions at t+dt
+    else:
+        return inverse_species(y_t, species, log_transform_Y, lambda_bct, log_excluded_species)
 
 
 def Yk_to_output(x_species_t, Y, species, output_omegas, log_transform_X, log_transform_Y, threshold, lambda_bct, log_excluded_species):

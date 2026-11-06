@@ -12,7 +12,6 @@ import cantera as ct
 import torch
 from datetime import datetime
 from time import perf_counter
-from ai_reacting_flows.ann_model_generation.NN_models import MLPModel, DeepONet, DeepONet_shift
 from ai_reacting_flows.ann_model_generation.NN_inference import NNInference, use_cvode
 import ai_reacting_flows.ann_model_generation.NN_testing_metrics as metrics
 import ai_reacting_flows.ann_model_generation.NN_testing_plots as plots
