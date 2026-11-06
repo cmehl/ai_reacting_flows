@@ -35,6 +35,13 @@ $$w_i \frac{d\phi_i}{ds} = -\alpha \sum_{\nu \ni i} B_\nu (\phi_i - \phi_{j_\nu}
 
 When the range of the scaled compositions is below $4 \times 10^{-4}$ (or the largest variance below $10^{-12}$), the IEM model is used instead ($g \leftarrow g - (1 - e^{-\Delta s/2})(g - \langle g \rangle)$). Steps smaller than $10^{-6}$ are done by mixing over $2 \times 10^{-6}$, accepted with a probability.
 
+# Temperature update of the ANN chemistry step
+
+The networks predict the mass fractions only; the new temperature follows from the conservation of the mass enthalpy $h = \sum_k h_k(T) Y_k$ at constant pressure (`NNInference.temperature_after`, and `NN_manager._temperature_after` in rollout training). Linearized around $T(t)$:
+
+$$T(t+dt) = T(t) - \frac{\sum_k h_k(T(t)) \left(Y_k(t+dt) - Y_k(t)\right)}{c_p(t)}, \qquad c_p(t) = \sum_k c_{p,k}(T(t))\, Y_k(t)$$
+
+with $h_k$ [J/kg] and $c_{p,k}$ [J/kg/K] from the NASA polynomials of the mechanism, vectorized over the states (`utilities.species_h_cp`). This is first order in $\Delta T = T(t+dt) - T(t)$: $c_p$ is taken at $T(t)$ and with $Y_k(t)$, which is accurate when the temperature changes little over $dt$.
 
 # Renewal of the particles (`residence_time`)
 
