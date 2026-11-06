@@ -1,0 +1,25 @@
+# H2 ignition kernel, loss weighted by the increments
+
+Same case as `H2_IGN_KERNEL` (database, processing and testing inputs identical), with the loss weighted by the
+increments of the species (`loss_weighting_p`, `loss_weighting_eps` in `networks_params.yaml`, see
+[theory](../../docs/theory.md#loss-weighting)): small increments, as in burnt gases, count more than with the usual
+loss. The model is written in `MODELS/MODEL_H2_WEIGHTED_LOSS/`. Compare its 0D tests (`Temperature_stability.png`,
+`log_changes/`) with those of `H2_IGN_KERNEL`, and vary `loss_weighting_p` (0, 0.5, 1) and `loss_weighting_eps`.
+
+The database (`STOCH_DTB_H2_POF_2023/`) can be generated here, or copied from `H2_IGN_KERNEL` to skip the
+first two steps.
+
+# Usage
+
+After installing the package (see the main `README.md`), you can run the following commands to generate and process the database. Replace `X` with the number of cores you want to use for parallel execution:
+
+```bash
+mpirun -n X python generate_stoch_dtb.py
+python dtb_processing.py
+python ann_model_learning.py
+```
+
+To test the resulting neural network on a 0D case, use:
+```bash
+python ann_model_testing.py
+```
