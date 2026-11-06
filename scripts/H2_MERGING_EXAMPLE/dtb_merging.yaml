@@ -1,0 +1,10 @@
+# Solution files of the databases to merge (generated first in their case folders)
+input_databases:
+- ../H2_IGN_KERNEL/STOCH_DTB_H2_POF_2023/solutions.h5
+- ../H2_IGN_KERNEL_RESIDENCE_TIME/STOCH_DTB_H2_RESIDENCE_TIME/solutions.h5
+# Merged database: MERGED_DTB_<results_folder_suffix>/<dtb_file>
+results_folder_suffix: H2_MERGED
+dtb_file: solutions.h5
+# Species of the progress variable: must be the ones of all input databases
+pv_species:
+- H2O

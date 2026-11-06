@@ -57,8 +57,10 @@ def _build_dtb_folder(dtb_type: str, results_folder_suffix: str) -> str:
         dtb_prefix = "STOCH"
     elif dtb_type == "flamelets":
         dtb_prefix = "FLAMELETS"
+    elif dtb_type == "merged":
+        dtb_prefix = "MERGED"
     else:
-        raise ValueError("dtb_type must be 'stoch' or 'flamelets'")
+        raise ValueError("dtb_type must be 'stoch', 'flamelets' or 'merged'")
 
     run_folder = os.getcwd()
     return f"{run_folder:s}/{dtb_prefix}_DTB_" + results_folder_suffix
@@ -69,8 +71,8 @@ def GenerateVariable_dt(dtb_type: str, params: dict, comm: "MPI.Comm") -> str:
 
     Parameters
     ----------
-    dtb_type : {"stoch", "flamelets"}
-        Type of input database.
+    dtb_type : {"stoch", "flamelets", "merged"}
+        Type of input database (merged: from merge_databases.py, read like a stochastic one).
     params : dict
         Dictionary of parameters, typically loaded from `dtb_params*.yaml`.
         Must contain at least the keys validated in `_validate_params`.
@@ -94,7 +96,8 @@ def GenerateVariable_dt(dtb_type: str, params: dict, comm: "MPI.Comm") -> str:
     if not os.path.isfile(file_h5):
         raise FileNotFoundError(f"Input database file not found: {file_h5}")
 
-    if dtb_type == "stoch":
+    # Stochastic or merged database: all iterations; flamelets: one iteration
+    if dtb_type in {"stoch", "merged"}:
         X, col_names_X, col_names_Y = read_database_stoch(file_h5)
     elif dtb_type == "flamelets":
         X, col_names_X, col_names_Y = read_database_flmts(file_h5)
@@ -177,8 +180,8 @@ def GenerateVariable_dt(dtb_type: str, params: dict, comm: "MPI.Comm") -> str:
 
     print(f"Processor {rank} has built array all_new_states. \n")
 
-    if dtb_type not in {"stoch", "flamelets"}:
-        raise ValueError("dtb_type must be 'stoch' or 'flamelets'")
+    if dtb_type not in {"stoch", "flamelets", "merged"}:
+        raise ValueError("dtb_type must be 'stoch', 'flamelets' or 'merged'")
     
     output_path = f"{stoch_results_folder:s}/{params['new_file_name']:s}"
 

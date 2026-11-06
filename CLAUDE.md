@@ -15,6 +15,7 @@ The workflow has four steps, each driven by a YAML file read from the **current 
 |------|-------------|------------|--------|
 | 1. Database generation (MPI) | `stochastic_reactors_data_gen.main.generate_stochastic_database(comm)` or `flmts_reactors_data_gen.main.generate_flmts_database(comm)` | `dtb_params.yaml` / `dtb_params_flmts.yaml` | `STOCH_DTB_<suffix>/` (or `FLAMELETS_DTB_<suffix>/`) with `solutions.h5` |
 | 1b. Optional multi-dt resampling (MPI) | `databases_processing.generate_var_dt_dtb.GenerateVariable_dt` | `dtb_params.yaml` (`time_step_type`, `time_step_range`, `nb_dt` or `rollout_dt`, `rollout_steps`, `new_file_name`) | new h5 file in the DTB folder |
+| 1c. Optional merging of databases (before 1b) | `databases_processing.merge_databases.merge_databases()` | `dtb_merging.yaml` (`input_databases`, `results_folder_suffix`, `dtb_file`, `pv_species`) | `MERGED_DTB_<suffix>/` with merged h5 file, read like `stoch` with `database_type: merged` |
 | 2. Learning database processing | `databases_processing.database_processing.LearningDatabase` (threshold, HRR undersampling, clustering, train/val split) | `dtb_processing.yaml` | `<DTB>/<database_name>/training_data.h5`, `kmeans_model.pkl`, copies of mechanism and yaml |
 | 3. Training (PyTorch, one network per cluster) | `ann_model_generation.NN_manager.NN_manager().train_all_clusters()` | `networks_params.yaml` | `MODELS/MODEL_<suffix>/` + `nn_training_<timestamp>.log` |
 | 4. Testing (series of 0D ignition/pyrolysis, 1D premixed/diffusion, validation scatter) | `ann_model_generation.NN_testing.NNTesting(params).run_testing()` | `nn_testing.yaml` (read by `ann_model_testing.py`) | `TESTING_<models_folder>/` (plots, `summary_<case type>.yaml`) |
@@ -33,6 +34,7 @@ Each step copies its input YAML into its output folder to document the run.
   `cold_premixed`, `burnt_premixed`, `air`, `fuel`, `blank`), `post_processing.py`.
 - `flmts_reactors_data_gen/`: database from canonical flames (0D reactors, 1D premixed, 1D diffusion) — `database_flmts.py`.
 - `databases_processing/`: `database_processing.py` (`LearningDatabase`), `generate_var_dt_dtb.py` (multi-dt and rollout databases),
+  `merge_databases.py` (merging of solution files into `MERGED_DTB_<suffix>`, `database_type: merged`),
   `processing_parameters.py` (processing parameters written as attributes of `training_data.h5`, read by training and
   testing; YAML fallback for older databases).
 - `ann_model_generation/` (PyTorch): `NN_manager.py` (training, optionally on rollouts and with the element projection in the loss; losses MSE/L1/Huber,
@@ -47,7 +49,7 @@ Each step copies its input YAML into its output folder to document the run.
 
 ## Other folders
 
-- `scripts/<CASE>/`: one folder per case (H2_IGN_KERNEL, H2_IGN_KERNEL_PER_SPECIES, H2_IGN_KERNEL_ROLLOUT, H2_IGN_KERNEL_RESIDENCE_TIME, H2_IGN_KERNEL_MULTI_DT, NH3_0D_REACTORS, NH3_PYRO_MULTI_DT),
+- `scripts/<CASE>/`: one folder per case (H2_IGN_KERNEL, H2_IGN_KERNEL_PER_SPECIES, H2_IGN_KERNEL_ROLLOUT, H2_IGN_KERNEL_RESIDENCE_TIME, H2_IGN_KERNEL_MULTI_DT, NH3_0D_REACTORS, NH3_PYRO_MULTI_DT, H2_MERGING_EXAMPLE),
   each with the YAML inputs and thin launcher scripts (`generate_stoch_dtb.py`, `dtb_processing.py`,
   `ann_model_learning.py`, `ann_model_testing.py`). Launch from inside the case folder, e.g.
   `mpirun -n X python generate_stoch_dtb.py`. Results are written there (git-ignored).
