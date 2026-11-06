@@ -35,6 +35,7 @@ Each step copies its input YAML into its output folder to document the run.
 - `flmts_reactors_data_gen/`: database from canonical flames (0D reactors, 1D premixed, 1D diffusion) — `database_flmts.py`.
 - `databases_processing/`: `database_processing.py` (`LearningDatabase`), `generate_var_dt_dtb.py` (multi-dt and rollout databases),
   `merge_databases.py` (merging of solution files into `MERGED_DTB_<suffix>`, `database_type: merged`),
+  `read_solutions.py` (reading of X, Y, DT of all iterations of a solution file: shared by `LearningDatabase` and multi-dt),
   `processing_parameters.py` (processing parameters written as attributes of `training_data.h5`, read by training and
   testing; YAML fallback for older databases).
 - `ann_model_generation/` (PyTorch): `NN_manager.py` (training, optionally on rollouts and with the element projection in the loss; losses MSE/L1/Huber,
