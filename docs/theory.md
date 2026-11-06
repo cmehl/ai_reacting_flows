@@ -10,6 +10,7 @@ Models and algorithms used in ARF, with their equations. The [README](../README.
 + [Hybrid ANN/CVODE model (`hybrid_ann_cvode`)](#hybrid-anncvode-model-hybrid_ann_cvode)
 + [Rollout training](#rollout-training)
 + [Element projection in training](#element-projection-in-training)
++ [Loss weighting](#loss-weighting)
 + [Simulation error](#simulation-error)
 + [Speed-up benchmark](#speed-up-benchmark)
 
@@ -177,6 +178,27 @@ $P(Y^*)$ is converted back to a network output (`transforms.Yk_to_output`) to be
 **Rollout.** The chain carries the projected state, and the temperature update uses it, as at inference with `yk_renormalization: 3`. Each step has the loss above.
 
 **Inference.** Networks trained this way should be used with `yk_renormalization: 3`; `NNInference` prints a warning otherwise (legitimate for comparisons). The correction factors $1 + \sum_B \mu_B c_{B,k}$ can be far from 1 early in training, where positivity is not guaranteed; negative mass fractions are then clipped by the transform.
+
+# Loss weighting
+
+With `output_omegas: true` and `log_transform_Y: 1`, the target of species $k$ at point $i$ is the increment $\omega_{ik} = \ln Y_k(t+dt) - \ln Y_k(t)$, scaled as $y_{ik} = (\omega_{ik} - \mu_k)/\sigma_k$. For a relative error $r$ on $\omega_{ik}$, the MSE loss of the point is
+
+$$\left(\frac{r\,\omega_{ik}}{\sigma_k}\right)^2 \propto r^2\,\omega_{ik}^2$$
+
+For the same relative error, a point of the burnt gases ($\omega \sim 10^{-4}$) counts $10^6$ times less than a point of the reaction zone ($\omega \sim 10^{-1}$), whatever the numbers of points. A small relative error on the increments of the burnt gases is harmless for one step, but it acts as a bias over thousands of steps, and the state relaxes to a false equilibrium (see the 0D tests, `Temperature_stability.png` and `log_changes/`).
+
+With `loss_weighting_p` $= p > 0$ (`tools/loss_weighting.py`, `NN_manager._loss_weights`), the MSE loss is weighted:
+
+$$\mathcal{L} = \frac{1}{n\, n_k}\sum_{i,k} w_{ik}\,(\hat y_{ik} - y_{ik})^2, \qquad w_{ik} = \frac{(\omega_{ik}^2 + \varepsilon^2)^{-p}}{\big\langle (\omega^2 + \varepsilon^2)^{-p} \big\rangle_{k,\,\text{train}}}$$
+
+with $\varepsilon$ = `loss_weighting_eps` [-] in $\ln Y$ per step.
+
++ $p = 0$ is the usual loss; $p = 1$ measures the relative error above $\varepsilon$ and the absolute error below; $p = 1/2$ is close to the weights $1/(|\omega| + \varepsilon)$.
++ $\varepsilon$ bounds the weights: the ratio of the weights of a species is at most $(\max|\omega|/\varepsilon)^{2p}$. A physical choice: an acceptable drift $\delta$ of $\ln Y$ over $N$ steps of burnt gases gives $\varepsilon \sim \delta/N$. It does not depend on the database (clustering, undersampling).
++ The weights are normalized to a mean of 1 per species on the training points; validation points use the same normalization.
++ Points clipped at `threshold` at $t$ and $t+dt$ ($\omega = 0$ from the clipping, not from chemistry) and species in `log_excluded_species` have the weight 1 of the usual loss.
+
+The weights move accuracy from the reaction zone to the small increments: the network has a finite capacity, so a large $p$ or a small $\varepsilon$ can degrade the ignition. The training prints the minimum and maximum weights and the effective fraction of points $(\sum w)^2 / (n\, n_k \sum w^2)$ (1 for equal weights), and logs the unweighted validation loss (`val_loss_unweighted`) to compare models trained with different weights; the best model is selected on the weighted validation loss. The weighting needs the MSE loss (implemented as the MSE of $\sqrt{w}\,\hat y$ and $\sqrt{w}\,y$), and is not available with rollout training (the increments of the following steps depend on the predictions). With `project_elements`, both terms of the loss are weighted. Example: `scripts/H2_IGN_KERNEL_WEIGHTED_LOSS`.
 
 # Simulation error
 

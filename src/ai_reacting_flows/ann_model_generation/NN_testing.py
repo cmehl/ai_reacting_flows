@@ -360,10 +360,11 @@ class NNTesting():
         Teq_ann = T_new
 
         # Stability after equilibrium: ANN alone continued, drifts of T [K] from Teq_ann and of sum(Y_k) from 1
-        T_drift, sumYk_drift = None, None
+        T_drift, sumYk_drift, states_stability = None, None, None
         nb_ite_stability = int(round(stability_factor * nb_ite))
         if nb_ite_stability > 0:
             T_drift, sumYk_drift = 0.0, 0.0
+            states_stability = []
             for _ in range(nb_ite_stability):
                 self.attribute_cluster(state, dt, progvar)
                 T_new, Y_new = self.advance_state_NN(state[0], state[1:], pressure, dt)
@@ -371,6 +372,7 @@ class NNTesting():
                 state = np.append(T_new, Y_new)
                 progvar = self.compute_progvar(state, pressure, Yc_u)
 
+                states_stability.append(state)
                 T_drift = max(T_drift, float(abs(T_new - Teq_ann)))
                 sumYk_drift = max(sumYk_drift, float(abs(np.sum(Y_new) - 1.0)))
 
@@ -395,6 +397,7 @@ class NNTesting():
             "clusters": np.array(clusters),
             "T_drift": T_drift,
             "sumYk_drift": sumYk_drift,
+            "states_stability": None if states_stability is None else np.array(states_stability),
         }
 
     def run_0D_ignition_case(self, phi, T0, pressure, dt, max_simulation_time, T_eq_tolerance=1.0, stability_factor=0.0):

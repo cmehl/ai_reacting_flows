@@ -1,0 +1,45 @@
+database_path: STOCH_DTB_H2_POF_2023/dtb_resampled
+model_name_suffix: H2_WEIGHTED_LOSS
+new_model_folder: true
+networks_types:
+- MLP
+- MLP
+networks_def:
+- cluster0
+- cluster1
+clusters:
+  cluster0:
+    nb_units_in_layers_list:
+    - 20
+    - 20
+    layers_activation_list:
+    - tanh
+    - tanh
+    - Id
+    layers_type:
+    - dense
+    - dense
+    - dense
+  cluster1:
+    nb_units_in_layers_list:
+    - 40
+    - 40
+    layers_activation_list:
+    - tanh
+    - tanh
+    - Id
+    layers_type:
+    - dense
+    - dense
+    - dense
+learning:
+  initial_learning_rate: 0.001
+  batch_size: 2048
+  epochs_list:
+  - 500
+  - 500
+  decay_rate: 0.9991
+  project_elements: false      # Element projection in the loss; if true, use yk_renormalization: 3 in simulations
+  raw_state_loss_weight: 1.0   # Weight of the loss on the prediction before projection, only used with project_elements
+  loss_weighting_p: 0.5        # Increment weights (omega^2 + eps^2)^(-p) of the loss: 0 none, 1/2 close to 1/(|omega| + eps), 1 relative error
+  loss_weighting_eps: 1.0e-05  # Floor of the increments of ln Y per step [-]: e.g. acceptable drift 1e-2 over 1000 steps
