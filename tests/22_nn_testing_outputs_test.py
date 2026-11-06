@@ -119,8 +119,15 @@ def test_nn_testing_outputs(tmp_path):
     output = "TESTING_MODEL_TEST"
     for folder in [f"0D_ignition_phi#0.6_T0#1200.0_pressure#{pressure}_dt#{dt}_max_simulation_time#{3 * dt}_T_eq_tolerance#1.0_stability_factor#0.0",
                    f"0D_pyrolysis_T0#1200.0_pressure#{pressure}_dt#{dt}_max_simulation_time#{3 * dt}_T_eq_tolerance#1.0_stability_factor#0.0_diluent#N2_X_diluent#0.5"]:
-        for name in ["Temperature", "YH2", "YN2", "SumYs", "AtomCons"]:
+        for name in ["Temperature", "YH2", "YN2", "SumYs", "AtomCons", "log_changes/dlnT", "log_changes/dlnYH2"]:
             assert os.path.isfile(os.path.join(output, folder, f"{name}.png"))
+        assert not os.path.isfile(os.path.join(output, folder, "Temperature_stability.png"))
+
+    # Temperature and changes per step until the end of the stability steps
+    test.test_0D_ignition(phi=0.6, T0=1200.0, pressure=pressure, dt=dt, max_simulation_time=3 * dt, stability_factor=2.0)
+    folder = f"0D_ignition_phi#0.6_T0#1200.0_pressure#{pressure}_dt#{dt}_max_simulation_time#{3 * dt}_T_eq_tolerance#1.0_stability_factor#2.0"
+    for name in ["Temperature_stability", "log_changes/dlnT", "log_changes/dlnYH2"]:
+        assert os.path.isfile(os.path.join(output, folder, f"{name}.png"))
 
     # Series of nn_testing.yaml
     torch_threads = torch.get_num_threads()

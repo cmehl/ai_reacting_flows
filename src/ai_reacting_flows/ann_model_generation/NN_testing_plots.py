@@ -10,6 +10,12 @@ import matplotlib.pyplot as plt
 
 FONTSIZE = 14
 
+# Floor of T or Y_k before the logarithm of the changes per step (zero or negative ANN mass fractions)
+LOG_FLOOR = 1.0e-30
+
+# Changes per step of ln x plotted on a linear scale below this value, on a log scale above [-]
+LOG_CHANGE_LINTHRESH = 1.0e-8
+
 
 def new_folder(folder):
     """Create folder, removing it first if it exists."""
@@ -24,6 +30,10 @@ def plot_0D_case(result, folder, spec_to_plot, species_names, remove_N2):
 
     Temperature [K] and mass fractions [-] of spec_to_plot versus time [ms] for CVODE and ANN,
     sum of the ANN mass fractions, and ANN element mass fractions (C, H, O, N).
+    If the stability steps were run (stability_factor > 0), temperature [K] until their end, with the
+    HP equilibrium temperature of the initial mixture.
+    Changes per step ln T(t+dt) - ln T(t) and ln Y_k(t+dt) - ln Y_k(t) of spec_to_plot [-], until the end
+    of the stability steps for the ANN, in the subfolder log_changes (see plot_0D_log_changes).
     species_names: names of the columns 1: of the states (all species of the mechanism).
     """
 
@@ -45,6 +55,37 @@ def plot_0D_case(result, folder, spec_to_plot, species_names, remove_N2):
     fig.tight_layout()
 
     fig.savefig(folder +  "/Temperature.png", dpi=500)
+
+    # ANN states and times [ms] until the end of the stability steps (ANN alone after equilibrium)
+    time_ann = time_vect
+    states_ann_all = states_ann
+    if result["states_stability"] is not None:
+        dt_ms = time_vect[1] - time_vect[0]
+        time_stability = time_vect[-1] + dt_ms * np.arange(1, len(result["states_stability"]) + 1)
+        time_ann = np.concatenate([time_vect, time_stability])
+        states_ann_all = np.concatenate([states_ann, result["states_stability"]])
+
+    # Temperature until the end of the stability steps
+    if result["states_stability"] is not None:
+        fig, ax = plt.subplots(1, 1)
+        ax.plot(time_vect, states_cvode[:,0], ls="--", color = "k", lw=2, label="CVODE")
+        ax.plot(time_ann, states_ann_all[:,0], ls="-", color = "b", lw=2, label="NN")
+        ax.axhline(result["T_eq"], ls=":", color="r", lw=1.5, label="Equilibrium (HP)")
+        ax.axvline(time_vect[-1], ls=":", color="grey", lw=1)
+        ax.set_xlabel('$t$ $[ms]$', fontsize=FONTSIZE)
+        ax.set_ylabel('$T$ $[K]$', fontsize=FONTSIZE)
+        ax.legend()
+        fig.tight_layout()
+
+        fig.savefig(folder +  "/Temperature_stability.png", dpi=500)
+
+    # Changes per step of ln T and ln Y_k, in the subfolder log_changes
+    log_changes_folder = folder + "/log_changes"
+    os.makedirs(log_changes_folder)
+    plot_0D_log_changes(time_vect, states_cvode[:,0], time_ann, states_ann_all[:,0], '$T$', log_changes_folder + "/dlnT.png")
+    for spec in spec_to_plot:
+        j = species_names.index(spec) + 1
+        plot_0D_log_changes(time_vect, states_cvode[:,j], time_ann, states_ann_all[:,j], f'$Y_{{{spec}}}$', log_changes_folder + f"/dlnY{spec}.png")
 
     # Mass fractions
     for spec in spec_to_plot:
@@ -128,6 +169,32 @@ def plot_1D_reaction_rates(grid, Omega_exact, Omega_ann, spec_to_plot, species_n
         fig.tight_layout()
 
         fig.savefig(folder + f"/Y{spec}.png", dpi=700)
+
+
+def plot_0D_log_changes(time_cvode, x_cvode, time_ann, x_ann, label, file_name):
+    """Change per step ln x(t+dt) - ln x(t) [-] of a variable x (T [K] or Y_k [-]) versus time [ms], CVODE and ANN.
+
+    Plotted at t+dt. x is floored at LOG_FLOOR before the logarithm (zero or negative mass fractions).
+    Symmetric log scale: the changes span orders of magnitude between the ignition and the burnt gases,
+    linear within +-LOG_CHANGE_LINTHRESH. A vertical line marks the end of the CVODE simulation (start
+    of the stability steps if the ANN is longer).
+    """
+
+    dlnx_cvode = np.diff(np.log(np.maximum(x_cvode, LOG_FLOOR)))
+    dlnx_ann = np.diff(np.log(np.maximum(x_ann, LOG_FLOOR)))
+
+    fig, ax = plt.subplots(1, 1)
+    ax.plot(time_cvode[1:], dlnx_cvode, ls="--", color = "k", lw=2, label="CVODE")
+    ax.plot(time_ann[1:], dlnx_ann, ls="-", color = "b", lw=1.5, label="NN")
+    ax.axhline(0.0, ls="-", color="grey", lw=0.5)
+    ax.axvline(time_cvode[-1], ls=":", color="grey", lw=1)
+    ax.set_yscale("symlog", linthresh=LOG_CHANGE_LINTHRESH)
+    ax.set_xlabel('$t$ $[ms]$', fontsize=FONTSIZE)
+    ax.set_ylabel(r'$\Delta \ln$ ' + label + ' per step $[-]$', fontsize=FONTSIZE)
+    ax.legend()
+    fig.tight_layout()
+
+    fig.savefig(file_name, dpi=500)
 
 
 def plot_validation_errors(diff, i_cluster, folder, max_points_scatter=50000):
