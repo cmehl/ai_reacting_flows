@@ -60,8 +60,9 @@ python ann_model_testing.py                # 4. testing on simple cases  (nn_tes
 + **Stochastic reactors**: 0-D stochastic particles following [Wan *et al.*](https://www.sciencedirect.com/science/article/pii/S0010218020302170). Each particle is a chemical state; particles mix (CURL, CURL_MODIFIED, CURL_MODIFIED_DD (work in progress), EMST_SIMPLIFIED or EMST_POPE models, see [theory](docs/theory.md#emst-mixing-model-emst_pope)) to mimic diffusion. By default the reactor is closed; with `residence_time`, particles are renewed to their inlet state, so that fresh gases keep mixing with hot products (example: `scripts/H2_IGN_KERNEL_RESIDENCE_TIME`).
 + **Canonical flames**: 0-D reactors, 1-D premixed and 1-D diffusion flames, launched with `generate_0D_dtb.py` and `dtb_params_flmts.yaml`.
 + **Multiple time steps** (optional): `generate_multi_dt.py` re-integrates the database states with several $dt$, so that $dt$ becomes a network input. With `time_step_type: rollout`, it instead computes the states after 1, 2, ..., $n$ steps of constant $dt$, for [rollout training](docs/theory.md#rollout-training) (example: `scripts/H2_IGN_KERNEL_ROLLOUT`).
++ **Merging of databases** (optional): `merge_databases.py` (`databases_processing/merge_databases.py`, `dtb_merging.yaml`) copies the `X`/`Y` pairs of several solution files (stochastic, canonical flames or already merged) into `MERGED_DTB_<suffix>/<dtb_file>`, one iteration after the other (`all_states` is not copied). The merged database is then read like a stochastic one, with `database_type: merged` in processing and `dtb_type = "merged"` in multi-dt generation (example: `scripts/H2_MERGING_EXAMPLE`). Merge before the multi-dt generation: multi-dt files cannot be merged. The time steps of the inputs are not checked: they must be the same, unless a multi-dt database is generated from the merged one. The columns (mechanism, species order) and `pv_species` must be the same. `Prog_var` is not defined the same way by the two generators, even with the same `pv_species`: for stochastic reactors, $Y_{c,u}$ is the one of the inlet of the particle and $Y_{c,eq}$ the equilibrium of its current (mixed) state; for canonical flames, both are those of the initial mixture of each simulated case. A merged database mixes both definitions (it matters for `undersample_HRR` with `keep_low_c` and for clustering on `progvar`).
 
-**Warning:** an existing `STOCH_DTB_<suffix>` folder is deleted when relaunching generation.
+**Warning:** an existing `STOCH_DTB_<suffix>` folder (`FLAMELETS_DTB_<suffix>`, `MERGED_DTB_<suffix>`) is deleted when relaunching generation (merging).
 
 With MPI, the chemistry and the derived variables (progress variable, which needs an equilibrium, mixture fraction, equivalence ratio, HRR) are computed by each rank on its share of the particles, dealt in turn (round-robin: rank $r$ of $N$ takes particles $r$, $r+N$, $r+2N$, ...), so that the particles of an inlet (e.g. the hot ones, the only ones reacting at first) are spread over all ranks; mixing and writing are done by rank 0. Each rank keeps its own copy of the particles, and only the attributes that change are exchanged, as arrays of floats (`Allgatherv` after each distributed step, `Bcast` after mixing). The exchanges are detailed in [docs/mpi.md](docs/mpi.md).
 
@@ -276,11 +277,20 @@ Multi-dt generation (`generate_multi_dt.py`) reads the same file, with the addit
 
 Cases are sampled in the given bounds with Latin hypercube sampling.
 
+## `dtb_merging.yaml` (merging of databases)
+
+| Key | Description |
+|-----|-------------|
+| `input_databases` | List of the solution files to merge, relative to the case folder (e.g. `../H2_IGN_KERNEL/STOCH_DTB_H2_POF_2023/solutions.h5`). Their generation yaml (`dtb_params.yaml`, `dtb_params_flmts.yaml` or `dtb_merging.yaml`) must be in the same folder; it is copied to `MERGED_DTB_<suffix>/input_<i>/` |
+| `results_folder_suffix` | Results are written in `MERGED_DTB_<suffix>/` |
+| `dtb_file` | Name of the merged h5 file (e.g. `solutions.h5`) |
+| `pv_species` | Species of the progress variable: an error is raised if they differ from those of an input database |
+
 ## `dtb_processing.yaml` (learning database)
 
 | Key | Description |
 |-----|-------------|
-| `database_params.database_type` | `stoch` or `flamelets` |
+| `database_params.database_type` | `stoch`, `flamelets` or `merged` (folder `STOCH_DTB_`, `FLAMELETS_DTB_` or `MERGED_DTB_<suffix>`) |
 | `database_params.dtb_folder_suffix` | Suffix of the database folder to read |
 | `database_params.dtb_file` | h5 file to read (`solutions.h5`, the multi-dt file or the rollout file) |
 | `database_params.database_name` | Name of the output subfolder |
@@ -355,4 +365,4 @@ Each series section has `run` (run the series or not) and `plots` (plots of each
 pytest tests/
 ```
 
-Tests 01 to 04 check a small H2 stochastic reactors database, its resampling, its multi-dt version and its processing against reference histograms; the database is built once per session in a temporary folder by the fixtures of `conftest.py` (`h2_stoch_database.py`). All tests are independent: they can run in any order, alone, or in several sessions at the same time. Tests 05 to 29 run on small cases in temporary folders (test 19 runs `mpiexec -n 2` and is skipped without `mpiexec`) (`h2_learning_database.py` builds a small H2 learning database for tests 08, 09, 13, 22 and 23). Each test file starts with a description of what it tests.
+Tests 01 to 04 check a small H2 stochastic reactors database, its resampling, its multi-dt version and its processing against reference histograms; the database is built once per session in a temporary folder by the fixtures of `conftest.py` (`h2_stoch_database.py`). All tests are independent: they can run in any order, alone, or in several sessions at the same time. Tests 05 to 30 run on small cases in temporary folders (test 19 runs `mpiexec -n 2` and is skipped without `mpiexec`) (`h2_learning_database.py` builds a small H2 learning database for tests 08, 09, 13, 22 and 23). Each test file starts with a description of what it tests.
