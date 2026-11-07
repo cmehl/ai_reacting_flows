@@ -210,6 +210,16 @@ $$S_{\text{bin}} \propto N_{\text{bin}}\;\Omega_{\text{bin}}^{\,2-2p}$$
 
 The resampling sets $N_{\text{bin}}$, the weights set the factor $\Omega^{2-2p}$: they are complementary. With the resampling and $p = 1$, each bin of $\Omega$ has the same share of the loss; with $p < 1$, the bins of large increments (reaction zone) have a larger share.
 
+**Density of $\Omega$ in the weights.** Instead of discarding points, `loss_weighting_q` $= q > 0$ multiplies the weights by a density factor:
+
+$$w_i = \frac{(\Omega_i^2 + \varepsilon^2)^{-p}\;\max\big(N_{\text{bin}(i)},\, N_{\min}\big)^{-q}}{\langle\cdot\rangle_{\text{train}}}$$
+
+with $N_{\text{bin}(i)}$ the number of training points of the cluster in the bin of $\log_{10}\max(\Omega_i, \varepsilon)$ of point $i$ (bins of width given by the Freedman-Diaconis rule, as `undersample_1D`), and $N_{\min}$ = `loss_weighting_min_count`. The share of the loss of a bin becomes
+
+$$S_{\text{bin}} \propto N_{\text{bin}}^{\,1-q}\;\Omega_{\text{bin}}^{\,2-2p}$$
+
+$q = 1$ is equivalent, in expectation, to the undersampling on $\Omega$, without discarding points; $0 < q < 1$ is a partial rebalancing (inverse-frequency weighting of imbalanced regression: Yang et al., ICML 2021, https://arxiv.org/abs/2102.09554). The weights of rare bins are large: their few points can be overfitted, and the gradients of the mini-batches are noisier. $N_{\min}$ bounds these weights (bins with fewer points have the weights of a bin of $N_{\min}$ points), and the effective fraction of points shows their concentration. Validation points use the bins and counts of the training points.
+
 The weights move accuracy from the reaction zone to the small increments: the network has a finite capacity, so a large $p$ or a small $\varepsilon$ can degrade the ignition. The training prints the minimum and maximum weights and the effective fraction of points $(\sum w)^2 / (n \sum w^2)$ (1 for equal weights), and logs the unweighted validation loss (`val_loss_unweighted`) to compare models trained with different weights; the best model is selected on the weighted validation loss. The weighting needs the MSE loss (implemented as the MSE of $\sqrt{w}\,\hat y$ and $\sqrt{w}\,y$), and is not available with rollout training (the increments of the following steps depend on the predictions). With `project_elements`, both terms of the loss are weighted. Example: `scripts/H2_IGN_KERNEL_WEIGHTED_LOSS`.
 
 # Simulation error

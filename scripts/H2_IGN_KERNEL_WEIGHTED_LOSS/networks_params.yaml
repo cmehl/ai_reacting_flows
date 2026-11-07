@@ -43,3 +43,5 @@ learning:
   raw_state_loss_weight: 1.0   # Weight of the loss on the prediction before projection, only used with project_elements
   loss_weighting_p: 0.5        # Weights (Omega^2 + eps^2)^(-p) of the points, Omega^2 = sum_k (omega_k / sigma_k)^2: 0 none, 1 relative error
   loss_weighting_eps: 1.0e-04  # Floor of Omega [-] (units of sigma_k): see the quantiles of Omega in the training log
+  loss_weighting_q: 0.0        # Density factor N_bin^(-q) of the weights (bins of log10(Omega)): 1 as undersample_Omega without discarding points
+  loss_weighting_min_count: 100 # Floor of N_bin, bounds the weights of rare bins

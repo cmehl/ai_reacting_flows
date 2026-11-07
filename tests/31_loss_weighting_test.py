@@ -1,9 +1,12 @@
 """
-Test 31: increment weights of the training loss (learning.loss_weighting_p, loss_weighting_eps).
+Test 31: increment weights of the training loss (learning.loss_weighting_p, loss_weighting_eps, loss_weighting_q,
+loss_weighting_min_count).
 
 Check:
-- increment_norm and increment_weights: p = 0 gives weights 1; weights (Omega^2 + eps^2)^(-p), one per point, normalized
-  to a mean of 1, with Omega^2 = sum_k (omega_k / sigma_k)^2; normalization given for validation points;
+- increment_norm and increment_weights: p = q = 0 gives weights 1; weights (Omega^2 + eps^2)^(-p), one per point,
+  normalized to a mean of 1, with Omega^2 = sum_k (omega_k / sigma_k)^2; reference given for validation points;
+- density factor: with q = 1, all bins of log10(Omega) have the same total weight; min_count bounds the weights of
+  rare bins;
 - NN_manager._loss_weights on a small H2 learning database: Omega computed from the Cantera mass fractions;
 - the weighted loss is the mean of w (y_pred - y)^2, and the usual loss with weights 1; training runs and logs the
   weights and the unweighted validation loss;
@@ -51,7 +54,7 @@ def test_increment_weights():
     w, _ = increment_weights(Omega, 0.0, eps)
     assert np.allclose(w, 1.0)
 
-    w, mean_ref = increment_weights(Omega, p, eps)
+    w, ref = increment_weights(Omega, p, eps)
     w_ref = (Omega**2 + eps**2) ** (-p)
     assert np.allclose(w, w_ref / w_ref.mean()) and np.isclose(w.mean(), 1.0)
 
@@ -59,16 +62,41 @@ def test_increment_weights():
     assert w[0] < w[1] < w[2] and w[2] / w[0] <= (Omega[0] / eps) ** (2 * p) * (1 + 1e-12)
 
     # Validation points with the normalization of training
-    w_val, _ = increment_weights(Omega[:1], p, eps, mean_ref)
+    w_val, _ = increment_weights(Omega[:1], p, eps, ref=ref)
     assert np.isclose(w_val[0], w[0])
 
     assert effective_fraction(np.ones(10)) == 1.0 and effective_fraction(w) < 1.0
 
 
+def test_density_weights():
+    rng = np.random.default_rng(0)
+
+    # Many points with large increments, few with small ones
+    Omega = np.concatenate([10.0**rng.uniform(-0.5, 0.5, 9000), 10.0**rng.uniform(-3.0, -2.0, 300)])
+
+    w, ref = increment_weights(Omega, 0.0, 1.0e-4, q=1.0, min_count=1)
+    i_bin = np.clip(np.digitize(np.log10(Omega), ref["edges"][1:-1]), 0, len(ref["counts"]) - 1)
+
+    # Same total weight in all occupied bins
+    weight_per_bin = np.array([w[i_bin == b].sum() for b in range(len(ref["counts"])) if ref["counts"][b] > 0])
+    assert np.allclose(weight_per_bin, weight_per_bin[0])
+    assert np.isclose(w.mean(), 1.0)
+
+    # Floor of the numbers of points: bins with fewer than min_count points have the weights of min_count points
+    w_floor, _ = increment_weights(Omega, 0.0, 1.0e-4, q=1.0, min_count=1000)
+    counts = ref["counts"][i_bin]
+    assert np.allclose(w_floor[counts < 1000], w_floor[counts < 1000][0])
+    assert w_floor.max() / w_floor.min() <= w.max() / w.min()
+
+    # Validation point in a bin of training: weight of the training points of this bin
+    w_val, _ = increment_weights(Omega[:1], 0.0, 1.0e-4, q=1.0, min_count=1, ref=ref)
+    assert np.isclose(w_val[0], w[0])
+
+
 def test_loss_weighting_training(tmp_path):
     os.chdir(tmp_path)
     T_in, Y_in, Y_out = write_h2_learning_database(tmp_path)
-    set_learning(tmp_path, loss_weighting_p=p, loss_weighting_eps=eps)
+    set_learning(tmp_path, loss_weighting_p=p, loss_weighting_eps=eps, loss_weighting_q=0.5, loss_weighting_min_count=5)
 
     manager = NN_manager()
     _, _, Y_train, _ = manager.read_training_data(0)
@@ -83,7 +111,7 @@ def test_loss_weighting_training(tmp_path):
     omega = ln_out - ln_in
     Omega_ref = np.sqrt(np.sum((omega / omega.std(axis=0))**2, axis=1))
     assert np.allclose(Omega, Omega_ref, rtol=1.0e-6)
-    W_ref, _ = increment_weights(Omega_ref, p, eps)
+    W_ref, _ = increment_weights(Omega_ref, p, eps, q=0.5, min_count=5)
     assert np.allclose(W[:, 0], W_ref, rtol=1.0e-6)
 
     # Weighted MSE, and usual loss with weights 1
