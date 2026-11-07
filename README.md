@@ -328,8 +328,8 @@ Cases are sampled in the given bounds with Latin hypercube sampling.
 | `learning.val_every` | Validation is computed every `val_every` epochs (default 10) |
 | `learning.project_elements` | If `true`, the loss is on the state corrected as with `yk_renormalization: 3`; the saved network and inference do not change, but use `yk_renormalization: 3` in simulations (see [theory](docs/theory.md#element-projection-in-training)). Default `false` |
 | `learning.raw_state_loss_weight` | With `project_elements`: weight $\lambda$ of the loss on the prediction before projection (default 1) |
-| `learning.loss_weighting_p` | Exponent $p$ of the loss weights $(\omega^2 + \varepsilon^2)^{-p}$, $\omega$ the increment of $\ln Y_k$ per step: small increments (burnt gases) count more (see [theory](docs/theory.md#loss-weighting), example: `scripts/H2_IGN_KERNEL_WEIGHTED_LOSS`). Needs `output_omegas: true`, `log_transform_Y: 1`, the MSE loss, no rollout. Default 0 (usual loss) |
-| `learning.loss_weighting_eps` | With `loss_weighting_p > 0`: floor $\varepsilon$ [-] of the increments of $\ln Y$ per step, which bounds the weights |
+| `learning.loss_weighting_p` | Exponent $p$ of the loss weights $(\Omega^2 + \varepsilon^2)^{-p}$, one per point, $\Omega^2 = \sum_k (\hat\omega_k/\sigma_k)^2$ with $\hat\omega_k$ the increment of $\ln Y_k$ per step and $\sigma_k$ its standard deviation: points with small increments (burnt gases) count more (see [theory](docs/theory.md#loss-weighting), example: `scripts/H2_IGN_KERNEL_WEIGHTED_LOSS`). Needs `output_omegas: true`, `log_transform_Y: 1`, the MSE loss, no rollout. Default 0 (usual loss) |
+| `learning.loss_weighting_eps` | With `loss_weighting_p > 0`: floor $\varepsilon$ [-] of $\Omega$, in units of $\sigma_k$, which bounds the weights (quantiles of $\Omega$ printed at the start of training) |
 
 An MLP definition contains:
 

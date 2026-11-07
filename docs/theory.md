@@ -181,24 +181,30 @@ $P(Y^*)$ is converted back to a network output (`transforms.Yk_to_output`) to be
 
 # Loss weighting
 
-With `output_omegas: true` and `log_transform_Y: 1`, the target of species $k$ at point $i$ is the increment $\omega_{ik} = \ln Y_k(t+dt) - \ln Y_k(t)$, scaled as $y_{ik} = (\omega_{ik} - \mu_k)/\sigma_k$. For a relative error $r$ on $\omega_{ik}$, the MSE loss of the point is
+With `output_omegas: true` and `log_transform_Y: 1`, the target of species $k$ at point $i$ is the increment $\hat\omega_{ik} = \ln Y_k(t+dt) - \ln Y_k(t)$, scaled as $y_{ik} = (\hat\omega_{ik} - \mu_k)/\sigma_k$, with $\mu_k$ and $\sigma_k$ the mean and standard deviation of the cluster. The mean cancels in the error: with $e_{ik}$ the relative error on $\hat\omega_{ik}$, the MSE loss of the point is
 
-$$\left(\frac{r\,\omega_{ik}}{\sigma_k}\right)^2 \propto r^2\,\omega_{ik}^2$$
+$$\sum_k \left(\frac{\hat\omega^{pred}_{ik} - \hat\omega^{ref}_{ik}}{\sigma_k}\right)^2 = \sum_k e_{ik}^2 \left(\frac{\hat\omega^{ref}_{ik}}{\sigma_k}\right)^2 \;\overset{e_{ik} = e_i}{=}\; e_i^2\, \Omega_i^2, \qquad \Omega_i^2 = \sum_k \left(\frac{\hat\omega^{ref}_{ik}}{\sigma_k}\right)^2$$
 
-For the same relative error, a point of the burnt gases ($\omega \sim 10^{-4}$) counts $10^6$ times less than a point of the reaction zone ($\omega \sim 10^{-1}$), whatever the numbers of points. A small relative error on the increments of the burnt gases is harmless for one step, but it acts as a bias over thousands of steps, and the state relaxes to a false equilibrium (see the 0D tests, `Temperature_stability.png` and `log_changes/`).
+if all species of the point have the same relative error $e_i$. $\Omega_i$ is the norm of the scaled increments of the point ($\Omega = 0$: no change of the state). For two kinds of states, reacting ($r$, $N_r$ points) and burnt ($b$, $N_b$ points), the ratio of their losses is
 
-With `loss_weighting_p` $= p > 0$ (`tools/loss_weighting.py`, `NN_manager._loss_weights`), the MSE loss is weighted:
+$$\frac{\mathcal{L}_b}{\mathcal{L}_r} = \frac{N_b}{N_r}\,\frac{e_b^2}{e_r^2}\,\frac{\Omega_b^2}{\Omega_r^2}$$
 
-$$\mathcal{L} = \frac{1}{n\, n_k}\sum_{i,k} w_{ik}\,(\hat y_{ik} - y_{ik})^2, \qquad w_{ik} = \frac{(\omega_{ik}^2 + \varepsilon^2)^{-p}}{\big\langle (\omega^2 + \varepsilon^2)^{-p} \big\rangle_{k,\,\text{train}}}$$
+For the same relative error, a point of the burnt gases ($\hat\omega \sim 10^{-4}$) counts about $10^6$ times less than a point of the reaction zone ($\hat\omega \sim 10^{-1}$), whatever the numbers of points. A small relative error on the increments of the burnt gases is harmless for one step, but it acts as a bias over thousands of steps, and the state relaxes to a false equilibrium (see the 0D tests, `Temperature_stability.png` and `log_changes/`).
 
-with $\varepsilon$ = `loss_weighting_eps` [-] in $\ln Y$ per step.
+With `loss_weighting_p` $= p > 0$ (`tools/loss_weighting.py`, `NN_manager._loss_weights`), the MSE loss is weighted with one weight per point, the same for all its species:
 
-+ $p = 0$ is the usual loss; $p = 1$ measures the relative error above $\varepsilon$ and the absolute error below; $p = 1/2$ is close to the weights $1/(|\omega| + \varepsilon)$.
-+ $\varepsilon$ bounds the weights: the ratio of the weights of a species is at most $(\max|\omega|/\varepsilon)^{2p}$. A physical choice: an acceptable drift $\delta$ of $\ln Y$ over $N$ steps of burnt gases gives $\varepsilon \sim \delta/N$. It does not depend on the database (clustering, undersampling).
-+ The weights are normalized to a mean of 1 per species on the training points; validation points use the same normalization.
-+ Points clipped at `threshold` at $t$ and $t+dt$ ($\omega = 0$ from the clipping, not from chemistry) and species in `log_excluded_species` have the weight 1 of the usual loss.
+$$\mathcal{L} = \frac{1}{n\, K}\sum_{i,k} w_i\,(\hat y_{ik} - y_{ik})^2, \qquad w_i = \frac{(\Omega_i^2 + \varepsilon^2)^{-p}}{\big\langle (\Omega^2 + \varepsilon^2)^{-p} \big\rangle_{\text{train}}}$$
 
-The weights move accuracy from the reaction zone to the small increments: the network has a finite capacity, so a large $p$ or a small $\varepsilon$ can degrade the ignition. The training prints the minimum and maximum weights and the effective fraction of points $(\sum w)^2 / (n\, n_k \sum w^2)$ (1 for equal weights), and logs the unweighted validation loss (`val_loss_unweighted`) to compare models trained with different weights; the best model is selected on the weighted validation loss. The weighting needs the MSE loss (implemented as the MSE of $\sqrt{w}\,\hat y$ and $\sqrt{w}\,y$), and is not available with rollout training (the increments of the following steps depend on the predictions). With `project_elements`, both terms of the loss are weighted. Example: `scripts/H2_IGN_KERNEL_WEIGHTED_LOSS`.
+with $\varepsilon$ = `loss_weighting_eps` [-], in units of $\sigma_k$. The ratio of the losses becomes, for $\Omega \gg \varepsilon$,
+
+$$\frac{\mathcal{L}_b}{\mathcal{L}_r} = \frac{N_b}{N_r}\,\frac{e_b^2}{e_r^2}\left(\frac{\Omega_b}{\Omega_r}\right)^{2-2p}$$
+
++ $p = 0$ is the usual loss; $p = 1$ gives the same weight to the same relative error (the balance of the loss is the ratio of the numbers of points); intermediate $p$ tolerate a relative error $e_b/e_r \propto (\Omega_b/\Omega_r)^{p-1}$ in the burnt gases.
++ $\varepsilon$ bounds the weights: their ratio is at most $(\max\Omega/\varepsilon)^{2p}$. Below $\varepsilon$, the error is absolute (equilibrium, solver noise). The quantiles of $\Omega$ are printed at the start of training to choose it.
++ One weight per point, from all species: a species whose increment crosses 0 in the reaction zone (intermediate species at its peak) or is clipped at `threshold` does not make the point look like burnt gases. The balance between the species of a point is the one of the usual loss.
++ The weights are normalized to a mean of 1 on the training points; validation points use the same normalization. $\sigma_k$ are those of the cluster, so $\Omega$ and $\varepsilon$ are relative to the spread of the increments of the cluster.
+
+The weights move accuracy from the reaction zone to the small increments: the network has a finite capacity, so a large $p$ or a small $\varepsilon$ can degrade the ignition. The training prints the minimum and maximum weights and the effective fraction of points $(\sum w)^2 / (n \sum w^2)$ (1 for equal weights), and logs the unweighted validation loss (`val_loss_unweighted`) to compare models trained with different weights; the best model is selected on the weighted validation loss. The weighting needs the MSE loss (implemented as the MSE of $\sqrt{w}\,\hat y$ and $\sqrt{w}\,y$), and is not available with rollout training (the increments of the following steps depend on the predictions). With `project_elements`, both terms of the loss are weighted. Example: `scripts/H2_IGN_KERNEL_WEIGHTED_LOSS`.
 
 # Simulation error
 
