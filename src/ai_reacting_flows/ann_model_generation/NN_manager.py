@@ -17,7 +17,7 @@ import torch.optim as optim
 import ai_reacting_flows.tools.utilities as utils
 import ai_reacting_flows.tools.transforms as transforms
 from ai_reacting_flows.tools.element_projection import project_elements
-from ai_reacting_flows.tools.loss_weighting import increment_weights, effective_fraction
+from ai_reacting_flows.tools.loss_weighting import increment_norm, increment_weights, effective_fraction
 from ai_reacting_flows.ann_model_generation.NN_models import MLPModel, PerSpeciesMLP, DeepONet, DeepONet_shift
 from ai_reacting_flows.databases_processing.processing_parameters import read_processing_parameters, MECHANISM_FILE
 
@@ -94,18 +94,21 @@ class NN_manager():
         self.project_elements = learning_data.get("project_elements", False)              # Element projection in the loss
         self.raw_state_loss_weight = learning_data.get("raw_state_loss_weight", 1.0)      # Weight of the prediction before projection
         self.loss_weighting_p = learning_data.get("loss_weighting_p", 0.0)                # Exponent of the increment weights (0: none)
-        self.loss_weighting_eps = learning_data.get("loss_weighting_eps", None)           # Floor of the increments [-] (ln Y per step)
+        self.loss_weighting_eps = learning_data.get("loss_weighting_eps", None)           # Floor of the norm of the scaled increments [-] (units of sigma_k)
+        self.loss_weighting_q = learning_data.get("loss_weighting_q", 0.0)                # Exponent of the density weights (0: none)
+        self.loss_weighting_min_count = learning_data.get("loss_weighting_min_count", 100) # Floor of the numbers of points per bin of Omega
+        self.loss_weighting = self.loss_weighting_p > 0.0 or self.loss_weighting_q > 0.0
 
         # Increment weights (tools/loss_weighting.py): only for increments of ln Y, with the MSE loss, one step
-        if self.loss_weighting_p > 0.0:
+        if self.loss_weighting:
             if not (self.output_omegas and self.log_transform_Y == 1):
-                raise ValueError("loss_weighting_p > 0 needs output_omegas: true and log_transform_Y: 1 (increments of ln Y)")
+                raise ValueError("Loss weighting (loss_weighting_p or loss_weighting_q > 0) needs output_omegas: true and log_transform_Y: 1 (increments of ln Y)")
             if str(self.loss_name).lower() != "mse":
-                raise ValueError("loss_weighting_p > 0 needs the MSE loss")
+                raise ValueError("Loss weighting (loss_weighting_p or loss_weighting_q > 0) needs the MSE loss")
             if self.rollout:
-                raise ValueError("loss_weighting_p > 0 is not available with rollout training")
+                raise ValueError("Loss weighting (loss_weighting_p or loss_weighting_q > 0) is not available with rollout training")
             if self.loss_weighting_eps is None:
-                raise ValueError("loss_weighting_eps must be given with loss_weighting_p > 0")
+                raise ValueError("loss_weighting_eps must be given with loss_weighting_p or loss_weighting_q > 0")
 
 
         # Log high-level dataset and processing configuration.
@@ -122,6 +125,8 @@ class NN_manager():
              f"log_excluded_species={self.log_excluded_species}, "
             f"loss_weighting_p={self.loss_weighting_p}, "
             f"loss_weighting_eps={self.loss_weighting_eps}, "
+            f"loss_weighting_q={self.loss_weighting_q}, "
+            f"loss_weighting_min_count={self.loss_weighting_min_count}, "
             f"clustering_type={self.clustering_type}, "
             f"nb_clusters={self.nb_clusters}, "
         )
@@ -317,7 +322,7 @@ class NN_manager():
 
 
     def _loss(self, loss_fn, y_pred, y_target, weights=None):
-        """loss_fn on scaled outputs, with optional weights (n, n_out) of the MSE loss (tools/loss_weighting.py):
+        """loss_fn on scaled outputs, with optional weights (n, 1) of the MSE loss (tools/loss_weighting.py):
         mean of w (y_pred - y_target)^2, computed as the MSE of sqrt(w) y_pred and sqrt(w) y_target."""
 
         if weights is None:
@@ -330,7 +335,7 @@ class NN_manager():
     def _one_step_loss(self, loss_fn, X, y_pred, y_target, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std, raw_weight=0.0, weights=None):
         """Loss of one step, from scaled network outputs y_pred and targets y_target. With project_elements: loss on
         the projected state, plus raw_weight times the loss on the prediction before projection (see docs/theory.md).
-        weights: loss weights (n, n_out) of loss_weighting_p, None for the usual loss."""
+        weights: loss weights (n, 1) of loss_weighting_p and loss_weighting_q, None for the usual loss."""
 
         if self.project_elements:
             Y_in, Y_new = self._physical_Yk(X, y_pred, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std)
@@ -343,21 +348,19 @@ class NN_manager():
             return self._loss(loss_fn, y_pred, y_target, weights)
 
 
-    def _loss_weights(self, X, Y, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std, mean_ref=None):
-        """Increment weights (n, n_out) of the points of scaled inputs X and outputs Y (numpy arrays), and their
-        normalization (see tools/loss_weighting.py). mean_ref: normalization of the training points, None to compute it."""
+    def _loss_weights(self, Y, Yscaler_mean, Yscaler_std, ref=None):
+        """Increment weights (n, 1) of the points of scaled outputs Y (numpy array), the reference of the training
+        points (bins of Omega and normalization) and the norms Omega (n) of their scaled increments (see
+        tools/loss_weighting.py). ref: reference of the training points, None to compute it."""
 
-        # Species columns of X (temperature first, time step last when dt_var is used)
-        sl = slice(1, -1) if self.dt_var else slice(1, None)
-
-        # Unscaled ln Y_k(t) and increments
-        x_species_t = transforms.unscale(X[:, sl], Xscaler_mean[sl], Xscaler_std[sl])
+        # Increments of ln Y_k, scaled by their standard deviations (mean not removed)
         omega = transforms.unscale(Y, Yscaler_mean, Yscaler_std)
+        Omega = increment_norm(omega, Yscaler_std)
 
-        weighted_cols = transforms.transformed_columns(self.species_ANN, self.log_excluded_species)
+        w, ref = increment_weights(Omega, self.loss_weighting_p, self.loss_weighting_eps,
+                                   self.loss_weighting_q, self.loss_weighting_min_count, ref)
 
-        return increment_weights(x_species_t, omega, np.log(self.threshold), weighted_cols,
-                                 self.loss_weighting_p, self.loss_weighting_eps, mean_ref)
+        return w[:, None], ref, Omega
 
 
     def _rollout_loss(self, model, loss_fn, X, Y_rollout, Y_N2, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std, raw_weight=0.0):
@@ -434,12 +437,14 @@ class NN_manager():
 
         # Increment weights of the loss (None: usual loss), validation normalized as training
         W_train, W_val = None, None
-        if self.loss_weighting_p > 0.0:
-            W_train, mean_ref = self._loss_weights(X_train, Y_train, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std)
-            W_val, _ = self._loss_weights(X_val, Y_val, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std, mean_ref)
+        if self.loss_weighting:
+            W_train, ref, Omega = self._loss_weights(Y_train, Yscaler_mean, Yscaler_std)
+            W_val, _, _ = self._loss_weights(Y_val, Yscaler_mean, Yscaler_std, ref)
 
             msg = (f"LOSS_WEIGHTS cluster={i_cluster}, min={W_train.min():.3e}, max={W_train.max():.3e}, "
-                   f"effective_fraction={effective_fraction(W_train):.3f}")
+                   f"effective_fraction={effective_fraction(W_train):.3f}, "
+                   f"bins of log10(Omega)={len(ref['counts'])} (min/max points: {ref['counts'][ref['counts'] > 0].min()}/{ref['counts'].max()}), "
+                   f"Omega quantiles 1%/50%/99%={np.quantile(Omega, 0.01):.3e}/{np.median(Omega):.3e}/{np.quantile(Omega, 0.99):.3e}")
             print(f"    >> {msg}")
             self._log(msg)
 

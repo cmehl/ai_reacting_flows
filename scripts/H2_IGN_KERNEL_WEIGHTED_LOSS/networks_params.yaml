@@ -1,4 +1,4 @@
-database_path: STOCH_DTB_H2_POF_2023/dtb_resampled
+database_path: STOCH_DTB_H2_POF_2023/dtb_omega_resampled
 model_name_suffix: H2_WEIGHTED_LOSS
 new_model_folder: true
 networks_types:
@@ -41,5 +41,7 @@ learning:
   decay_rate: 0.9991
   project_elements: false      # Element projection in the loss; if true, use yk_renormalization: 3 in simulations
   raw_state_loss_weight: 1.0   # Weight of the loss on the prediction before projection, only used with project_elements
-  loss_weighting_p: 0.5        # Increment weights (omega^2 + eps^2)^(-p) of the loss: 0 none, 1/2 close to 1/(|omega| + eps), 1 relative error
-  loss_weighting_eps: 1.0e-05  # Floor of the increments of ln Y per step [-]: e.g. acceptable drift 1e-2 over 1000 steps
+  loss_weighting_p: 0.5        # Weights (Omega^2 + eps^2)^(-p) of the points, Omega^2 = sum_k (omega_k / sigma_k)^2: 0 none, 1 relative error
+  loss_weighting_eps: 1.0e-04  # Floor of Omega [-] (units of sigma_k): see the quantiles of Omega in the training log
+  loss_weighting_q: 0.0        # Density factor N_bin^(-q) of the weights (bins of log10(Omega)): 1 as undersample_Omega without discarding points
+  loss_weighting_min_count: 100 # Floor of N_bin, bounds the weights of rare bins
