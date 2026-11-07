@@ -204,6 +204,12 @@ $$\frac{\mathcal{L}_b}{\mathcal{L}_r} = \frac{N_b}{N_r}\,\frac{e_b^2}{e_r^2}\lef
 + One weight per point, from all species: a species whose increment crosses 0 in the reaction zone (intermediate species at its peak) or is clipped at `threshold` does not make the point look like burnt gases. The balance between the species of a point is the one of the usual loss.
 + The weights are normalized to a mean of 1 on the training points; validation points use the same normalization. $\sigma_k$ are those of the cluster, so $\Omega$ and $\varepsilon$ are relative to the spread of the increments of the cluster.
 
+**Resampling on $\Omega$.** `LearningDatabase.undersample_Omega` keeps the same number of points in each bin of $\log_{10}\Omega$ ($\sigma_k$ of the whole database, $\Omega$ below `Omega_min` in the first bin). The share of the loss of a bin of $\Omega$, for the same relative error, is
+
+$$S_{\text{bin}} \propto N_{\text{bin}}\;\Omega_{\text{bin}}^{\,2-2p}$$
+
+The resampling sets $N_{\text{bin}}$, the weights set the factor $\Omega^{2-2p}$: they are complementary. With the resampling and $p = 1$, each bin of $\Omega$ has the same share of the loss; with $p < 1$, the bins of large increments (reaction zone) have a larger share.
+
 The weights move accuracy from the reaction zone to the small increments: the network has a finite capacity, so a large $p$ or a small $\varepsilon$ can degrade the ignition. The training prints the minimum and maximum weights and the effective fraction of points $(\sum w)^2 / (n \sum w^2)$ (1 for equal weights), and logs the unweighted validation loss (`val_loss_unweighted`) to compare models trained with different weights; the best model is selected on the weighted validation loss. The weighting needs the MSE loss (implemented as the MSE of $\sqrt{w}\,\hat y$ and $\sqrt{w}\,y$), and is not available with rollout training (the increments of the following steps depend on the predictions). With `project_elements`, both terms of the loss are weighted. Example: `scripts/H2_IGN_KERNEL_WEIGHTED_LOSS`.
 
 # Simulation error

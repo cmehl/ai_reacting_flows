@@ -1,4 +1,4 @@
-database_path: STOCH_DTB_H2_POF_2023/dtb_resampled
+database_path: STOCH_DTB_H2_POF_2023/dtb_omega_resampled
 model_name_suffix: H2_WEIGHTED_LOSS
 new_model_folder: true
 networks_types:

@@ -36,6 +36,7 @@ import ai_reacting_flows.tools.utilities as utils
 import ai_reacting_flows.tools.transforms as transforms
 from ai_reacting_flows.databases_processing.processing_parameters import write_processing_parameters
 from ai_reacting_flows.databases_processing.read_solutions import read_solutions
+from ai_reacting_flows.tools.loss_weighting import increment_norm
 
 sns.set_style("darkgrid")
 
@@ -611,6 +612,40 @@ class LearningDatabase(object):
 
         print(f"\n Number of points in undersampled dataset: {self.X.shape[0]} \n")
         print(f"    >> {100*self.X.shape[0]/n} % of the database is retained")
+
+
+    def undersample_Omega(self, Omega_min, seed=1991, min_count=1, plot_distrib=False):
+        """1D undersampling (undersample_1D) on log10(Omega), with Omega [-] the norm of the scaled increments of the
+        species of the network (the same quantity as the loss weights of tools/loss_weighting.py):
+
+            Omega^2 = sum_k (omega_k / sigma_k)^2,   omega_k = f(Y_k(t+dt)) - f(Y_k(t))
+
+        with f the transform of the outputs (log_transform_Y) and sigma_k the standard deviation of omega_k over the
+        database. Bins of log10(Omega) then have the same number of points: all magnitudes of the increments, from the
+        ignition to the burnt gases, are equally represented. Values below Omega_min [-] (equilibrium, solver noise)
+        are gathered in the first bin. See docs/theory.md (Loss weighting).
+        """
+
+        if self.dt_var:
+            raise NotImplementedError("undersample_Omega is not available for multi-dt databases (one increment per dt)")
+
+        # Increments of the species of the network, with the transform of the outputs
+        species = [spec for spec in self.species_names if self.with_N_chemistry or spec != "N2"]
+        Y_t = transforms.transform_species(self.X[species].values, species, self.log_transform_Y, self.threshold,
+                                           self.lambda_bct, self.log_excluded_species)
+        Y_t_dt = transforms.transform_species(self.Y[species].values, species, self.log_transform_Y, self.threshold,
+                                              self.lambda_bct, self.log_excluded_species)
+        omega = Y_t_dt - Y_t
+
+        Omega = increment_norm(omega, transforms.scaler_std(omega.var(axis=0)))
+        print(f"Omega quantiles 1%/50%/99%: {np.quantile(Omega, 0.01):.3e}/{np.median(Omega):.3e}/{np.quantile(Omega, 0.99):.3e}")
+
+        # Temporary column of the undersampling variable, removed afterwards
+        self.X["log10_Omega"] = np.log10(np.maximum(Omega, Omega_min))
+        self.undersample_1D("log10_Omega", seed=seed, min_count=min_count, plot_distrib=plot_distrib)
+
+        self.X = self.X.drop(columns="log10_Omega")
+        self.X_old = self.X_old.drop(columns="log10_Omega")
 
 
     def undersample_2D(self, var1, var2, seed=1991, min_count=1, plot_distrib=False):
