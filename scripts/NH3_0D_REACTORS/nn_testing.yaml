@@ -3,7 +3,7 @@
 # mean and std), plots_validation/.
 # In each case section, parameters given as lists are swept: all combinations are run.
 
-models_folder: MODEL_NH3_0D            # Model folder in MODELS/
+models_folder: MODEL_NH3_0D_WEIGHTED   # Model folder in MODELS/
 spec_to_plot: [NH3, H2, O2, H2O, NO]   # Species plotted, and 1D errors computed on
 
 yk_renormalization: 0                  # Element conservation: 0 none, 1 one species per element, 2 Wan et al. 2020, 3 same with O on all its species

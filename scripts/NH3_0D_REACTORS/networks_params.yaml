@@ -1,5 +1,5 @@
-database_path: FLAMELETS_DTB_NH3_1ATM/dtb_nh3_0D
-model_name_suffix: NH3_0D
+database_path: FLAMELETS_DTB_NH3_1ATM/dtb_nh3_0D_omegas
+model_name_suffix: NH3_0D_WEIGHTED
 new_model_folder: true
 networks_types:
 - MLP
@@ -27,3 +27,5 @@ learning:
   epochs_list:
   - 1500
   decay_rate: 0.995
+  loss_weighting_p: 0.5        # Weights (Omega^2 + eps^2)^(-p) of the points, Omega^2 = sum_k (omega_k / sigma_k)^2: 0 none, 1 relative error
+  loss_weighting_eps: 1.0e-02  # Floor of Omega [-] (units of sigma_k), about the error the network can reach

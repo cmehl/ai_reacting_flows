@@ -2,7 +2,7 @@ database_params:
   database_type: flamelets
   dtb_folder_suffix: NH3_1ATM
   dtb_file: solutions.h5
-  database_name: dtb_nh3_0D
+  database_name: dtb_nh3_0D_omegas
   dt_var: false
   fuel: NH3
   mech_file: ../../data/chemical_mechanisms/mech_nh3_noArHe.yaml
@@ -11,7 +11,7 @@ data_processing:
   log_transform_Y: 1
   threshold: 1.0e-20
   T_threshold: 600.0
-  output_omegas: false
+  output_omegas: true
   with_N_chemistry: true
 data_clustering:
   clusterize_on: phys
