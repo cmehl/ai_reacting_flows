@@ -128,6 +128,7 @@ Visualization:
 | `density_scatter(var_x, var_y)` | Scatter plot colored by point density |
 | `compare_resampled_pdfs(var)` | PDF of `var` before and after undersampling |
 | `plot_pdf_var(var)` | PDF of `var` |
+| `scatter_Omega_progvar(max_points=50000)` | Scatter plot of $\log_{10}\Omega$ (norm of the scaled increments, see `undersample_Omega`) versus `Prog_var`, colored by temperature, in `Omega_vs_progvar.png` (`_resampled` after an undersampling), in the database folder. Not for multi-dt databases |
 | `visualize_clusters(var1, var2)` | Scatter plot colored by cluster |
 | `print_data_size()` | Number of points in each cluster |
 
