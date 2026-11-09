@@ -17,7 +17,7 @@ import torch.optim as optim
 import ai_reacting_flows.tools.utilities as utils
 import ai_reacting_flows.tools.transforms as transforms
 from ai_reacting_flows.tools.element_projection import project_elements
-from ai_reacting_flows.tools.loss_weighting import increment_norm, increment_weights, effective_fraction
+from ai_reacting_flows.tools.loss_weighting import increment_norm, increment_weights, error_per_decade, effective_fraction
 from ai_reacting_flows.ann_model_generation.NN_models import MLPModel, PerSpeciesMLP, DeepONet, DeepONet_shift
 from ai_reacting_flows.databases_processing.processing_parameters import read_processing_parameters, MECHANISM_FILE
 
@@ -433,6 +433,71 @@ class NN_manager():
         return torch.stack(losses)
 
 
+    def _log_error_vs_Omega(self, i_cluster, model, X_val, Y_val, Yscaler_mean, Yscaler_std, W_val):
+        """Log and plot the errors of the validation points per decade of Omega (see tools/loss_weighting.py), for
+        outputs that are increments. Error of the network output, in units of the standard deviations of the outputs.
+        W_val: loss weights (n, 1) of the validation points, None for the usual loss."""
+
+        model.eval()
+        with torch.no_grad():
+            err = torch.linalg.norm(model(X_val) - Y_val, dim=1).cpu().numpy()
+        model.train()
+
+        std = Yscaler_std.cpu().numpy()
+        omega = transforms.unscale(Y_val.cpu().numpy(), Yscaler_mean.cpu().numpy(), std)
+        w = None if W_val is None else W_val[:, 0].cpu().numpy()
+
+        rows = error_per_decade(increment_norm(omega, std), err, w)
+
+        msg = f"ERROR_VS_OMEGA cluster={i_cluster}, median_error={np.median(err):.3e}"
+        print(f"    >> {msg}")
+        self._log(msg)
+
+        for decade, n_points, median_err, median_ratio, loss_share, drive_share in rows:
+            msg = (f"ERROR_VS_OMEGA cluster={i_cluster}, log10_Omega={decade}, n={n_points}, "
+                   f"median_error={median_err:.3e}, median_error_over_Omega={median_ratio:.3e}, "
+                   f"loss_share={loss_share:.3f}, gradient_drive_share={drive_share:.3f}")
+            print(f"    >> {msg}")
+            self._log(msg)
+
+        self._plot_error_vs_Omega(i_cluster, rows)
+
+
+    def _plot_error_vs_Omega(self, i_cluster, rows):
+        """Plots per decade of Omega (rows of error_per_decade): numbers of points, shares of the loss and of the
+        gradient drive, median relative error. Training is badly balanced if a large share of the gradient drive
+        is in decades with a median relative error well above 1."""
+
+        decades, n_points, _, median_ratio, loss_share, drive_share = map(np.array, zip(*rows))
+        x = np.arange(len(decades))     # One position per decade present (no gap for Omega = 0, at the floor)
+
+        fig, axs = plt.subplots(3, 1, sharex=True, figsize=(6, 8))
+
+        # Numbers of points
+        axs[0].bar(x, n_points, color="grey")
+        axs[0].set_yscale("log")
+        axs[0].set_ylabel("Validation points")
+
+        # Where the remaining loss is, and where the training effort goes
+        axs[1].bar(x - 0.2, loss_share, width=0.4, color="k", label=r"Loss: $\sum w\,err^2$")
+        axs[1].bar(x + 0.2, drive_share, width=0.4, color="r", label=r"Gradient drive: $\sum w\,err$")
+        axs[1].set_ylabel("Share [-]")
+        axs[1].legend()
+
+        # Accuracy of each decade
+        axs[2].plot(x, median_ratio, color="b", marker="o")
+        axs[2].axhline(1.0, ls="--", color="k")
+        axs[2].set_yscale("log")
+        axs[2].set_ylabel(r"Median $err\,/\,\Omega$ [-]")
+
+        axs[2].set_xticks(x, decades)
+        axs[2].set_xlabel(r"Decade of $\log_{10}\Omega$")
+
+        fig.tight_layout()
+        fig.savefig(f"{self.directory}/training/cluster_{i_cluster}/error_vs_Omega.png")
+        plt.close(fig)
+
+
     def train_model(self, i_cluster, model, loss_fn, optimizer, scheduler, X_train, X_val, Y_train, Y_val, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std):
 
         # Increment weights of the loss (None: usual loss), validation normalized as training
@@ -635,6 +700,10 @@ class NN_manager():
         # Restore best model (based on validation loss) before returning
         if best_state_dict is not None:
             model.load_state_dict(best_state_dict)
+
+        # Postprocessing: error of the best model versus the size of the increments
+        if self.output_omegas:
+            self._log_error_vs_Omega(i_cluster, model, X_val, Y_val, Yscaler_mean, Yscaler_std, W_val)
 
         # Postprocessing: validation loss of each step of the rollout, with the best model
         if self.rollout:

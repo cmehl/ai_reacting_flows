@@ -10,6 +10,7 @@ Check:
 - NN_manager._loss_weights on a small H2 learning database: Omega computed from the Cantera mass fractions;
 - the weighted loss is the mean of w (y_pred - y)^2, and the usual loss with weights 1; training runs and logs the
   weights and the unweighted validation loss;
+- error_per_decade, and its log after training, for outputs that are increments only;
 - errors for outputs that are not increments of ln Y, and for another loss than MSE.
 
 Independent of the other tests.
@@ -24,7 +25,7 @@ import torch
 import torch.nn as nn
 import cantera as ct
 
-from ai_reacting_flows.tools.loss_weighting import increment_norm, increment_weights, effective_fraction
+from ai_reacting_flows.tools.loss_weighting import increment_norm, increment_weights, error_per_decade, effective_fraction
 from ai_reacting_flows.ann_model_generation.NN_manager import NN_manager
 from h2_learning_database import write_h2_learning_database, mech_file, threshold
 
@@ -125,6 +126,47 @@ def test_loss_weighting_training(tmp_path):
     manager.train_all_clusters()
     log = open(glob.glob(str(tmp_path / "nn_training_*.log"))[0]).read()
     assert "LOSS_WEIGHTS cluster=0" in log and "val_loss_unweighted=" in log
+
+
+def test_error_per_decade():
+    Omega = np.array([2.0e-3, 5.0e-3, 2.0e-1, 0.0])
+    err = np.array([1.0e-2, 3.0e-2, 4.0e-2, 1.0e-2])
+
+    rows = error_per_decade(Omega, err)
+
+    # Decades -12 (Omega = 0, floored), -3 and -1
+    assert [row[0] for row in rows] == [-12, -3, -1] and [row[1] for row in rows] == [1, 2, 1]
+    assert np.isclose(rows[1][2], 2.0e-2) and np.isclose(rows[1][3], np.median(err[:2] / Omega[:2]))
+    assert np.isclose(rows[2][3], 0.2)
+
+    # Shares of the loss (w err^2) and of the gradient drive (w err)
+    w = np.array([1.0, 2.0, 4.0, 8.0])
+    rows = error_per_decade(Omega, err, w)
+    assert np.isclose(sum(row[4] for row in rows), 1.0) and np.isclose(sum(row[5] for row in rows), 1.0)
+    assert np.isclose(rows[2][4], 4.0 * err[2]**2 / np.sum(w * err**2))
+    assert np.isclose(rows[2][5], 4.0 * err[2] / np.sum(w * err))
+
+
+def test_error_vs_Omega_log(tmp_path):
+    os.chdir(tmp_path)
+    write_h2_learning_database(tmp_path)
+
+    # Without weights: the error is also logged
+    NN_manager().train_all_clusters()
+    log = open(glob.glob(str(tmp_path / "nn_training_*.log"))[0]).read()
+    assert "ERROR_VS_OMEGA cluster=0, median_error=" in log and "gradient_drive_share=" in log
+    assert os.path.isfile(tmp_path / "MODELS" / "MODEL_TEST" / "training" / "cluster_0" / "error_vs_Omega.png")
+    for name in glob.glob(str(tmp_path / "nn_training_*.log")):
+        os.remove(name)
+
+    # Outputs that are states: no increments, nothing logged
+    dtb_yaml = tmp_path / "STOCH_DTB_TEST" / "dtb" / "dtb_processing.yaml"
+    params = yaml.safe_load(open(dtb_yaml))
+    params["data_processing"]["output_omegas"] = False
+    yaml.dump(params, open(dtb_yaml, "w"), default_flow_style=False)
+    NN_manager().train_all_clusters()
+    assert "ERROR_VS_OMEGA" not in open(glob.glob(str(tmp_path / "nn_training_*.log"))[0]).read()
+    assert not os.path.isfile(tmp_path / "MODELS" / "MODEL_TEST" / "training" / "cluster_0" / "error_vs_Omega.png")
 
 
 def test_loss_weighting_errors(tmp_path):

@@ -25,6 +25,9 @@ import numpy as np
 
 import ai_reacting_flows.tools.utilities as utils
 
+# Floor of Omega before its logarithm, only avoids log(0) [-]
+OMEGA_FLOOR = 1.0e-12
+
 
 def increment_norm(omega, sigma):
     """Norm Omega [-] (n_points) of the increments omega (n_points, n_species) scaled by their standard deviations
@@ -64,6 +67,39 @@ def increment_weights(Omega, p, eps, q=0.0, min_count=1, ref=None):
         ref["mean"] = np.mean(w)
 
     return w / ref["mean"], ref
+
+
+def error_per_decade(Omega, err, w=None):
+    """Errors per decade of Omega, list of (decade, number of points, median of err, median of err / Omega, share of the
+    weighted loss, share of the gradient drive).
+
+    Omega [-] (n_points): norm of the scaled increments (increment_norm), err [-] (n_points): norm of the error of the
+    scaled network outputs, in the same units, w [-] (n_points): loss weights (None: weights 1). The error levels off at
+    small Omega: this plateau is the error the network can reach, which gives the order of magnitude of
+    loss_weighting_eps. Share of the loss: sum of w err^2 of the decade over all points. Share of the gradient drive:
+    sum of w err of the decade over all points. The gradient of the loss of a point is 2 w_i (r_i . dy_i/dtheta), with
+    r_i the error vector, so w err is its size if the sensitivity dy_i/dtheta of the network is the same for all
+    points, and if the contributions of the points do not cancel.
+    """
+
+    if w is None:
+        w = np.ones_like(err)
+
+    Omega_floored = np.maximum(Omega, OMEGA_FLOOR)
+    decades = np.floor(np.log10(Omega_floored)).astype(int)
+
+    total_loss = np.sum(w * err**2)
+    total_drive = np.sum(w * err)
+
+    rows = []
+    for decade in np.unique(decades):
+        in_decade = decades == decade
+        rows.append((int(decade), int(in_decade.sum()), float(np.median(err[in_decade])),
+                     float(np.median(err[in_decade] / Omega_floored[in_decade])),
+                     float(np.sum(w[in_decade] * err[in_decade]**2) / total_loss),
+                     float(np.sum(w[in_decade] * err[in_decade]) / total_drive)))
+
+    return rows
 
 
 def effective_fraction(w):

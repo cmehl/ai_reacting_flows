@@ -172,7 +172,7 @@ MODELS/MODEL_<suffix>/
 ├── norm_param_Y_cluster<i>.dat           mean and variance of outputs
 ├── kmeans_model.pkl, ...                 copy of the clustering files
 ├── networks_params.yaml, <mechanism>     copies of the inputs
-└── training/cluster_<i>/                 loss.png, mass_conservation.png, elements_conservation.png
+└── training/cluster_<i>/                 loss.png, mass_conservation.png, elements_conservation.png, error_vs_Omega.png
                                           (rollout: rollout_val_loss_per_step.csv, validation loss of each step with the best model)
 ```
 
@@ -332,7 +332,7 @@ Cases are sampled in the given bounds with Latin hypercube sampling.
 | `learning.loss_weighting_p` | Exponent $p$ of the loss weights $(\Omega^2 + \varepsilon^2)^{-p}$, one per point, $\Omega^2 = \sum_k (\hat\omega_k/\sigma_k)^2$ with $\hat\omega_k$ the increment of $\ln Y_k$ per step and $\sigma_k$ its standard deviation: points with small increments (burnt gases) count more (see [theory](docs/theory.md#loss-weighting), example: `scripts/H2_IGN_KERNEL_WEIGHTED_LOSS`). Needs `output_omegas: true`, `log_transform_Y: 1`, the MSE loss, no rollout. Default 0 (usual loss) |
 | `learning.loss_weighting_q` | Exponent $q$ of the density factor $N_{\text{bin}}^{-q}$ of the loss weights, $N_{\text{bin}}$ the number of training points in the bin of $\log_{10}\Omega$ of the point: $q = 1$ is equivalent to `undersample_Omega` without discarding points (see [theory](docs/theory.md#loss-weighting)). Same requirements as `loss_weighting_p`, needs `loss_weighting_eps`. Default 0 |
 | `learning.loss_weighting_min_count` | With `loss_weighting_q > 0`: floor of $N_{\text{bin}}$, which bounds the weights of rare bins (default 100) |
-| `learning.loss_weighting_eps` | With `loss_weighting_p > 0` or `loss_weighting_q > 0`: floor $\varepsilon$ [-] of $\Omega$, in units of $\sigma_k$, which bounds the weights (quantiles of $\Omega$ printed at the start of training) |
+| `learning.loss_weighting_eps` | With `loss_weighting_p > 0` or `loss_weighting_q > 0`: floor $\varepsilon$ [-] of $\Omega$, in units of $\sigma_k$, which bounds the weights. Of the order of the error the network can reach: see the median error per decade of $\Omega$ in the training log (`ERROR_VS_OMEGA`, logged for every training with `output_omegas: true`) |
 
 An MLP definition contains:
 
