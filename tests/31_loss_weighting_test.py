@@ -3,7 +3,7 @@ Test 31: increment weights of the training loss (learning.loss_weighting_p, loss
 loss_weighting_min_count).
 
 Check:
-- increment_norm and increment_weights: p = q = 0 gives weights 1; weights (Omega^2 + eps^2)^(-p), one per point,
+- increment_norm and increment_weights: p = q = 0 gives weights 1; weights (Omega + eps)^(-p), one per point,
   normalized to a mean of 1, with Omega^2 = sum_k (omega_k / sigma_k)^2; reference given for validation points;
 - density factor: with q = 1, all bins of log10(Omega) have the same total weight; min_count bounds the weights of
   rare bins;
@@ -30,7 +30,7 @@ from ai_reacting_flows.tools.loss_weighting import increment_norm, increment_wei
 from ai_reacting_flows.ann_model_generation.NN_manager import NN_manager
 from h2_learning_database import write_h2_learning_database, mech_file, threshold
 
-p = 0.5
+p = 1.0
 eps = 1.0e-2
 
 
@@ -57,11 +57,11 @@ def test_increment_weights():
     assert np.allclose(w, 1.0)
 
     w, ref = increment_weights(Omega, p, eps)
-    w_ref = (Omega**2 + eps**2) ** (-p)
+    w_ref = (Omega + eps) ** (-p)
     assert np.allclose(w, w_ref / w_ref.mean()) and np.isclose(w.mean(), 1.0)
 
     # Bounded ratio, and smaller weights for larger increments
-    assert w[0] < w[1] < w[2] and w[2] / w[0] <= (Omega[0] / eps) ** (2 * p) * (1 + 1e-12)
+    assert w[0] < w[1] < w[2] and w[2] / w[0] <= ((Omega[0] + eps) / eps) ** p * (1 + 1e-12)
 
     # Validation points with the normalization of training
     w_val, _ = increment_weights(Omega[:1], p, eps, ref=ref)

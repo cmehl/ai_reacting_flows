@@ -12,9 +12,10 @@ For the same relative error, points with small increments (burnt gases) count mu
 (reaction zone), and bins of Omega with many points count more than rare ones. The weights, one per point (same for
 all its species),
 
-    w_i = (Omega_i^2 + eps^2)^(-p) * max(N_bin(i), min_count)^(-q) / mean_train(...)
+    w_i = (Omega_i + eps)^(-p) * max(N_bin(i), min_count)^(-q) / mean_train(...)
 
-correct both: p = 0 is the usual loss, p = 1 a relative error above eps (absolute error below); N_bin(i) is the number
+correct both: p = 0 is the usual loss, p = 1 gives the same gradient drive (sum of w_i ||r_i||) to the same relative
+error, p = 2 the same loss (relative error above eps, absolute error below); N_bin(i) is the number
 of training points in the bin of log10(max(Omega_i, eps)) of point i, q = 1 gives each bin the same share of points,
 as an undersampling on Omega (LearningDatabase.undersample_Omega) without discarding points. eps [-] is in units of
 sigma_k; min_count bounds the weights of rare bins. Weights are normalized to a mean of 1 on the training points.
@@ -60,7 +61,7 @@ def increment_weights(Omega, p, eps, q=0.0, min_count=1, ref=None):
     i_bin = np.clip(np.digitize(log_Omega, ref["edges"][1:-1]), 0, len(ref["counts"]) - 1)
     N_bin = np.maximum(ref["counts"][i_bin], min_count)
 
-    w = (Omega**2 + eps**2) ** (-p) * N_bin.astype(float) ** (-q)
+    w = (Omega + eps) ** (-p) * N_bin.astype(float) ** (-q)
 
     # Normalization: mean 1 on the training points
     if "mean" not in ref:
