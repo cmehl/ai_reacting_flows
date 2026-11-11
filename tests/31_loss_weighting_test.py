@@ -139,6 +139,7 @@ def test_error_per_decade():
     assert [row[0] for row in rows] == [-12, -3, -1] and [row[1] for row in rows] == [1, 2, 1]
     assert np.isclose(rows[1][2], 2.0e-2) and np.isclose(rows[1][3], np.median(err[:2] / Omega[:2]))
     assert np.isclose(rows[2][3], 0.2)
+    assert np.isclose(rows[1][6], np.sqrt(np.sum(err[:2]**2) / np.sum(Omega[:2]**2)))
 
     # Shares of the loss (w err^2) and of the gradient drive (w err)
     w = np.array([1.0, 2.0, 4.0, 8.0])

@@ -457,9 +457,9 @@ class NN_manager():
         print(f"    >> {msg}")
         self._log(msg)
 
-        for (decade, n_points, median_err, median_ratio, loss_share, drive_share), g_norm, g_projection in zip(rows, norm_share, projection_share):
+        for (decade, n_points, median_err, median_ratio, loss_share, drive_share, e_decade), g_norm, g_projection in zip(rows, norm_share, projection_share):
             msg = (f"ERROR_VS_OMEGA cluster={i_cluster}, {tag}, log10_Omega={decade}, n={n_points}, "
-                   f"median_error={median_err:.3e}, median_error_over_Omega={median_ratio:.3e}, "
+                   f"median_error={median_err:.3e}, median_error_over_Omega={median_ratio:.3e}, e_decade={e_decade:.3e}, "
                    f"loss_share={loss_share:.3f}, gradient_drive_share={drive_share:.3f}, "
                    f"gradient_norm_share={g_norm:.3f}, gradient_projection_share={g_projection:.3f}")
             print(f"    >> {msg}")
@@ -511,10 +511,10 @@ class NN_manager():
         """Plots per decade of Omega (rows of error_per_decade, gradient shares of _gradient_shares), in
         training/cluster_<i>/, with the tag (epoch) at the end of the names: numbers of points (Omega_points_<tag>.png),
         share of the loss (Omega_loss_share_<tag>.png), shares of the gradient (Omega_gradient_shares_<tag>.png), median
-        relative error (Omega_relative_error_<tag>.png). Training is badly balanced if a large share of the gradient is
+        relative error and relative error of the decade e_decade (Omega_relative_error_<tag>.png). Training is badly balanced if a large share of the gradient is
         in decades with a median relative error well above 1."""
 
-        decades, n_points, _, median_ratio, loss_share, drive_share = map(np.array, zip(*rows))
+        decades, n_points, _, median_ratio, loss_share, drive_share, e_decade = map(np.array, zip(*rows))
         x = np.arange(len(decades))     # One position per decade present (no gap for Omega = 0, at the floor)
         folder = f"{self.directory}/training/cluster_{i_cluster}"
 
@@ -555,10 +555,12 @@ class NN_manager():
 
         # Accuracy of each decade
         fig, ax = plt.subplots()
-        ax.plot(x, median_ratio, color="b", marker="o")
+        ax.plot(x, median_ratio, color="b", marker="o", label=r"Median of $\|r\|\,/\,\Omega$")
+        ax.plot(x, e_decade, color="r", marker="s", label=r"$e_{decade} = \sqrt{\sum \|r\|^2 / \sum \Omega^2}$")
         ax.axhline(1.0, ls="--", color="k")
         ax.set_yscale("log")
-        ax.set_ylabel(r"Median $err\,/\,\Omega$ [-]")
+        ax.set_ylabel("Relative error [-]")
+        ax.legend()
         ax.set_xticks(x, decades)
         ax.set_xlabel(r"Decade of $\log_{10}\Omega$")
         fig.tight_layout()
