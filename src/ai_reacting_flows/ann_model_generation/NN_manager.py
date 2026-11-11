@@ -17,7 +17,7 @@ import torch.optim as optim
 import ai_reacting_flows.tools.utilities as utils
 import ai_reacting_flows.tools.transforms as transforms
 from ai_reacting_flows.tools.element_projection import project_elements
-from ai_reacting_flows.tools.loss_weighting import increment_norm, increment_weights, error_per_decade, effective_fraction
+from ai_reacting_flows.tools.loss_weighting import increment_norm, increment_weights, Omega_decades, error_per_decade, effective_fraction
 from ai_reacting_flows.ann_model_generation.NN_models import MLPModel, PerSpeciesMLP, DeepONet, DeepONet_shift
 from ai_reacting_flows.databases_processing.processing_parameters import read_processing_parameters, MECHANISM_FILE
 
@@ -91,6 +91,7 @@ class NN_manager():
         self.batch_size = learning_data.get("batch_size", 2048)
         self.epochs_list = learning_data["epochs_list"]
         self.val_every = learning_data.get("val_every", 10)
+        self.omega_diagnostics_epochs = learning_data.get("omega_diagnostics_epochs", [])   # Epochs of the plots per decade of Omega (also after training)
         self.project_elements = learning_data.get("project_elements", False)              # Element projection in the loss
         self.raw_state_loss_weight = learning_data.get("raw_state_loss_weight", 1.0)      # Weight of the prediction before projection
         self.loss_weighting_p = learning_data.get("loss_weighting_p", 0.0)                # Exponent of the increment weights (0: none)
@@ -433,10 +434,11 @@ class NN_manager():
         return torch.stack(losses)
 
 
-    def _log_error_vs_Omega(self, i_cluster, model, X_val, Y_val, Yscaler_mean, Yscaler_std, W_val):
+    def _log_error_vs_Omega(self, i_cluster, model, X_val, Y_val, Yscaler_mean, Yscaler_std, W_val, tag):
         """Log and plot the errors of the validation points per decade of Omega (see tools/loss_weighting.py), for
         outputs that are increments. Error of the network output, in units of the standard deviations of the outputs.
-        W_val: loss weights (n, 1) of the validation points, None for the usual loss."""
+        W_val: loss weights (n, 1) of the validation points, None for the usual loss. tag: epoch of the model, in the
+        log lines and the names of the plots (e.g. epoch00100, or best_epoch00480 for the model kept after training)."""
 
         model.eval()
         with torch.no_grad():
@@ -447,54 +449,120 @@ class NN_manager():
         omega = transforms.unscale(Y_val.cpu().numpy(), Yscaler_mean.cpu().numpy(), std)
         w = None if W_val is None else W_val[:, 0].cpu().numpy()
 
-        rows = error_per_decade(increment_norm(omega, std), err, w)
+        Omega = increment_norm(omega, std)
+        rows = error_per_decade(Omega, err, w)
+        norm_share, projection_share = self._gradient_shares(model, X_val, Y_val, W_val, Omega_decades(Omega))
 
-        msg = f"ERROR_VS_OMEGA cluster={i_cluster}, median_error={np.median(err):.3e}"
+        msg = f"ERROR_VS_OMEGA cluster={i_cluster}, {tag}, median_error={np.median(err):.3e}"
         print(f"    >> {msg}")
         self._log(msg)
 
-        for decade, n_points, median_err, median_ratio, loss_share, drive_share in rows:
-            msg = (f"ERROR_VS_OMEGA cluster={i_cluster}, log10_Omega={decade}, n={n_points}, "
+        for (decade, n_points, median_err, median_ratio, loss_share, drive_share), g_norm, g_projection in zip(rows, norm_share, projection_share):
+            msg = (f"ERROR_VS_OMEGA cluster={i_cluster}, {tag}, log10_Omega={decade}, n={n_points}, "
                    f"median_error={median_err:.3e}, median_error_over_Omega={median_ratio:.3e}, "
-                   f"loss_share={loss_share:.3f}, gradient_drive_share={drive_share:.3f}")
+                   f"loss_share={loss_share:.3f}, gradient_drive_share={drive_share:.3f}, "
+                   f"gradient_norm_share={g_norm:.3f}, gradient_projection_share={g_projection:.3f}")
             print(f"    >> {msg}")
             self._log(msg)
 
-        self._plot_error_vs_Omega(i_cluster, rows)
+        self._plot_error_vs_Omega(i_cluster, rows, norm_share, projection_share, tag)
 
 
-    def _plot_error_vs_Omega(self, i_cluster, rows):
-        """Plots per decade of Omega (rows of error_per_decade): numbers of points, shares of the loss and of the
-        gradient drive, median relative error. Training is badly balanced if a large share of the gradient drive
-        is in decades with a median relative error well above 1."""
+    def _gradient_shares(self, model, X_val, Y_val, W_val, decades):
+        """Shares of the decades of Omega in the gradient of the loss with respect to the network parameters theta,
+        on the points X_val, Y_val (scaled), with weights W_val (n, 1) (None: weights 1). decades (n): decade of
+        each point (Omega_decades). Loss of the network output, without the element projection.
+
+        For each decade d, g_d = dL_d/dtheta, with L_d = sum over the points of d of w_i ||r_i||^2 / (n K), and
+        g = sum_d g_d the gradient of the whole loss. Returns, per decade (sorted as np.unique(decades)):
+            - norm share ||g_d|| / sum_d ||g_d||: how strongly the decade pushes (includes the cancellations between
+              its points, not between decades);
+            - projection share (g_d . g) / ||g||^2: contribution of the decade to the gradient, summing to 1, negative
+              if the decade pulls against the others.
+        """
+
+        params = [param for param in model.parameters() if param.requires_grad]
+
+        # Weighted squared error of each point, with the graph for the gradients
+        squared_error = torch.sum((model(X_val) - Y_val)**2, dim=1)
+        if W_val is not None:
+            squared_error = squared_error * W_val[:, 0]
+        normalization = Y_val.shape[0] * Y_val.shape[1]
+
+        # Gradient of the loss of each decade, flattened over all parameters (n_decades, n_parameters)
+        decades = torch.as_tensor(decades, device=squared_error.device)
+        gradients = []
+        for decade in torch.unique(decades):
+            loss_decade = squared_error[decades == decade].sum() / normalization
+            grads = torch.autograd.grad(loss_decade, params, retain_graph=True)
+            gradients.append(torch.cat([grad.flatten() for grad in grads]))
+        G = torch.stack(gradients)
+
+        g = G.sum(dim=0)
+        norms = torch.linalg.norm(G, dim=1)
+
+        norm_share = (norms / norms.sum()).detach().cpu().numpy()
+        projection_share = ((G @ g) / (g @ g)).detach().cpu().numpy()
+
+        return norm_share, projection_share
+
+
+    def _plot_error_vs_Omega(self, i_cluster, rows, norm_share, projection_share, tag):
+        """Plots per decade of Omega (rows of error_per_decade, gradient shares of _gradient_shares), in
+        training/cluster_<i>/, with the tag (epoch) at the end of the names: numbers of points (Omega_points_<tag>.png),
+        share of the loss (Omega_loss_share_<tag>.png), shares of the gradient (Omega_gradient_shares_<tag>.png), median
+        relative error (Omega_relative_error_<tag>.png). Training is badly balanced if a large share of the gradient is
+        in decades with a median relative error well above 1."""
 
         decades, n_points, _, median_ratio, loss_share, drive_share = map(np.array, zip(*rows))
         x = np.arange(len(decades))     # One position per decade present (no gap for Omega = 0, at the floor)
-
-        fig, axs = plt.subplots(3, 1, sharex=True, figsize=(6, 8))
+        folder = f"{self.directory}/training/cluster_{i_cluster}"
 
         # Numbers of points
-        axs[0].bar(x, n_points, color="grey")
-        axs[0].set_yscale("log")
-        axs[0].set_ylabel("Validation points")
+        fig, ax = plt.subplots()
+        ax.bar(x, n_points, color="grey")
+        ax.set_yscale("log")
+        ax.set_ylabel("Validation points")
+        ax.set_xticks(x, decades)
+        ax.set_xlabel(r"Decade of $\log_{10}\Omega$")
+        fig.tight_layout()
+        fig.savefig(f"{folder}/Omega_points_{tag}.png")
+        plt.close(fig)
 
-        # Where the remaining loss is, and where the training effort goes
-        axs[1].bar(x - 0.2, loss_share, width=0.4, color="k", label=r"Loss: $\sum w\,err^2$")
-        axs[1].bar(x + 0.2, drive_share, width=0.4, color="r", label=r"Gradient drive: $\sum w\,err$")
-        axs[1].set_ylabel("Share [-]")
-        axs[1].legend()
+        # Where the remaining loss is
+        fig, ax = plt.subplots()
+        ax.bar(x, loss_share, color="k")
+        ax.set_ylabel(r"Share of the loss $\sum w\,\|r\|^2$ [-]")
+        ax.set_xticks(x, decades)
+        ax.set_xlabel(r"Decade of $\log_{10}\Omega$")
+        fig.tight_layout()
+        fig.savefig(f"{folder}/Omega_loss_share_{tag}.png")
+        plt.close(fig)
+
+        # Where the training effort goes: proxy and real gradient
+        fig, ax = plt.subplots()
+        ax.bar(x - 0.27, drive_share, width=0.27, color="r", label=r"Drive (proxy): $\sum w\,\|r\|$")
+        ax.bar(x, norm_share, width=0.27, color="b", label=r"Norm: $\|g_d\| / \sum \|g_d\|$")
+        ax.bar(x + 0.27, projection_share, width=0.27, color="g", label=r"Projection: $g_d \cdot g / \|g\|^2$")
+        ax.axhline(0.0, color="k", lw=0.8)
+        ax.set_ylabel("Share of the gradient [-]")
+        ax.legend()
+        ax.set_xticks(x, decades)
+        ax.set_xlabel(r"Decade of $\log_{10}\Omega$")
+        fig.tight_layout()
+        fig.savefig(f"{folder}/Omega_gradient_shares_{tag}.png")
+        plt.close(fig)
 
         # Accuracy of each decade
-        axs[2].plot(x, median_ratio, color="b", marker="o")
-        axs[2].axhline(1.0, ls="--", color="k")
-        axs[2].set_yscale("log")
-        axs[2].set_ylabel(r"Median $err\,/\,\Omega$ [-]")
-
-        axs[2].set_xticks(x, decades)
-        axs[2].set_xlabel(r"Decade of $\log_{10}\Omega$")
-
+        fig, ax = plt.subplots()
+        ax.plot(x, median_ratio, color="b", marker="o")
+        ax.axhline(1.0, ls="--", color="k")
+        ax.set_yscale("log")
+        ax.set_ylabel(r"Median $err\,/\,\Omega$ [-]")
+        ax.set_xticks(x, decades)
+        ax.set_xlabel(r"Decade of $\log_{10}\Omega$")
         fig.tight_layout()
-        fig.savefig(f"{self.directory}/training/cluster_{i_cluster}/error_vs_Omega.png")
+        fig.savefig(f"{folder}/Omega_relative_error_{tag}.png")
         plt.close(fig)
 
 
@@ -562,6 +630,7 @@ class NN_manager():
         stats_A_elements = np.empty((n_val_points, A_element.shape[0], 3))
 
         best_val_loss = float("inf")
+        best_epoch = n_epochs - 1   # Epoch of the model kept after training (last one if no validation)
         best_state_dict = None
 
         val_loss_list = np.empty(n_val_points)
@@ -667,6 +736,7 @@ class NN_manager():
                 if best_state_dict is None or val_loss.item() < best_val_loss:
                     best_val_loss = val_loss.item()
                     best_state_dict = copy.deepcopy(model.state_dict())
+                    best_epoch = epoch
 
                 val_loss_list[idx] = val_loss.item()
 
@@ -697,13 +767,17 @@ class NN_manager():
             if epoch % val_every == 0 and val_loss is not None:
                 print(f"    >> Validation loss: {val_loss.item()}")
 
+            # Errors, loss and gradient per decade of Omega at the selected epochs
+            if self.output_omegas and epoch in self.omega_diagnostics_epochs:
+                self._log_error_vs_Omega(i_cluster, model, X_val, Y_val, Yscaler_mean, Yscaler_std, W_val, f"epoch{epoch:05d}")
+
         # Restore best model (based on validation loss) before returning
         if best_state_dict is not None:
             model.load_state_dict(best_state_dict)
 
         # Postprocessing: error of the best model versus the size of the increments
         if self.output_omegas:
-            self._log_error_vs_Omega(i_cluster, model, X_val, Y_val, Yscaler_mean, Yscaler_std, W_val)
+            self._log_error_vs_Omega(i_cluster, model, X_val, Y_val, Yscaler_mean, Yscaler_std, W_val, f"best_epoch{best_epoch:05d}")
 
         # Postprocessing: validation loss of each step of the rollout, with the best model
         if self.rollout:

@@ -69,6 +69,12 @@ def increment_weights(Omega, p, eps, q=0.0, min_count=1, ref=None):
     return w / ref["mean"], ref
 
 
+def Omega_decades(Omega):
+    """Decade of each point, floor(log10(Omega)) (n_points), Omega [-] floored at OMEGA_FLOOR."""
+
+    return np.floor(np.log10(np.maximum(Omega, OMEGA_FLOOR))).astype(int)
+
+
 def error_per_decade(Omega, err, w=None):
     """Errors per decade of Omega, list of (decade, number of points, median of err, median of err / Omega, share of the
     weighted loss, share of the gradient drive).
@@ -86,7 +92,7 @@ def error_per_decade(Omega, err, w=None):
         w = np.ones_like(err)
 
     Omega_floored = np.maximum(Omega, OMEGA_FLOOR)
-    decades = np.floor(np.log10(Omega_floored)).astype(int)
+    decades = Omega_decades(Omega)
 
     total_loss = np.sum(w * err**2)
     total_drive = np.sum(w * err)

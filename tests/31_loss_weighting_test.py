@@ -10,7 +10,8 @@ Check:
 - NN_manager._loss_weights on a small H2 learning database: Omega computed from the Cantera mass fractions;
 - the weighted loss is the mean of w (y_pred - y)^2, and the usual loss with weights 1; training runs and logs the
   weights and the unweighted validation loss;
-- error_per_decade, and its log after training, for outputs that are increments only;
+- error_per_decade, and its log and plots after training, for outputs that are increments only;
+- gradient shares of the decades (norm and projection), checked against the gradient of the whole loss;
 - errors for outputs that are not increments of ln Y, and for another loss than MSE.
 
 Independent of the other tests.
@@ -151,11 +152,20 @@ def test_error_vs_Omega_log(tmp_path):
     os.chdir(tmp_path)
     write_h2_learning_database(tmp_path)
 
-    # Without weights: the error is also logged
+    # Without weights: the error is also logged, at the selected epochs and for the best model
+    set_learning(tmp_path, epochs_list=[3], val_every=1, omega_diagnostics_epochs=[1])
     NN_manager().train_all_clusters()
     log = open(glob.glob(str(tmp_path / "nn_training_*.log"))[0]).read()
-    assert "ERROR_VS_OMEGA cluster=0, median_error=" in log and "gradient_drive_share=" in log
-    assert os.path.isfile(tmp_path / "MODELS" / "MODEL_TEST" / "training" / "cluster_0" / "error_vs_Omega.png")
+    assert "gradient_projection_share=" in log
+    folder = tmp_path / "MODELS" / "MODEL_TEST" / "training" / "cluster_0"
+    best = [f for f in os.listdir(folder) if f.startswith("Omega_points_best_epoch")]
+    assert len(best) == 1 and "ERROR_VS_OMEGA cluster=0, epoch00001, median_error=" in log
+    for name in ["Omega_points", "Omega_loss_share", "Omega_gradient_shares", "Omega_relative_error"]:
+        assert os.path.isfile(folder / f"{name}_epoch00001.png")
+        assert os.path.isfile(folder / best[0].replace("Omega_points", name))
+    assert sorted(f for f in os.listdir(folder) if f.startswith("Omega")) == sorted(
+        [f"{name}_{tag}.png" for name in ["Omega_points", "Omega_loss_share", "Omega_gradient_shares", "Omega_relative_error"]
+         for tag in ["epoch00001", best[0][len("Omega_points_"):-4]]])
     for name in glob.glob(str(tmp_path / "nn_training_*.log")):
         os.remove(name)
 
@@ -166,7 +176,37 @@ def test_error_vs_Omega_log(tmp_path):
     yaml.dump(params, open(dtb_yaml, "w"), default_flow_style=False)
     NN_manager().train_all_clusters()
     assert "ERROR_VS_OMEGA" not in open(glob.glob(str(tmp_path / "nn_training_*.log"))[0]).read()
-    assert not os.path.isfile(tmp_path / "MODELS" / "MODEL_TEST" / "training" / "cluster_0" / "error_vs_Omega.png")
+    assert not any(f.startswith("Omega") for f in os.listdir(tmp_path / "MODELS" / "MODEL_TEST" / "training" / "cluster_0"))
+
+
+def test_gradient_shares(tmp_path):
+    os.chdir(tmp_path)
+    write_h2_learning_database(tmp_path)
+    manager = NN_manager()
+
+    torch.manual_seed(0)
+    model = nn.Sequential(nn.Linear(3, 8), nn.Tanh(), nn.Linear(8, 2)).double()
+    X = torch.randn(40, 3)
+    decades = np.repeat([-2, 0], 20)
+
+    # No error in decade -2: no gradient from it
+    with torch.no_grad():
+        Y = model(X)
+    Y[20:] += torch.randn(20, 2)
+    norm_share, projection_share = manager._gradient_shares(model, X, Y, None, decades)
+    assert np.allclose(norm_share, [0.0, 1.0]) and np.allclose(projection_share, [0.0, 1.0])
+
+    # Errors everywhere: norm shares and projection shares sum to 1, projections from the gradient of the whole loss
+    Y[:20] += torch.randn(20, 2)
+    w = torch.rand(40, 1)
+    norm_share, projection_share = manager._gradient_shares(model, X, Y, w, decades)
+    assert np.isclose(norm_share.sum(), 1.0) and np.isclose(projection_share.sum(), 1.0)
+
+    params = list(model.parameters())
+    loss = lambda i: torch.sum(w[i, 0] * torch.sum((model(X[i]) - Y[i])**2, dim=1)) / (40 * 2)
+    flat = lambda i: torch.cat([g.flatten() for g in torch.autograd.grad(loss(i), params)])
+    g_low, g_all = flat(slice(0, 20)), flat(slice(0, 40))
+    assert np.isclose(projection_share[0], float(g_low @ g_all / (g_all @ g_all)))
 
 
 def test_loss_weighting_errors(tmp_path):

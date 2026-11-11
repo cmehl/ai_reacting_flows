@@ -173,7 +173,7 @@ MODELS/MODEL_<suffix>/
 ├── norm_param_Y_cluster<i>.dat           mean and variance of outputs
 ├── kmeans_model.pkl, ...                 copy of the clustering files
 ├── networks_params.yaml, <mechanism>     copies of the inputs
-└── training/cluster_<i>/                 loss.png, mass_conservation.png, elements_conservation.png, error_vs_Omega.png
+└── training/cluster_<i>/                 loss.png, mass_conservation.png, elements_conservation.png, Omega_*_<epoch>.png (see omega_diagnostics_epochs)
                                           (rollout: rollout_val_loss_per_step.csv, validation loss of each step with the best model)
 ```
 
@@ -327,6 +327,7 @@ Cases are sampled in the given bounds with Latin hypercube sampling.
 | `learning.decay_rate` | Decay factor per epoch for `ExpLR` |
 | `learning.batch_size` | Default 2048 |
 | `learning.epochs_list` | Number of epochs, one per cluster |
+| `learning.omega_diagnostics_epochs` | With `output_omegas: true`: epochs (from 0) at which the errors, loss and gradient per decade of $\Omega$ are logged (`ERROR_VS_OMEGA`) and plotted in `training/cluster_<i>/Omega_points_epoch<e>.png`, `Omega_loss_share_epoch<e>.png`, `Omega_gradient_shares_epoch<e>.png`, `Omega_relative_error_epoch<e>.png` (see [theory](docs/theory.md#loss-weighting)). They are always computed for the model kept after training (`_best_epoch<e>`). Default `[]` |
 | `learning.val_every` | Validation is computed every `val_every` epochs (default 10) |
 | `learning.project_elements` | If `true`, the loss is on the state corrected as with `yk_renormalization: 3`; the saved network and inference do not change, but use `yk_renormalization: 3` in simulations (see [theory](docs/theory.md#element-projection-in-training)). Default `false` |
 | `learning.raw_state_loss_weight` | With `project_elements`: weight $\lambda$ of the loss on the prediction before projection (default 1) |
