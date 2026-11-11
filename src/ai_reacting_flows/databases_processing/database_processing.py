@@ -1246,6 +1246,36 @@ class LearningDatabase(object):
         fig.savefig(os.path.join(self.dtb_folder, file_name), dpi=400)
 
 
+    def pdf_Omega(self, n_bins=100):
+        """PDFs of Omega [-] and of log10(Omega), with Omega the norm of the scaled increments (see undersample_Omega),
+        on all points of the current database. Saved in the database folder, Omega_pdf.png and log10_Omega_pdf.png
+        (with _resampled after an undersampling). The PDF of Omega has a logarithmic axis for the density: its tail of
+        large increments is orders of magnitude below its peak."""
+
+        Omega = self._Omega()
+        log10_Omega = np.log10(np.maximum(Omega, OMEGA_FLOOR))
+        suffix = "_resampled" if self.is_resampled else ""
+
+        # PDF of Omega
+        fig, ax = plt.subplots()
+        ax.hist(Omega, bins=n_bins, density=True, color="grey")
+        ax.set_yscale("log")
+        ax.set_xlabel(r"$\Omega$ $[-]$", fontsize=14)
+        ax.set_ylabel("PDF $[-]$", fontsize=14)
+        fig.tight_layout()
+        fig.savefig(os.path.join(self.dtb_folder, f"Omega_pdf{suffix}.png"), dpi=400)
+        plt.close(fig)
+
+        # PDF of log10(Omega)
+        fig, ax = plt.subplots()
+        ax.hist(log10_Omega, bins=n_bins, density=True, color="grey")
+        ax.set_xlabel(r"$\log_{10}\,\Omega$ $[-]$", fontsize=14)
+        ax.set_ylabel("PDF $[-]$", fontsize=14)
+        fig.tight_layout()
+        fig.savefig(os.path.join(self.dtb_folder, f"log10_Omega_pdf{suffix}.png"), dpi=400)
+        plt.close(fig)
+
+
     def density_scatter(self, var_x , var_y, sort = True, bins = 100):
         # Functions from https://stackoverflow.com/questions/20105364/how-can-i-make-a-scatter-plot-colored-by-density-in-matplotlib
 

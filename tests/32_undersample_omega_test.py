@@ -4,7 +4,7 @@ Test 32: undersampling on the norm of the scaled increments Omega (LearningDatab
 The H2 stochastic database of the session (fixture h2_stoch_dtb, linked in a temporary run folder) is undersampled
 on log10(Omega), Omega computed independently from the mass fractions at t and t+dt. Check: with the bins of undersample_1D, bins with at least
 min_count points keep the size of the smallest of them, sparser bins are kept whole; values below Omega_min are in
-the first bin; the temporary column is removed; the scatter plot of log10(Omega) versus Prog_var is written.
+the first bin; the temporary column is removed; the scatter plot of log10(Omega) versus Prog_var and the PDFs of Omega are written.
 
 Independent of the other tests.
 """
@@ -60,12 +60,16 @@ def test_undersample_Omega(h2_stoch_dtb, tmp_path):
     assert v.min() == np.log10(Omega_min)
 
     database.scatter_Omega_progvar()
-    assert os.path.isfile(tmp_path / "STOCH_DTB_TEST" / "Omega_vs_progvar.png")
+    database.pdf_Omega()
+    for name in ["Omega_vs_progvar", "Omega_pdf", "log10_Omega_pdf"]:
+        assert os.path.isfile(tmp_path / "STOCH_DTB_TEST" / f"{name}.png")
 
     database.undersample_Omega(Omega_min, min_count=min_count)
 
     database.scatter_Omega_progvar()
-    assert os.path.isfile(tmp_path / "STOCH_DTB_TEST" / "Omega_vs_progvar_resampled.png")
+    database.pdf_Omega()
+    for name in ["Omega_vs_progvar", "Omega_pdf", "log10_Omega_pdf"]:
+        assert os.path.isfile(tmp_path / "STOCH_DTB_TEST" / f"{name}_resampled.png")
 
     assert "log10_Omega" not in database.X.columns and "log10_Omega" not in database.X_old.columns
     assert len(database.X) == len(database.Y) < len(v)
