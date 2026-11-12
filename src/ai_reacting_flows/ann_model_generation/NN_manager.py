@@ -94,6 +94,8 @@ class NN_manager():
         self.initial_learning_rate = learning_data.get("initial_learning_rate", 0.001)
         self.scheduler_option = learning_data.get("scheduler_option", "ExpLR")
         self.LR_decay_rate = learning_data.get("decay_rate", 1.0)
+        self.plateau_factor = learning_data.get("plateau_factor", 0.5)       # ReduceLROnPlateau: learning rate multiplied by this factor
+        self.plateau_patience = learning_data.get("plateau_patience", 10)    # ReduceLROnPlateau: after this number of validations without improvement
         self.batch_size = learning_data.get("batch_size", 2048)
         self.epochs_list = learning_data["epochs_list"]
         self.val_every = learning_data.get("val_every", 10)
@@ -794,8 +796,8 @@ class NN_manager():
                 # every val_every epochs: patience is a number of validations (patience * val_every epochs).
                 scheduler = optim.lr_scheduler.ReduceLROnPlateau(
                     optimizer,
-                    factor=0.5,
-                    patience=10,
+                    factor=self.plateau_factor,
+                    patience=self.plateau_patience,
                     mode="min",
                 )
             elif self.scheduler_option == "None" or self.scheduler_option is None:

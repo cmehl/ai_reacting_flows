@@ -513,7 +513,8 @@ class DatabaseFlamelets(object):
         T0_bounds = oned_diff_params["T0_bounds"]
         n_samples = oned_diff_params["n_samples"]
         width = oned_diff_params["width"]
-         
+        T_fuel = float(oned_diff_params.get("T_fuel", 300.0))   # Temperature of the fuel inlet [K]
+
         self.n_samples_1D_diff = n_samples
         self.sim_numbers_1D_diff = np.arange(n_samples)
 
@@ -589,7 +590,7 @@ class DatabaseFlamelets(object):
             density_o = gas.density
             Y_o = gas.Y.copy()
             h_o = gas.enthalpy_mass                   # J/kg
-            gas.TPX = 300.0, self.p, compo_ini_f
+            gas.TPX = T_fuel, self.p, compo_ini_f
             density_f = gas.density
             Y_f = gas.Y.copy()
             h_f = gas.enthalpy_mass                   # J/kg
@@ -613,7 +614,7 @@ class DatabaseFlamelets(object):
             # Set the state of the two inlets
             f.fuel_inlet.mdot = mdot_f
             f.fuel_inlet.X = compo_ini_f
-            f.fuel_inlet.T = 300.0
+            f.fuel_inlet.T = T_fuel
 
             f.oxidizer_inlet.mdot = mdot_o
             f.oxidizer_inlet.X = compo_ini_o

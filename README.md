@@ -277,8 +277,9 @@ Multi-dt generation (`generate_multi_dt.py`) reads the same file, with the addit
 | `include_zerod`, `include_oned_prem`, `include_oned_diff` | Which canonical cases to compute |
 | `zerod_params` | `phi_bounds`, `T0_bounds` [K], `n_samples`, `max_sim_time` [s], `solve_mode` (`dt_cfd`: constant $dt$, `dt_cvode`: CVODE internal steps), `cvode_stride` (`dt_cvode` only: one CVODE step out of `cvode_stride` is stored, optional, default 1), `T_eq_tolerance` [K] (a simulation ends when its temperature is within `T_eq_tolerance` of the HP equilibrium temperature and changes by less than `T_eq_tolerance` over `time_step`, as `T_eq_tolerance` of the 0D tests: a rich mixture crosses the equilibrium temperature on the ignition front, before its overshoot; optional, default: when the distance of $(X_k, T)$ to equilibrium is below 0.5 % of its norm, about 14 K at 2800 K. `max_sim_time` caps both) |
 | `oned_prem_params` | `phi_bounds`, `T0_bounds` [K], `n_samples` |
-| `oned_diff_params` | `strain_bounds` [1/s], `T0_bounds` [K], `n_samples`, `width` [m] |
+| `oned_diff_params` | `strain_bounds` [1/s], `T0_bounds` [K] (air inlet), `n_samples`, `width` [m], `T_fuel` [K] (fuel inlet, optional, default 300) |
 | `augment_dataset` | If `true`, add randomly perturbed states (enthalpy and $Y_k$), following Ding *et al.* |
+| `scatter_plot_variables` | `[x, y]` columns of the database plotted in `scatter_plot_<x>_<y>.png` (optional, default `[Temperature, H2O]`) |
 
 Cases are sampled in the given bounds with Latin hypercube sampling.
 
@@ -328,6 +329,7 @@ Cases are sampled in the given bounds with Latin hypercube sampling.
 | `learning.initial_learning_rate` | Default 0.001 |
 | `learning.scheduler_option` | `ExpLR` (default), `ReduceLROnPlateau` or `None` |
 | `learning.decay_rate` | Decay factor per epoch for `ExpLR` |
+| `learning.plateau_factor`, `learning.plateau_patience` | `ReduceLROnPlateau`: the learning rate is multiplied by `plateau_factor` after `plateau_patience` validations without improvement of the validation loss, i.e. `plateau_patience` × `val_every` epochs (optional, defaults 0.5 and 10) |
 | `learning.batch_size` | Default 2048 |
 | `learning.epochs_list` | Number of epochs, one per cluster |
 | `learning.omega_diagnostics_epochs` | With `output_omegas: true`: epochs (from 0) at which the errors and loss share per decade of $\Omega$ are logged (`ERROR_VS_OMEGA`), and the numbers of points, absolute errors and relative errors plotted in `training/cluster_<i>/Omega_points_epoch<e>.png`, `Omega_absolute_error_epoch<e>.png`, `Omega_relative_error_epoch<e>.png` (see [theory](docs/theory.md#loss-weighting)). They are always computed for the model kept after training (`_best_epoch<e>`). Default `[]` |
