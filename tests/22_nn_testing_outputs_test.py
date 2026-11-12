@@ -119,7 +119,7 @@ def test_nn_testing_outputs(tmp_path):
     output = "TESTING_MODEL_TEST"
     for folder in [f"0D_ignition_phi#0.6_T0#1200.0_pressure#{pressure}_dt#{dt}_max_simulation_time#{3 * dt}_T_eq_tolerance#1.0_stability_factor#0.0",
                    f"0D_pyrolysis_T0#1200.0_pressure#{pressure}_dt#{dt}_max_simulation_time#{3 * dt}_T_eq_tolerance#1.0_stability_factor#0.0_diluent#N2_X_diluent#0.5"]:
-        for name in ["Temperature", "YH2", "YN2", "SumYs", "AtomCons", "log_changes/dlnT", "log_changes/dlnYH2"]:
+        for name in ["Temperature", "YH2", "YN2", "SumYs", "AtomCons", "log_changes/dlnT", "log_changes/dlnYH2", "log10_Omega"]:
             assert os.path.isfile(os.path.join(output, folder, f"{name}.png"))
         assert not os.path.isfile(os.path.join(output, folder, "Temperature_stability.png"))
 
@@ -190,6 +190,7 @@ def test_nn_testing_outputs(tmp_path):
     assert errors["ann_calls"] > 0
     folder = f"1D_diffusion_strain#1000.0_T_ox#1000.0_T_fuel#300.0_pressure#{pressure}_dt#{dt}_width#0.02_T_threshold#600.0"
     assert os.path.isfile(os.path.join(output, folder, "YH2.png"))
+    assert os.path.isfile(os.path.join(output, folder, "log10_Omega.png"))
 
     # 1D a priori error E_sim and its aggregation per dt (one flame)
     assert errors["E_sim"] >= 0.0
