@@ -53,10 +53,11 @@ class Particle(object):
         self.state_ini = state_ini
         self.Yc_u_ini = Yc_u_ini
 
-        # Get temperature and mass fractions from state_ini
+        # Get temperature and mass fractions from state_ini. Y is a copy: state_ini is shared by the particles of
+        # the inlet, and mixing changes Y in place (particles below T_threshold never get a new Y from reaction)
         self.T = state_ini[0]
         self.P = state_ini[1]
-        self.Y = state_ini[2:]
+        self.Y = state_ini[2:].copy()
         
         # Get initial conditions
         parent.gas.TPY = self.T, self.P, self.Y

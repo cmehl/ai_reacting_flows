@@ -277,8 +277,9 @@ Multi-dt generation (`generate_multi_dt.py`) reads the same file, with the addit
 | `include_zerod`, `include_oned_prem`, `include_oned_diff` | Which canonical cases to compute |
 | `zerod_params` | `phi_bounds`, `T0_bounds` [K], `n_samples`, `max_sim_time` [s], `solve_mode` (`dt_cfd`: constant $dt$, `dt_cvode`: CVODE internal steps), `cvode_stride` (`dt_cvode` only: one CVODE step out of `cvode_stride` is stored, optional, default 1), `T_eq_tolerance` [K] (a simulation ends when its temperature is within `T_eq_tolerance` of the HP equilibrium temperature and changes by less than `T_eq_tolerance` over `time_step`, as `T_eq_tolerance` of the 0D tests: a rich mixture crosses the equilibrium temperature on the ignition front, before its overshoot; optional, default: when the distance of $(X_k, T)$ to equilibrium is below 0.5 % of its norm, about 14 K at 2800 K. `max_sim_time` caps both) |
 | `oned_prem_params` | `phi_bounds`, `T0_bounds` [K], `n_samples` |
-| `oned_diff_params` | `strain_bounds` [1/s], `T0_bounds` [K], `n_samples`, `width` [m] |
+| `oned_diff_params` | `strain_bounds` [1/s], `T0_bounds` [K] (air inlet), `n_samples`, `width` [m], `T_fuel` [K] (fuel inlet, optional, default 300) |
 | `augment_dataset` | If `true`, add randomly perturbed states (enthalpy and $Y_k$), following Ding *et al.* |
+| `scatter_plot_variables` | `[x, y]` columns of the database plotted in `scatter_plot_<x>_<y>.png` (optional, default `[Temperature, H2O]`) |
 
 Cases are sampled in the given bounds with Latin hypercube sampling.
 
@@ -302,7 +303,7 @@ Cases are sampled in the given bounds with Latin hypercube sampling.
 | `database_params.dt_var` | `true` for a multi-dt database ($dt$ is an input, always as $\log(dt)$, whatever `log_transform_X`) |
 | `database_params.rollout` | `true` for a database from `time_step_type: rollout`, for [rollout training](docs/theory.md#rollout-training) (optional, default `false`; not with `dt_var`; not validated with Box-Cox) |
 | `database_params.fuel`, `database_params.mech_file` | Fuel and mechanism |
-| `data_processing.log_transform_X`, `log_transform_Y` | 0: none, 1: log, 2: Box-Cox (with `lambda_bct`, optional, default 0.1) |
+| `data_processing.log_transform_X`, `log_transform_Y` | 0: none, 1: log, 2: Box-Cox (with `lambda_bct`, optional, default 0.1). `log_transform_Y` > 0 needs `log_transform_X` > 0; with `output_omegas`, both must be the same transform (or `log_transform_Y: 0`) |
 | `data_processing.threshold` | Mass fractions are clipped to this value before log transform (to 0 before Box-Cox) |
 | `data_processing.T_threshold` | States below this temperature [K] are removed |
 | `data_processing.output_omegas` | If `true`, outputs are $Y_k(t+dt)-Y_k(t)$ instead of $Y_k(t+dt)$ |
@@ -328,6 +329,7 @@ Cases are sampled in the given bounds with Latin hypercube sampling.
 | `learning.initial_learning_rate` | Default 0.001 |
 | `learning.scheduler_option` | `ExpLR` (default), `ReduceLROnPlateau` or `None` |
 | `learning.decay_rate` | Decay factor per epoch for `ExpLR` |
+| `learning.plateau_factor`, `learning.plateau_patience` | `ReduceLROnPlateau`: the learning rate is multiplied by `plateau_factor` after `plateau_patience` validations without improvement of the validation loss, i.e. `plateau_patience` × `val_every` epochs (optional, defaults 0.5 and 10) |
 | `learning.batch_size` | Default 2048 |
 | `learning.epochs_list` | Number of epochs, one per cluster |
 | `learning.omega_diagnostics_epochs` | With `output_omegas: true`: epochs (from 0) at which the errors and loss share per decade of $\Omega$ are logged (`ERROR_VS_OMEGA`), and the numbers of points, absolute errors and relative errors plotted in `training/cluster_<i>/Omega_points_epoch<e>.png`, `Omega_absolute_error_epoch<e>.png`, `Omega_relative_error_epoch<e>.png` (see [theory](docs/theory.md#loss-weighting)). They are always computed for the model kept after training (`_best_epoch<e>`). Default `[]` |
@@ -347,7 +349,7 @@ An MLP definition contains:
 
 For `PerSpeciesMLP`, this definition is that of the network of each species (one output), with dense layers only. The networks of all species are computed together (weights of a layer stacked for all species, one batched product per layer), as in the inference of NNICE, which is much faster than one network after the other. Example: `scripts/H2_IGN_KERNEL_PER_SPECIES`.
 
-For `DeepONet`, these three keys are dicts with `branch` and `trunk` entries (plus `shift` for `DeepONetShift`), and `n_neurons` is added. The trunk takes $dt$ as input.
+For `DeepONet`, these three keys are dicts with `branch` and `trunk` entries (plus `shift` for `DeepONetShift`), and `n_neurons` is added. The trunk takes $dt$ as input: DeepONets need a database with multiple $dt$ (`dt_var: true`). Their h5 export (read by NNICE) is not implemented yet: training stops after the `.pth` file of the first cluster is saved.
 
 ## `nn_testing.yaml` (testing)
 

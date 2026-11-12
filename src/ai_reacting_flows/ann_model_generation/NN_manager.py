@@ -82,12 +82,20 @@ class NN_manager():
         self.networks_defs = networks_parameters["networks_def"] # list[str], keys to network parameters in "clusters", 1 per cluster
         self.clusters = networks_parameters["clusters"]
 
+        # DeepONet: the trunk takes the time step (last input column), only present with multiple dt
+        for network_type in self.networks_types:
+            if network_type in ["DeepONet", "DeepONetShift"]:
+                if not self.dt_var:
+                    raise ValueError(f"{network_type} needs a database with multiple dt (dt_var: true): its trunk takes dt as input")
+
         learning_data = networks_parameters["learning"] # DA: same learning for all clusters ?  (CM: we could change in the future)
         self.optimizer_name = learning_data.get("optimizer", "adam")
         self.loss_name = learning_data.get("loss", "MSE")
         self.initial_learning_rate = learning_data.get("initial_learning_rate", 0.001)
         self.scheduler_option = learning_data.get("scheduler_option", "ExpLR")
         self.LR_decay_rate = learning_data.get("decay_rate", 1.0)
+        self.plateau_factor = learning_data.get("plateau_factor", 0.5)       # ReduceLROnPlateau: learning rate multiplied by this factor
+        self.plateau_patience = learning_data.get("plateau_patience", 10)    # ReduceLROnPlateau: after this number of validations without improvement
         self.batch_size = learning_data.get("batch_size", 2048)
         self.epochs_list = learning_data["epochs_list"]
         self.val_every = learning_data.get("val_every", 10)
@@ -788,8 +796,8 @@ class NN_manager():
                 # every val_every epochs: patience is a number of validations (patience * val_every epochs).
                 scheduler = optim.lr_scheduler.ReduceLROnPlateau(
                     optimizer,
-                    factor=0.5,
-                    patience=10,
+                    factor=self.plateau_factor,
+                    patience=self.plateau_patience,
                     mode="min",
                 )
             elif self.scheduler_option == "None" or self.scheduler_option is None:
@@ -969,5 +977,8 @@ class NN_manager():
                         layer_group.create_dataset("bias:0", data=bias)
             else:
                 # Save each top-level layer directly, no 'model' group
+                # TODO (future work): DeepONet and DeepONetShift are not exported. They have no model.model
+                # (layers in branch, trunk and shift), so this fails after their .pth file is saved; the layout
+                # must be one that NNICE can read.
                 for layer_name, module in model.model.named_children():  # note: model.model is nn.Sequential
                     save_module(f, module, layer_name, getattr(model, 'activation_map', {}))

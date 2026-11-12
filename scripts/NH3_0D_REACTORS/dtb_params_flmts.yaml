@@ -38,7 +38,9 @@ oned_diff_params:
     - 500.0
   n_samples: 3
   width: 0.02
+  T_fuel: 300.0           # [K] fuel inlet (T0_bounds: air inlet)
 augment_dataset: False
+scatter_plot_variables: [Temperature, H2O]   # [x, y] of the scatter plot of the database
 # For multi dt generation
 T_threshold: 600.0
 time_step_type: random

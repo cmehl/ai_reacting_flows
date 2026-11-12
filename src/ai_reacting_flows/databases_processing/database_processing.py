@@ -1219,6 +1219,12 @@ class LearningDatabase(object):
         if self.log_transform_X==0 and self.log_transform_Y>0:
             sys.exit("ERROR: log_transform_Y cannot be active if log_transform_X==0 !")
 
+        # Outputs as differences in transformed space, f_Y(Y(t+dt)) - f_X(Y(t)): only an increment if f_X = f_Y
+        if self.output_omegas:
+            if self.log_transform_X>0 and self.log_transform_Y>0:
+                if self.log_transform_X != self.log_transform_Y:
+                    sys.exit("ERROR: with output_omegas, log_transform_X and log_transform_Y must be the same transform (or log_transform_Y: 0) !")
+
         if self.rollout and self.dt_var:
             sys.exit("ERROR: rollout is done with a constant dt, it cannot be used with dt_var !")
 
@@ -1320,11 +1326,13 @@ class LearningDatabase(object):
             if not self.is_pca_computed:
                 self.compute_pca()
             
-        # Temperature histogram
+        # Histogram, bin width adapted to the variable (Freedman-Diaconis rule)
+        binwidth = utils.smart_binwidth(self.X[var])
+
         fig, ax = plt.subplots()
-        
+
         sns.histplot(data=self.X, x=var, ax=ax, stat="density",
-                     binwidth=10, kde=False)
+                     binwidth=binwidth, kde=False)
 
         ax.set_box_aspect(1)
 
@@ -1352,14 +1360,17 @@ class LearningDatabase(object):
         if self.is_resampled is False:
             sys.exit("Data has not been resampled, this function is not accessible")
             
-        # Temperature histogram
+        # Histograms, bin width adapted to the variable (Freedman-Diaconis rule), from the data before
+        # re-sampling: the same bin width for both
+        binwidth = utils.smart_binwidth(self.X_old[var])
+
         fig, ax1 = plt.subplots()
-        
+
         sns.histplot(data=self.X_old, x=var, ax=ax1, color="black", stat="density",
-                     binwidth=10, kde=False, label="Before re-sampling")
+                     binwidth=binwidth, kde=False, label="Before re-sampling")
 
         sns.histplot(data=self.X, x=var, ax=ax1, color="blue", stat="density",
-                     binwidth=10, kde=False, alpha=0.4, label="After re-sampling")
+                     binwidth=binwidth, kde=False, alpha=0.4, label="After re-sampling")
         
         ax1.set_box_aspect(1)
         

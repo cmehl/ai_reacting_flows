@@ -14,6 +14,9 @@ from mpi4py import MPI
 
 h5py.get_config().mpi
 
+# Mixing models of ParticlesCloud
+MIXING_MODELS = ["CURL", "CURL_MODIFIED", "CURL_MODIFIED_DD", "EMST_SIMPLIFIED", "EMST_POPE"]
+
 
 def generate_stochastic_database(comm : 'MPI.Comm'):
 
@@ -30,22 +33,9 @@ def generate_stochastic_database(comm : 'MPI.Comm'):
     # CATCHING SOME INPUT ERRORS
     #==========================================================================
 
-    if rank==0:
-
-        if (data_gen_parameters["mixing_model"] not in ["CURL","CURL_MODIFIED","CURL_MODIFIED_DD","EMST_SIMPLIFIED","EMST_POPE"]):
-            # Mixing model choice
-            try:
-                raise ValueError("Input error.")
-            except ValueError:
-                print("")
-                print(">> case_type entry should be one of the following:")
-                print("     - CURL")
-                print("     - CURL_MODIFIED")
-                print("     - CURL_MODIFIED_DD")
-                print("     - EMST_SIMPLIFIED")
-                print("     - EMST_POPE")
-                print("")
-                raise
+    # Mixing model (checked on all ranks: they all stop on the same error, none waits for the others)
+    if data_gen_parameters["mixing_model"] not in MIXING_MODELS:
+        raise ValueError(f"mixing_model must be one of {MIXING_MODELS}, got {data_gen_parameters['mixing_model']}")
 
 
     #==========================================================================
@@ -105,9 +95,11 @@ def generate_stochastic_database(comm : 'MPI.Comm'):
     # End computation time
     t_end = perf_counter()
 
-    shutil.copy(os.path.join(run_folder, "dtb_params.yaml"), f"{run_folder:s}/STOCH_DTB_{data_gen_parameters['results_folder_suffix']}/dtb_params.yaml")
-
     if rank==0:
+
+        # Copy of the input parameters in the results folder (rank 0 only: one writer of the file)
+        shutil.copy(os.path.join(run_folder, "dtb_params.yaml"), f"{run_folder:s}/STOCH_DTB_{data_gen_parameters['results_folder_suffix']}/dtb_params.yaml")
+
         #  End of simulation printing
         PRINT("")
         PRINT("END OF SIMULATION")

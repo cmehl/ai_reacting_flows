@@ -270,7 +270,7 @@ class StochDatabase(object):
             
             # Canonical flame structures
             if self.add_1D_premixed_archetype:
-                ax.plot(self.T_cano, self.Y_cano_dict[spec], color='r', lw=3, ls='--', label="Laminar")
+                ax.plot(self.T_cano_1D, self.Y_cano_dict_1D[spec], color='r', lw=3, ls='--', label="Laminar")
                 
             if self.add_0D_ignition_archetype:
                 ax.plot(self.T_cano_0D, self.Y_cano_dict_0D[spec], color='b', lw=3, ls='--', label="Ignition")
@@ -338,7 +338,7 @@ class StochDatabase(object):
             Delay between frames in milliseconds (for on-screen display).
         save_path : str or None
             If given, path to save the animation (.mp4 or .gif). If None, defaults to
-            self.save_folder + "/dtb_TZ_animation.mp4".
+            self.save_folder + "/dtb_animation.mp4".
         fps : int
             Frames per second when saving.
         """
@@ -405,7 +405,9 @@ class StochDatabase(object):
             fig, update, frames=len(iterations), interval=interval, blit=False
         )
 
-        save_path = self.save_folder + "/dtb_animation.mp4"
+        # Default file of the animation
+        if save_path is None:
+            save_path = self.save_folder + "/dtb_animation.mp4"
 
         anim.save(save_path, fps=fps, dpi=300)
         plt.close(fig)
@@ -512,8 +514,8 @@ class StochDatabase(object):
 
         fig.tight_layout()
 
-        # Save
-        fig.savefig(self.save_folder + "/indiv_rajectory.png", dpi=300)
+        # Save (one file per inlet and variable)
+        fig.savefig(self.save_folder + f"/indiv_trajectory_inlet{inlet_nb}_{var}.png", dpi=300)
 
     #--------------------------------------------------------
     # DISTRIBUTIONS

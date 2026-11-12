@@ -89,10 +89,9 @@ def generate_flmts_database(comm : 'MPI.Comm'):
     if rank==0:
         dtb_flmts.save_database()
 
-    # Scatter plot to visualize database
+    # Scatter plot to visualize database: [x, y] variables, columns of the database (default T and H2O)
     if rank==0:
-        x_var = "Temperature"
-        y_var = "H2O"   # CM: add maybe as input in yaml file
+        x_var, y_var = data_gen_parameters.get("scatter_plot_variables", ["Temperature", "H2O"])
         dtb_flmts.scatter_plot_data(x_var, y_var)
 
     # generate the X, Y database (untransformed data)
