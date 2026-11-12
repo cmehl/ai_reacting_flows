@@ -1326,11 +1326,13 @@ class LearningDatabase(object):
             if not self.is_pca_computed:
                 self.compute_pca()
             
-        # Temperature histogram
+        # Histogram, bin width adapted to the variable (Freedman-Diaconis rule)
+        binwidth = utils.smart_binwidth(self.X[var])
+
         fig, ax = plt.subplots()
-        
+
         sns.histplot(data=self.X, x=var, ax=ax, stat="density",
-                     binwidth=10, kde=False)
+                     binwidth=binwidth, kde=False)
 
         ax.set_box_aspect(1)
 
@@ -1358,14 +1360,17 @@ class LearningDatabase(object):
         if self.is_resampled is False:
             sys.exit("Data has not been resampled, this function is not accessible")
             
-        # Temperature histogram
+        # Histograms, bin width adapted to the variable (Freedman-Diaconis rule), from the data before
+        # re-sampling: the same bin width for both
+        binwidth = utils.smart_binwidth(self.X_old[var])
+
         fig, ax1 = plt.subplots()
-        
+
         sns.histplot(data=self.X_old, x=var, ax=ax1, color="black", stat="density",
-                     binwidth=10, kde=False, label="Before re-sampling")
+                     binwidth=binwidth, kde=False, label="Before re-sampling")
 
         sns.histplot(data=self.X, x=var, ax=ax1, color="blue", stat="density",
-                     binwidth=10, kde=False, alpha=0.4, label="After re-sampling")
+                     binwidth=binwidth, kde=False, alpha=0.4, label="After re-sampling")
         
         ax1.set_box_aspect(1)
         
