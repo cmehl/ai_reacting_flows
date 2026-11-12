@@ -8,6 +8,8 @@ import shutil
 import numpy as np
 import matplotlib.pyplot as plt
 
+from ai_reacting_flows.tools.loss_weighting import OMEGA_FLOOR
+
 FONTSIZE = 14
 
 # Floor of T or Y_k before the logarithm of the changes per step (zero or negative ANN mass fractions)
@@ -25,7 +27,7 @@ def new_folder(folder):
     os.makedirs(folder)
 
 
-def plot_0D_case(result, folder, spec_to_plot, species_names, remove_N2):
+def plot_0D_case(result, folder, spec_to_plot, species_names, remove_N2, eps=None):
     """Plots of a 0D reactor case (result of NNTesting._run_0D_case) in folder.
 
     Temperature [K] and mass fractions [-] of spec_to_plot versus time [ms] for CVODE and ANN,
@@ -34,6 +36,8 @@ def plot_0D_case(result, folder, spec_to_plot, species_names, remove_N2):
     HP equilibrium temperature of the initial mixture.
     Changes per step ln T(t+dt) - ln T(t) and ln Y_k(t+dt) - ln Y_k(t) of spec_to_plot [-], until the end
     of the stability steps for the ANN, in the subfolder log_changes (see plot_0D_log_changes).
+    log10 of the norm Omega of the scaled increments of each step, CVODE and ANN (log10_Omega.png, see plot_log_Omega),
+    with the floor eps [-] of the loss weights of the model (None: not drawn).
     species_names: names of the columns 1: of the states (all species of the mechanism).
     """
 
@@ -86,6 +90,10 @@ def plot_0D_case(result, folder, spec_to_plot, species_names, remove_N2):
     for spec in spec_to_plot:
         j = species_names.index(spec) + 1
         plot_0D_log_changes(time_vect, states_cvode[:,j], time_ann, states_ann_all[:,j], f'$Y_{{{spec}}}$', log_changes_folder + f"/dlnY{spec}.png")
+
+    # Norm Omega of the scaled increments of each step, plotted at t+dt
+    plot_log_Omega(time_vect[1:], result["Omega_norm_ref"], time_ann[1:], result["Omega_norm_ann"], eps,
+                   '$t$ $[ms]$', folder + "/log10_Omega.png")
 
     # Mass fractions
     for spec in spec_to_plot:
@@ -195,6 +203,31 @@ def plot_0D_log_changes(time_cvode, x_cvode, time_ann, x_ann, label, file_name):
     fig.tight_layout()
 
     fig.savefig(file_name, dpi=500)
+
+
+def plot_log_Omega(x_ref, Omega_ref, x_ann, Omega_ann, eps, xlabel, file_name, x_window=None):
+    """log10 of the norm Omega [-] of the scaled increments of the steps (see tools/loss_weighting.py) versus x
+    (time [ms] of 0D reactors, position [m] of 1D flames), CVODE (x_ref, Omega_ref) and ANN (x_ann, Omega_ann).
+    eps [-]: floor of the loss weights of the model, drawn as a horizontal line (None: not drawn). Omega = 0 is
+    plotted at OMEGA_FLOOR. x_window: optional [x_min, x_max]."""
+
+    fig, ax = plt.subplots()
+    ax.plot(x_ref, np.log10(np.maximum(Omega_ref, OMEGA_FLOOR)), ls="--", color="k", lw=2, label="CVODE")
+    ax.plot(x_ann, np.log10(np.maximum(Omega_ann, OMEGA_FLOOR)), ls="-", color="b", lw=1.5, label="NN")
+
+    # Floor of the loss weights
+    if eps is not None:
+        ax.axhline(np.log10(eps), ls=":", color="r", lw=1.5, label=r"$\varepsilon$")
+
+    if x_window is not None:
+        ax.set_xlim(x_window)
+    ax.set_xlabel(xlabel, fontsize=FONTSIZE)
+    ax.set_ylabel(r"$\log_{10}\,\Omega$ $[-]$", fontsize=FONTSIZE)
+    ax.legend()
+    fig.tight_layout()
+
+    fig.savefig(file_name, dpi=500)
+    plt.close(fig)
 
 
 def plot_validation_errors(diff, i_cluster, folder, max_points_scatter=50000):

@@ -133,6 +133,13 @@ class NNTesting():
         # Chemistry (maybe an information to get from model folder ?)
         self.spec_to_plot = testing_parameters["spec_to_plot"]
 
+        # Floor eps [-] of the loss weights of the model (None if trained without weights), drawn on the plots of Omega
+        with open(os.path.join(self.models_folder, "networks_params.yaml"), "r") as file:
+            learning = yaml.safe_load(file)["learning"]
+        self.loss_weighting_eps = None
+        if learning.get("loss_weighting_p", 0.0) > 0.0 or learning.get("loss_weighting_q", 0.0) > 0.0:
+            self.loss_weighting_eps = learning["loss_weighting_eps"]
+
         # Hybrid computation
         self.hybrid_ann_cvode = testing_parameters["hybrid_ann_cvode"]
         self.hybrid_ann_cvode_tol = testing_parameters["hybrid_ann_cvode_tol"]
@@ -185,7 +192,8 @@ class NNTesting():
         max_simulation_time : float
             Maximum end time [s], used only if CVODE does not reach equilibrium before.
         T_eq_tolerance : float
-            CVODE stops when its temperature is within T_eq_tolerance [K] of the HP equilibrium
+            CVODE stops when its temperature is within T_eq_tolerance [K] of the HP equilibrium, and changes by less
+            than T_eq_tolerance over the step (a rich mixture crosses T_eq on the ignition front, before its overshoot)
             temperature of the initial mixture. The ANN is run for the same number of steps.
         stability_factor : float
             After these steps, the ANN alone (no CVODE fallback) is continued for stability_factor times
@@ -240,6 +248,7 @@ class NNTesting():
             simtime += dt
 
             # New reactor at each step, as in a CFD code (CVODE restarted from the current state)
+            T_previous = T_cvode
             start = perf_counter()
             T_cvode, Y_cvode = self.advance_state_CVODE(T_cvode, Y_cvode, pressure, dt)
             time_cvode += perf_counter() - start
@@ -249,7 +258,9 @@ class NNTesting():
             if reactor_type=="ignition" and T_cvode > T0+200.0 and tau_ign_CVODE==0.0:
                 tau_ign_CVODE = simtime
 
-            equilibrium_reached = abs(T_cvode - T_eq) <= T_eq_tolerance
+            # Equilibrium: T within T_eq_tolerance of T_eq, and no longer changing by more than T_eq_tolerance per step
+            # (a rich mixture crosses T_eq on the ignition front, before its overshoot)
+            equilibrium_reached = abs(T_cvode - T_eq) <= T_eq_tolerance and abs(T_cvode - T_previous) <= T_eq_tolerance
 
         # Number of time steps, the same for the ANN
         nb_ite = len(states.T) - 1
@@ -376,6 +387,12 @@ class NNTesting():
                 T_drift = max(T_drift, float(abs(T_new - Teq_ann)))
                 sumYk_drift = max(sumYk_drift, float(abs(np.sum(Y_new) - 1.0)))
 
+        # Norm Omega of the scaled increments of each step (see tools/loss_weighting.py): CVODE, and ANN until the end
+        # of the stability steps
+        states_ann_all = state_save if states_stability is None else np.vstack([state_save, states_stability])
+        Omega_norm_ref = self._Omega_steps(state_ref[:-1], state_ref[1:], dt, pressure, Yc_u)
+        Omega_norm_ann = self._Omega_steps(states_ann_all[:-1], states_ann_all[1:], dt, pressure, Yc_u)
+
         # Use configurable prefix to label ignition-like delays
         return {
             "time_vect": states.t,
@@ -398,6 +415,8 @@ class NNTesting():
             "T_drift": T_drift,
             "sumYk_drift": sumYk_drift,
             "states_stability": None if states_stability is None else np.array(states_stability),
+            "Omega_norm_ref": Omega_norm_ref,
+            "Omega_norm_ann": Omega_norm_ann,
         }
 
     def run_0D_ignition_case(self, phi, T0, pressure, dt, max_simulation_time, T_eq_tolerance=1.0, stability_factor=0.0):
@@ -722,6 +741,11 @@ class NNTesting():
         # Reaction rates
         Omega_ann = (Yt_dt_ann-Yt_ann)/dt
 
+        # Norm Omega of the scaled increments of the step of each point (see tools/loss_weighting.py)
+        states_t = np.column_stack([Tt, Yt.T])
+        Omega_norm_ref = self._Omega_steps(states_t, np.column_stack([T_dt_exact, Yt_dt_exact.T]), dt, pressure, Yc_u)
+        Omega_norm_ann = self._Omega_steps(states_t, np.column_stack([T_dt_ann, Yt_dt_ann.T]), dt, pressure, Yc_u)
+
         return {
             "flame": f,
             "c": c,
@@ -731,6 +755,8 @@ class NNTesting():
             "T_dt_ann": T_dt_ann,
             "Omega_exact": Omega_exact,
             "Omega_ann": Omega_ann,
+            "Omega_norm_ref": Omega_norm_ref,
+            "Omega_norm_ann": Omega_norm_ann,
             "ann_calls": ann_calls,
             "cvode_calls": cvode_calls,
             "time_cvode": time_cvode,
@@ -837,7 +863,9 @@ class NNTesting():
         1D errors and plots, full domain if null), conditions_file (sim_test_*.csv of a flamelets database
         whose conditions replace those of the series, see read_conditions_file, not used if null).
         Returns the summary: errors of each case, mean and standard deviation over the cases, and the
-        simulation error aggregated per dt (E(dt)). The errors of each case are also written in
+        simulation error aggregated per dt (E(dt)). A case that fails (e.g. the ANN diverges and Cantera cannot set
+        its state) is skipped: the series continues, and the number of failed cases (n_failed) and their parameters
+        and errors (failed_cases) are printed, logged (CASE_FAILED, SERIES_FAILURES) and written in the summary. The errors of each case are also written in
         simulation_errors_<case_type>.csv, and E(dt) in simulation_errors_<case_type>_by_dt.csv (plotted in
         simulation_errors_<case_type>_by_dt.png), with the mean contribution of each variable (plotted in
         simulation_errors_<case_type>_by_variable.png) and the mean speed-up. The errors per cluster and
@@ -857,12 +885,26 @@ class NNTesting():
         print(f"\n>> Series {case_type}: {len(cases)} cases")
 
         entries = []
+        failed = []         # Cases that failed: parameters and error message
         point_errors = []   # Errors of each step (0D) or grid point (1D), for the errors per cluster
         for case in cases:
 
             print(f"\n>> {case_type}: {case}")
-            result = self.run_case(case_type, case)
-            errors = self.case_errors(case_type, result, x_window)
+
+            # A failing case (e.g. diverging ANN) is recorded and skipped
+            try:
+                result = self.run_case(case_type, case)
+                errors = self.case_errors(case_type, result, x_window)
+            except Exception as error:
+                # On one line, without the frames of asterisks of Cantera errors
+                lines = [line.strip() for line in str(error).splitlines() if line.strip().strip("*")]
+                message = f"{type(error).__name__}: {' '.join(lines)}"
+                print(f">> CASE FAILED: {message}")
+                self._log(f"CASE_FAILED {case_type} {case}: {message}")
+                failed.append({"params": case, "error": message})
+                plt.close("all")
+                continue
+
             print_errors(errors)
 
             if series["plots"]:
@@ -878,13 +920,26 @@ class NNTesting():
             points.insert(0, "dt", case["dt"])
             point_errors.append(points)
 
+        # Number of failed cases
+        msg = f"SERIES_FAILURES {case_type}: {len(failed)} failed cases of {len(cases)}"
+        print(f"\n>> {msg}")
+        self._log(msg)
+
+        # All cases failed: summary of the failures only
+        if len(entries) == 0:
+            summary = {"n_cases": 0, "n_failed": len(failed), "failed_cases": failed}
+            with open(os.path.join(self.output_folder, f"summary_{case_type}.yaml"), "w") as file:
+                yaml.dump(summary, file, default_flow_style=False, sort_keys=False)
+            return summary
+
         # Mean and standard deviation over the cases (cases without value, e.g. no ignition, are skipped)
         mean, std = {}, {}
         for key in entries[0]["errors"]:
             values = [entry["errors"][key] for entry in entries if entry["errors"][key] is not None]
             mean[key], std[key] = metrics.mean_std(values)
 
-        summary = {"n_cases": len(entries), "mean": mean, "std": std, "cases": entries}
+        summary = {"n_cases": len(entries), "n_failed": len(failed), "mean": mean, "std": std, "cases": entries,
+                   "failed_cases": failed}
 
         # Table of the errors of each simulation (one row per case: parameters and errors)
         table = pd.DataFrame([{**entry["params"], **entry["errors"]} for entry in entries])
@@ -1059,16 +1114,58 @@ class NNTesting():
 
         # 0D reactors: time evolutions
         if case_type.startswith("0D"):
-            plots.plot_0D_case(result, folder, self.spec_to_plot, self.spec_list_ref, self.remove_N2)
+            plots.plot_0D_case(result, folder, self.spec_to_plot, self.spec_list_ref, self.remove_N2, self.loss_weighting_eps)
 
         # 1D flames: reaction rates along the flame
         else:
-            plots.plot_1D_reaction_rates(result["flame"].grid, result["Omega_exact"], result["Omega_ann"],
+            grid = result["flame"].grid
+            plots.plot_1D_reaction_rates(grid, result["Omega_exact"], result["Omega_ann"],
                                          self.spec_to_plot, self.spec_list_ref, folder, x_window)
+            plots.plot_log_Omega(grid, result["Omega_norm_ref"], grid, result["Omega_norm_ann"], self.loss_weighting_eps,
+                                 '$x$ [m]', folder + "/log10_Omega.png", x_window)
 
 #-----------------------------------------------------------------------
 #   ANN AND CVODE ADVANCEMENT OF ONE STATE
 #-----------------------------------------------------------------------
+
+    def _Omega_steps(self, states_old, states_new, dt, pressure, Yc_u):
+        """Norm Omega [-] (n) of the scaled increments of n steps from states_old to states_new ([T [K], Y_k [-]] of
+        all species, (n, 1 + n_species)): Omega^2 = sum_k (omega_k / sigma_k)^2, with omega_k the increment of the
+        transformed mass fraction of the network species (transform of the outputs) and sigma_k the standard deviation
+        of the outputs of the cluster of the state before the step (see tools/loss_weighting.py). dt [s], pressure
+        [Pa], Yc_u [-] (scalar or n): unburnt progress variable species mass fraction, for progvar clustering."""
+
+        inf = self.inference
+        cols = [self.spec_list_ref.index(spec) for spec in inf.spec_list_ANN]
+
+        Y_t_old = transforms.transform_species(states_old[:, 1:][:, cols], inf.spec_list_ANN, inf.log_transform_Y,
+                                               inf.threshold, inf.lambda_bct, inf.log_excluded_species)
+        Y_t_new = transforms.transform_species(states_new[:, 1:][:, cols], inf.spec_list_ANN, inf.log_transform_Y,
+                                               inf.threshold, inf.lambda_bct, inf.log_excluded_species)
+
+        clusters = self._clusters_of_states(states_old, dt, pressure, Yc_u)
+        std = np.array([inf.Yscaler_list[i_cluster][:, 1] for i_cluster in clusters])
+
+        return np.sqrt(np.sum(((Y_t_new - Y_t_old) / std)**2, axis=1))
+
+
+    def _clusters_of_states(self, states, dt, pressure, Yc_u):
+        """Clusters (n) of the states [T [K], Y_k [-]] (n, 1 + n_species) advanced by dt [s] (see attribute_cluster)."""
+
+        n = len(states)
+
+        # One network: no clustering
+        if self.inference.nb_clusters == 1:
+            return np.zeros(n, dtype=int)
+
+        # Progress variable, only used by progvar clustering (equilibrium of each state)
+        progvar = np.zeros(n)
+        if self.inference.clustering_method == "progvar":
+            Yc_u = np.broadcast_to(Yc_u, n)
+            progvar = np.array([self.compute_progvar(states[i], pressure, Yc_u[i]) for i in range(n)])
+
+        return np.asarray(self.inference.attribute_clusters(states[:, 0], states[:, 1:], dt, progvar), dtype=int)
+
 
     def attribute_cluster(self, state, dt, progvar):
         """Cluster (self.cluster) of the state [T [K], Y_k [-]] (all species) advanced by dt [s],

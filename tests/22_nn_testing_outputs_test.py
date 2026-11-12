@@ -17,10 +17,13 @@ Check:
   statistics and plots; the 0D simulation errors E_sim per case and per dt in CSV tables, with the
   training standard deviations as normalization, the contribution of each variable and the speed-up,
   the drifts after equilibrium, the errors per cluster, and the speed-up benchmark on batches.
+- a failing case (e.g. diverging ANN) is skipped: the series continues, and the failed cases are counted,
+  logged and written in the summary, also when all cases fail.
 
 Independent of the other tests.
 """
 import os
+import glob
 import h5py
 import numpy as np
 import pandas as pd
@@ -119,7 +122,7 @@ def test_nn_testing_outputs(tmp_path):
     output = "TESTING_MODEL_TEST"
     for folder in [f"0D_ignition_phi#0.6_T0#1200.0_pressure#{pressure}_dt#{dt}_max_simulation_time#{3 * dt}_T_eq_tolerance#1.0_stability_factor#0.0",
                    f"0D_pyrolysis_T0#1200.0_pressure#{pressure}_dt#{dt}_max_simulation_time#{3 * dt}_T_eq_tolerance#1.0_stability_factor#0.0_diluent#N2_X_diluent#0.5"]:
-        for name in ["Temperature", "YH2", "YN2", "SumYs", "AtomCons", "log_changes/dlnT", "log_changes/dlnYH2"]:
+        for name in ["Temperature", "YH2", "YN2", "SumYs", "AtomCons", "log_changes/dlnT", "log_changes/dlnYH2", "log10_Omega"]:
             assert os.path.isfile(os.path.join(output, folder, f"{name}.png"))
         assert not os.path.isfile(os.path.join(output, folder, "Temperature_stability.png"))
 
@@ -190,6 +193,7 @@ def test_nn_testing_outputs(tmp_path):
     assert errors["ann_calls"] > 0
     folder = f"1D_diffusion_strain#1000.0_T_ox#1000.0_T_fuel#300.0_pressure#{pressure}_dt#{dt}_width#0.02_T_threshold#600.0"
     assert os.path.isfile(os.path.join(output, folder, "YH2.png"))
+    assert os.path.isfile(os.path.join(output, folder, "log10_Omega.png"))
 
     # 1D a priori error E_sim and its aggregation per dt (one flame)
     assert errors["E_sim"] >= 0.0
@@ -218,3 +222,39 @@ def test_nn_testing_outputs(tmp_path):
     assert np.all(E >= 0.0) and np.all(e_sum >= 0.0) and np.all(e_e >= 0.0)
     for name in ["hybrid_e_sum.png", "hybrid_e_elements.png"]:
         assert os.path.isfile(os.path.join(output, "plots_validation", name))
+
+
+def test_nn_testing_failed_cases(tmp_path):
+    os.chdir(tmp_path)
+    write_h2_learning_database(tmp_path)
+    NN_manager().train_all_clusters()
+
+    series = {**series_parameters, "1D_premixed": {**series_parameters["1D_premixed"], "run": False},
+              "1D_diffusion": {**series_parameters["1D_diffusion"], "run": False},
+              "validation_set": {**series_parameters["validation_set"], "run": False},
+              "speedup_benchmark": {**series_parameters["speedup_benchmark"], "run": False}}
+    series["0D_ignition"] = {**series["0D_ignition"], "phi": [0.5, 0.6, 0.7]}
+    test = NNTesting({**testing_parameters, **series, "device": "cpu"})
+
+    # The case phi = 0.6 fails, as a diverging ANN would
+    run_0D_ignition_case = test.run_0D_ignition_case
+    def failing_case(**case):
+        if case["phi"] == 0.6:
+            raise RuntimeError("diverged")
+        return run_0D_ignition_case(**case)
+    test.run_0D_ignition_case = failing_case
+
+    summary = test.run_testing()["0D_ignition"]
+    assert summary["n_cases"] == 2 and summary["n_failed"] == 1
+    assert [case["params"]["phi"] for case in summary["cases"]] == [0.5, 0.7]
+    assert summary["failed_cases"] == [{"params": {**summary["failed_cases"][0]["params"], "phi": 0.6}, "error": "RuntimeError: diverged"}]
+
+    log = "".join(open(name).read() for name in glob.glob("TESTING_MODEL_TEST/nn_testing_*.log"))
+    assert "CASE_FAILED 0D_ignition" in log and "SERIES_FAILURES 0D_ignition: 1 failed cases of 3" in log
+
+    # All cases fail: summary of the failures only
+    def always_failing(**case):
+        raise RuntimeError("diverged")
+    test.run_0D_ignition_case = always_failing
+    summary = test.run_testing()["0D_ignition"]
+    assert summary == {"n_cases": 0, "n_failed": 3, "failed_cases": summary["failed_cases"]} and len(summary["failed_cases"]) == 3

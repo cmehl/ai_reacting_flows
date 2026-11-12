@@ -19,6 +19,7 @@ zerod_params:
   - 2000.0
   n_samples: 200
   max_sim_time: 1.0e-2
+  T_eq_tolerance: 1.0     # [K] end of each reactor when T is within this of equilibrium (default: 0.5 % criterion)
   solve_mode: "dt_cfd"
 oned_prem_params:
   phi_bounds:

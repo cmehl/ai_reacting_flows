@@ -48,6 +48,15 @@ def test_nn_testing_0D(tmp_path):
     result = test.run_0D_ignition_case(phi=0.6, T0=1200.0, pressure=pressure, dt=dt, max_simulation_time=3 * dt)
     assert result["states_ann"].shape == (4, 1 + gas.n_species)
 
+    # Norm Omega of the scaled increments of each step: increments of ln Y of the network species over the standard
+    # deviations of the outputs (one cluster)
+    species = test.inference.spec_list_ANN
+    cols = [gas.species_names.index(spec) + 1 for spec in species]
+    ln_Y = np.log(np.maximum(result["states_ref"][:, cols], test.inference.threshold))
+    std = test.inference.Yscaler_list[0][:, 1]
+    assert np.allclose(result["Omega_norm_ref"], np.sqrt(np.sum((np.diff(ln_Y, axis=0) / std)**2, axis=1)))
+    assert len(result["Omega_norm_ann"]) == 3
+
     # Progress variable clustering (2 clusters with the same network), states advanced with CVODE
     test.inference.nb_clusters = 2
     test.inference.clustering_method = "progvar"

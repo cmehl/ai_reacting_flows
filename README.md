@@ -128,6 +128,8 @@ Visualization:
 | `density_scatter(var_x, var_y)` | Scatter plot colored by point density |
 | `compare_resampled_pdfs(var)` | PDF of `var` before and after undersampling |
 | `plot_pdf_var(var)` | PDF of `var` |
+| `scatter_Omega_progvar(max_points=50000)` | Scatter plot of $\log_{10}\Omega$ (norm of the scaled increments, see `undersample_Omega`) versus `Prog_var`, colored by temperature, in `Omega_vs_progvar.png` (`_resampled` after an undersampling), in the database folder. Not for multi-dt databases |
+| `pdf_Omega(n_bins=100)` | PDFs of $\Omega$ (logarithmic density axis) and of $\log_{10}\Omega$ on all points of the current database, in `Omega_pdf.png` and `log10_Omega_pdf.png` (`_resampled` after an undersampling), in the database folder. Not for multi-dt databases |
 | `visualize_clusters(var1, var2)` | Scatter plot colored by cluster |
 | `print_data_size()` | Number of points in each cluster |
 
@@ -172,7 +174,7 @@ MODELS/MODEL_<suffix>/
 ├── norm_param_Y_cluster<i>.dat           mean and variance of outputs
 ├── kmeans_model.pkl, ...                 copy of the clustering files
 ├── networks_params.yaml, <mechanism>     copies of the inputs
-└── training/cluster_<i>/                 loss.png, mass_conservation.png, elements_conservation.png
+└── training/cluster_<i>/                 loss.png, mass_conservation.png, elements_conservation.png, Omega_*_<epoch>.png (see omega_diagnostics_epochs)
                                           (rollout: rollout_val_loss_per_step.csv, validation loss of each step with the best model)
 ```
 
@@ -191,7 +193,7 @@ The script `ann_model_testing.py` reads `nn_testing.yaml` and runs the selected 
 TESTING_<models_folder>/
 ├── nn_testing.yaml                       copy of the inputs
 ├── <case type>_<parameters>/             plots of each case (if plots: true)
-├── summary_<case type>.yaml              errors of each case, mean and std over the series
+├── summary_<case type>.yaml              errors of each case, mean and std over the series, failed cases
 ├── simulation_errors_<case type>.csv     one row per case: parameters and errors
 ├── simulation_errors_<case type>_by_dt.csv   E(dt), std and number of simulations per dt, mean E_<variable> and speed-up
 ├── simulation_errors_<case type>_by_dt.png   E(dt) with std bars, and box plot of E_i per dt
@@ -203,9 +205,11 @@ TESTING_<models_folder>/
 └── nn_testing_<timestamp>.log
 ```
 
-Errors: 0-D cases give the simulation error $\mathcal{E}_i$ (`E_sim`), the error on the final temperature [%], and for ignition the ignition delays (time at which $T$ exceeds $T_0 + 200$ K) and their error [%]; 1-D flames give an a priori simulation error $\mathcal{E}_i$ (`E_sim`) and the L2 error of the reaction rates of `spec_to_plot`. All cases also give the numbers of ANN and CVODE calls, and the speed-up `speedup` = `time_cvode` / `time_ann`, ratio of the CPU times [s] of the chemistry steps (CVODE integration; ANN clustering, network and CVODE fallback of the hybrid mode; the progress variable computation, which needs an equilibrium, and the diagnostics are not counted). As in a CFD code, CVODE is restarted from a new reactor at each time step (also in 0-D). The ANN advances one state per call, without batching, after an untimed warm-up call (initialization of the networks and k-means), so this speed-up is a lower bound of what a CFD code with batched calls would get: see the benchmark below. 0-D cases also give the drifts after equilibrium: the ANN alone is continued for `stability_factor` times the number of steps, and `T_drift` [K] (from the ANN temperature at the end of the simulation) and `sumYk_drift` (from 1) are the maximum deviations over these steps. Their temperature is also plotted, after the simulation, with the equilibrium (HP) temperature (`Temperature_stability.png` in the folder of the case, if `plots: true`). The plots of a 0-D case also give the changes per step $\ln T(t+dt) - \ln T(t)$ (`log_changes/dlnT.png`) and $\ln Y_k(t+dt) - \ln Y_k(t)$ of `spec_to_plot` (`log_changes/dlnY<species>.png`), CVODE and ANN (until the end of the stability steps), on a symmetric log scale: they show whether the ANN follows the small changes of the burnt gases, which are smaller than its error if it only learns the large changes of the ignition. A network that does not stay at equilibrium would make burnt gases drift in a CFD code.
+Errors: 0-D cases give the simulation error $\mathcal{E}_i$ (`E_sim`), the error on the final temperature [%], and for ignition the ignition delays (time at which $T$ exceeds $T_0 + 200$ K) and their error [%]; 1-D flames give an a priori simulation error $\mathcal{E}_i$ (`E_sim`) and the L2 error of the reaction rates of `spec_to_plot`. All cases also give the numbers of ANN and CVODE calls, and the speed-up `speedup` = `time_cvode` / `time_ann`, ratio of the CPU times [s] of the chemistry steps (CVODE integration; ANN clustering, network and CVODE fallback of the hybrid mode; the progress variable computation, which needs an equilibrium, and the diagnostics are not counted). As in a CFD code, CVODE is restarted from a new reactor at each time step (also in 0-D). The ANN advances one state per call, without batching, after an untimed warm-up call (initialization of the networks and k-means), so this speed-up is a lower bound of what a CFD code with batched calls would get: see the benchmark below. 0-D cases also give the drifts after equilibrium: the ANN alone is continued for `stability_factor` times the number of steps, and `T_drift` [K] (from the ANN temperature at the end of the simulation) and `sumYk_drift` (from 1) are the maximum deviations over these steps. Their temperature is also plotted, after the simulation, with the equilibrium (HP) temperature (`Temperature_stability.png` in the folder of the case, if `plots: true`). The plots of a 0-D case also give the changes per step $\ln T(t+dt) - \ln T(t)$ (`log_changes/dlnT.png`) and $\ln Y_k(t+dt) - \ln Y_k(t)$ of `spec_to_plot` (`log_changes/dlnY<species>.png`), CVODE and ANN (until the end of the stability steps), on a symmetric log scale: they show whether the ANN follows the small changes of the burnt gases, which are smaller than its error if it only learns the large changes of the ignition. 0-D cases (versus time, ANN until the end of the stability steps) and 1-D flames (versus position, one step from each point) also plot $\log_{10}\Omega$ (`log10_Omega.png`), the norm of the scaled increments of each step used by the [loss weights](docs/theory.md#loss-weighting), CVODE and ANN, with the floor $\varepsilon$ of the weights of the model if it was trained with weights. The $\sigma_k$ are those of the cluster of the state before each step. A network that does not stay at equilibrium would make burnt gases drift in a CFD code.
 
 `E_sim` is the normalized simulation error of Mehl & Aubagnac (eq. 6), per case, per `dt`, per variable and per cluster ([theory: simulation error](docs/theory.md#simulation-error)). Its tables and plots are listed above. Each 0-D simulation stops when the CVODE temperature is within `T_eq_tolerance` of the equilibrium (HP) temperature of the initial mixture, and the ANN is run for the same number of steps; `max_simulation_time` only caps the simulations that do not reach equilibrium (`equilibrium_reached: false`). 1-D errors are a priori (one step $dt$ from each grid point in `x_window`).
+
+A case that fails (e.g. the ANN diverges and Cantera cannot set its state) is skipped and the series continues: the number of failed cases is printed at the end of the series and logged (`SERIES_FAILURES`, each failure as `CASE_FAILED` with its parameters and error), and the summary gives `n_failed` and `failed_cases`. Means and tables are over the cases that ran.
 
 `speedup_benchmark.csv` gives, for each batch size, the ANN time [s], the ANN and CVODE times per state [s] and the speed-up ([theory: speed-up benchmark](docs/theory.md#speed-up-benchmark)).
 
@@ -271,7 +275,7 @@ Multi-dt generation (`generate_multi_dt.py`) reads the same file, with the addit
 | `pressure` | Pressure [Pa] |
 | `time_step` | $dt$ [s] between `X` and `Y` |
 | `include_zerod`, `include_oned_prem`, `include_oned_diff` | Which canonical cases to compute |
-| `zerod_params` | `phi_bounds`, `T0_bounds` [K], `n_samples`, `max_sim_time` [s], `solve_mode` (`dt_cfd`: constant $dt$, `dt_cvode`: CVODE internal steps), `cvode_stride` (`dt_cvode` only: one CVODE step out of `cvode_stride` is stored, optional, default 1) |
+| `zerod_params` | `phi_bounds`, `T0_bounds` [K], `n_samples`, `max_sim_time` [s], `solve_mode` (`dt_cfd`: constant $dt$, `dt_cvode`: CVODE internal steps), `cvode_stride` (`dt_cvode` only: one CVODE step out of `cvode_stride` is stored, optional, default 1), `T_eq_tolerance` [K] (a simulation ends when its temperature is within `T_eq_tolerance` of the HP equilibrium temperature and changes by less than `T_eq_tolerance` over `time_step`, as `T_eq_tolerance` of the 0D tests: a rich mixture crosses the equilibrium temperature on the ignition front, before its overshoot; optional, default: when the distance of $(X_k, T)$ to equilibrium is below 0.5 % of its norm, about 14 K at 2800 K. `max_sim_time` caps both) |
 | `oned_prem_params` | `phi_bounds`, `T0_bounds` [K], `n_samples` |
 | `oned_diff_params` | `strain_bounds` [1/s], `T0_bounds` [K], `n_samples`, `width` [m] |
 | `augment_dataset` | If `true`, add randomly perturbed states (enthalpy and $Y_k$), following Ding *et al.* |
@@ -326,13 +330,14 @@ Cases are sampled in the given bounds with Latin hypercube sampling.
 | `learning.decay_rate` | Decay factor per epoch for `ExpLR` |
 | `learning.batch_size` | Default 2048 |
 | `learning.epochs_list` | Number of epochs, one per cluster |
+| `learning.omega_diagnostics_epochs` | With `output_omegas: true`: epochs (from 0) at which the errors and loss share per decade of $\Omega$ are logged (`ERROR_VS_OMEGA`), and the numbers of points, absolute errors and relative errors plotted in `training/cluster_<i>/Omega_points_epoch<e>.png`, `Omega_absolute_error_epoch<e>.png`, `Omega_relative_error_epoch<e>.png` (see [theory](docs/theory.md#loss-weighting)). They are always computed for the model kept after training (`_best_epoch<e>`). Default `[]` |
 | `learning.val_every` | Validation is computed every `val_every` epochs (default 10) |
 | `learning.project_elements` | If `true`, the loss is on the state corrected as with `yk_renormalization: 3`; the saved network and inference do not change, but use `yk_renormalization: 3` in simulations (see [theory](docs/theory.md#element-projection-in-training)). Default `false` |
 | `learning.raw_state_loss_weight` | With `project_elements`: weight $\lambda$ of the loss on the prediction before projection (default 1) |
-| `learning.loss_weighting_p` | Exponent $p$ of the loss weights $(\Omega^2 + \varepsilon^2)^{-p}$, one per point, $\Omega^2 = \sum_k (\hat\omega_k/\sigma_k)^2$ with $\hat\omega_k$ the increment of $\ln Y_k$ per step and $\sigma_k$ its standard deviation: points with small increments (burnt gases) count more (see [theory](docs/theory.md#loss-weighting), example: `scripts/H2_IGN_KERNEL_WEIGHTED_LOSS`). Needs `output_omegas: true`, `log_transform_Y: 1`, the MSE loss, no rollout. Default 0 (usual loss) |
+| `learning.loss_weighting_p` | Exponent $p$ of the loss weights $(\Omega + \varepsilon)^{-p}$, one per point, $\Omega^2 = \sum_k (\hat\omega_k/\sigma_k)^2$ with $\hat\omega_k$ the increment of $\ln Y_k$ per step and $\sigma_k$ its standard deviation: points with small increments (burnt gases) count more (see [theory](docs/theory.md#loss-weighting), example: `scripts/H2_IGN_KERNEL_WEIGHTED_LOSS`). Needs `output_omegas: true`, `log_transform_Y: 1`, the MSE loss, no rollout. The weights flatten the relative error over the decades of $\Omega$, where the usual loss flattens the absolute error: the price of the error of a point goes as (absolute error)$^{2-p}$ (relative error)$^{p}$, so $p = 2$ prices the relative error only and $p = 1$ is halfway. Default 0 (usual loss) |
 | `learning.loss_weighting_q` | Exponent $q$ of the density factor $N_{\text{bin}}^{-q}$ of the loss weights, $N_{\text{bin}}$ the number of training points in the bin of $\log_{10}\Omega$ of the point: $q = 1$ is equivalent to `undersample_Omega` without discarding points (see [theory](docs/theory.md#loss-weighting)). Same requirements as `loss_weighting_p`, needs `loss_weighting_eps`. Default 0 |
 | `learning.loss_weighting_min_count` | With `loss_weighting_q > 0`: floor of $N_{\text{bin}}$, which bounds the weights of rare bins (default 100) |
-| `learning.loss_weighting_eps` | With `loss_weighting_p > 0` or `loss_weighting_q > 0`: floor $\varepsilon$ [-] of $\Omega$, in units of $\sigma_k$, which bounds the weights (quantiles of $\Omega$ printed at the start of training) |
+| `learning.loss_weighting_eps` | With `loss_weighting_p > 0` or `loss_weighting_q > 0`: floor $\varepsilon$ [-] of $\Omega$, in units of $\sigma_k$, which bounds the weights. Of the order of the error the network can reach: see the median error per decade of $\Omega$ in the training log (`ERROR_VS_OMEGA`, logged for every training with `output_omegas: true`) |
 
 An MLP definition contains:
 
@@ -349,13 +354,13 @@ For `DeepONet`, these three keys are dicts with `branch` and `trunk` entries (pl
 | Key | Description |
 |-----|-------------|
 | `models_folder` | Model folder in `MODELS/` (e.g. `MODEL_H2_POF_2023`) |
-| `spec_to_plot` | Species plotted, and on which 1-D errors are computed |
+| `spec_to_plot` | Species plotted, and on which 1-D errors are computed. Write `"NO"` with quotes: YAML reads an unquoted `NO` as the boolean `false` (same for any list of species in the YAML inputs) |
 | `yk_renormalization` | Correction of the ANN mass fractions to conserve the elements: `0` none, `1` one species per element, `2` Wan *et al.* (2020), `3` Wan *et al.* extended to O (see [theory](docs/theory.md#element-conservation-of-the-ann-mass-fractions-yk_renormalization)) |
 | `hybrid_ann_cvode` | Hybrid ANN/CVODE model of Mehl & Aubagnac-Karkar (2023): CVODE is used instead of the ANN when the conservation error of its prediction exceeds `hybrid_ann_cvode_tol`. `0`: never. `1`: error on the sum of mass fractions $\|\sum_k Y_k - 1\|$. `2`: largest relative error on the element mass fractions (see [theory](docs/theory.md#hybrid-anncvode-model-hybrid_ann_cvode)) |
 | `hybrid_ann_cvode_tol` | Tolerance on the conservation error [-] (in the paper, about `2.0e-04` for `1` and `2.0e-03` for `2`) |
 | `device` | Optional, device of the networks: `cpu` (as in a first CFD use) or `cuda`; absent or `null`: `cuda` if available, else `cpu` |
 | `torch_threads` | Optional, number of CPU threads of torch: 1 as one MPI rank per core in a CFD code (small batches are also faster); absent or `null`: torch default (one per core) |
-| `0D_ignition` | Series of 0-D ignitions of fuel/air: `phi`, `T0` [K], `pressure` [Pa], `dt` [s], `T_eq_tolerance` [K] (CVODE and ANN stop when the CVODE temperature is this close to equilibrium), `max_simulation_time` [s] (end time if equilibrium is not reached), `stability_factor` [-] (ANN continued after equilibrium for this times the number of steps, 0 to skip) |
+| `0D_ignition` | Series of 0-D ignitions of fuel/air: `phi`, `T0` [K], `pressure` [Pa], `dt` [s], `T_eq_tolerance` [K] (CVODE and ANN stop when the CVODE temperature is this close to equilibrium and changes by less than this over a step), `max_simulation_time` [s] (end time if equilibrium is not reached), `stability_factor` [-] (ANN continued after equilibrium for this times the number of steps, 0 to skip) |
 | `0D_pyrolysis` | Series of 0-D pyrolysis: `T0` [K], `pressure` [Pa], `dt` [s], `T_eq_tolerance` [K], `max_simulation_time` [s], `stability_factor` [-], `diluent` (species or `null`), `X_diluent` [-] |
 | `1D_premixed` | Series of 1-D premixed flames: `phi`, `T0` [K], `pressure` [Pa], `dt` [s], `T_threshold` [K] (ANN not applied below), `x_window` |
 | `1D_diffusion` | Series of 1-D counterflow flames of pure fuel against air: `strain` [1/s], `T_ox` [K], `T_fuel` [K], `pressure` [Pa], `dt` [s], `width` [m], `T_threshold` [K], `x_window` |

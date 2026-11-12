@@ -36,7 +36,7 @@ import ai_reacting_flows.tools.utilities as utils
 import ai_reacting_flows.tools.transforms as transforms
 from ai_reacting_flows.databases_processing.processing_parameters import write_processing_parameters
 from ai_reacting_flows.databases_processing.read_solutions import read_solutions
-from ai_reacting_flows.tools.loss_weighting import increment_norm
+from ai_reacting_flows.tools.loss_weighting import increment_norm, OMEGA_FLOOR
 
 sns.set_style("darkgrid")
 
@@ -614,6 +614,23 @@ class LearningDatabase(object):
         print(f"    >> {100*self.X.shape[0]/n} % of the database is retained")
 
 
+    def _Omega(self):
+        """Norm Omega [-] (n_points) of the increments of the species of the network, with the transform of the outputs,
+        scaled by their standard deviations over the current database (see undersample_Omega)."""
+
+        if self.dt_var:
+            raise NotImplementedError("Omega is not available for multi-dt databases (one increment per dt)")
+
+        species = [spec for spec in self.species_names if self.with_N_chemistry or spec != "N2"]
+        Y_t = transforms.transform_species(self.X[species].values, species, self.log_transform_Y, self.threshold,
+                                           self.lambda_bct, self.log_excluded_species)
+        Y_t_dt = transforms.transform_species(self.Y[species].values, species, self.log_transform_Y, self.threshold,
+                                              self.lambda_bct, self.log_excluded_species)
+        omega = Y_t_dt - Y_t
+
+        return increment_norm(omega, transforms.scaler_std(omega.var(axis=0)))
+
+
     def undersample_Omega(self, Omega_min, seed=1991, min_count=1, plot_distrib=False):
         """1D undersampling (undersample_1D) on log10(Omega), with Omega [-] the norm of the scaled increments of the
         species of the network (the same quantity as the loss weights of tools/loss_weighting.py):
@@ -626,18 +643,7 @@ class LearningDatabase(object):
         are gathered in the first bin. See docs/theory.md (Loss weighting).
         """
 
-        if self.dt_var:
-            raise NotImplementedError("undersample_Omega is not available for multi-dt databases (one increment per dt)")
-
-        # Increments of the species of the network, with the transform of the outputs
-        species = [spec for spec in self.species_names if self.with_N_chemistry or spec != "N2"]
-        Y_t = transforms.transform_species(self.X[species].values, species, self.log_transform_Y, self.threshold,
-                                           self.lambda_bct, self.log_excluded_species)
-        Y_t_dt = transforms.transform_species(self.Y[species].values, species, self.log_transform_Y, self.threshold,
-                                              self.lambda_bct, self.log_excluded_species)
-        omega = Y_t_dt - Y_t
-
-        Omega = increment_norm(omega, transforms.scaler_std(omega.var(axis=0)))
+        Omega = self._Omega()
         print(f"Omega quantiles 1%/50%/99%: {np.quantile(Omega, 0.01):.3e}/{np.median(Omega):.3e}/{np.quantile(Omega, 0.99):.3e}")
 
         # Temporary column of the undersampling variable, removed afterwards
@@ -1217,6 +1223,59 @@ class LearningDatabase(object):
             sys.exit("ERROR: rollout is done with a constant dt, it cannot be used with dt_var !")
 
     # 2-D joint PDF plotting of two variable
+    def scatter_Omega_progvar(self, max_points=50000, seed=1991):
+        """Scatter plot of log10(Omega) versus the progress variable [-], colored by temperature [K], with Omega [-] the
+        norm of the scaled increments (see undersample_Omega). At most max_points points, drawn at random. Saved in
+        the database folder, Omega_vs_progvar.png (Omega_vs_progvar_resampled.png after an undersampling)."""
+
+        log10_Omega = np.log10(np.maximum(self._Omega(), OMEGA_FLOOR))
+
+        rng = np.random.default_rng(seed)
+        selected = rng.choice(len(log10_Omega), size=min(max_points, len(log10_Omega)), replace=False)
+
+        fig, ax = plt.subplots()
+        im = ax.scatter(self.X["Prog_var"].values[selected], log10_Omega[selected], c=self.X["Temperature"].values[selected],
+                        s=2, cmap="plasma")
+        cbar = fig.colorbar(im, ax=ax)
+        cbar.ax.set_ylabel("$T$ $[K]$", fontsize=14)
+        ax.set_xlabel("Progress variable $[-]$", fontsize=14)
+        ax.set_ylabel(r"$\log_{10}\,\Omega$ $[-]$", fontsize=14)
+        fig.tight_layout()
+
+        file_name = "Omega_vs_progvar_resampled.png" if self.is_resampled else "Omega_vs_progvar.png"
+        fig.savefig(os.path.join(self.dtb_folder, file_name), dpi=400)
+
+
+    def pdf_Omega(self, n_bins=100):
+        """PDFs of Omega [-] and of log10(Omega), with Omega the norm of the scaled increments (see undersample_Omega),
+        on all points of the current database. Saved in the database folder, Omega_pdf.png and log10_Omega_pdf.png
+        (with _resampled after an undersampling). The PDF of Omega has a logarithmic axis for the density: its tail of
+        large increments is orders of magnitude below its peak."""
+
+        Omega = self._Omega()
+        log10_Omega = np.log10(np.maximum(Omega, OMEGA_FLOOR))
+        suffix = "_resampled" if self.is_resampled else ""
+
+        # PDF of Omega
+        fig, ax = plt.subplots()
+        ax.hist(Omega, bins=n_bins, density=True, color="grey")
+        ax.set_yscale("log")
+        ax.set_xlabel(r"$\Omega$ $[-]$", fontsize=14)
+        ax.set_ylabel("PDF $[-]$", fontsize=14)
+        fig.tight_layout()
+        fig.savefig(os.path.join(self.dtb_folder, f"Omega_pdf{suffix}.png"), dpi=400)
+        plt.close(fig)
+
+        # PDF of log10(Omega)
+        fig, ax = plt.subplots()
+        ax.hist(log10_Omega, bins=n_bins, density=True, color="grey")
+        ax.set_xlabel(r"$\log_{10}\,\Omega$ $[-]$", fontsize=14)
+        ax.set_ylabel("PDF $[-]$", fontsize=14)
+        fig.tight_layout()
+        fig.savefig(os.path.join(self.dtb_folder, f"log10_Omega_pdf{suffix}.png"), dpi=400)
+        plt.close(fig)
+
+
     def density_scatter(self, var_x , var_y, sort = True, bins = 100):
         # Functions from https://stackoverflow.com/questions/20105364/how-can-i-make-a-scatter-plot-colored-by-density-in-matplotlib
 

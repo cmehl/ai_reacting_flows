@@ -181,6 +181,8 @@ $P(Y^*)$ is converted back to a network output (`transforms.Yk_to_output`) to be
 
 # Loss weighting
 
+CM: loss weighting is still a work in progress.
+
 With `output_omegas: true` and `log_transform_Y: 1`, the target of species $k$ at point $i$ is the increment $\hat\omega_{ik} = \ln Y_k(t+dt) - \ln Y_k(t)$, scaled as $y_{ik} = (\hat\omega_{ik} - \mu_k)/\sigma_k$, with $\mu_k$ and $\sigma_k$ the mean and standard deviation of the cluster. The mean cancels in the error: with $e_{ik}$ the relative error on $\hat\omega_{ik}$, the MSE loss of the point is
 
 $$\sum_k \left(\frac{\hat\omega^{pred}_{ik} - \hat\omega^{ref}_{ik}}{\sigma_k}\right)^2 = \sum_k e_{ik}^2 \left(\frac{\hat\omega^{ref}_{ik}}{\sigma_k}\right)^2 \;\overset{e_{ik} = e_i}{=}\; e_i^2\, \Omega_i^2, \qquad \Omega_i^2 = \sum_k \left(\frac{\hat\omega^{ref}_{ik}}{\sigma_k}\right)^2$$
@@ -193,32 +195,54 @@ For the same relative error, a point of the burnt gases ($\hat\omega \sim 10^{-4
 
 With `loss_weighting_p` $= p > 0$ (`tools/loss_weighting.py`, `NN_manager._loss_weights`), the MSE loss is weighted with one weight per point, the same for all its species:
 
-$$\mathcal{L} = \frac{1}{n\, K}\sum_{i,k} w_i\,(\hat y_{ik} - y_{ik})^2, \qquad w_i = \frac{(\Omega_i^2 + \varepsilon^2)^{-p}}{\big\langle (\Omega^2 + \varepsilon^2)^{-p} \big\rangle_{\text{train}}}$$
+$$\mathcal{L} = \frac{1}{n\, K}\sum_{i,k} w_i\,(\hat y_{ik} - y_{ik})^2, \qquad w_i = \frac{(\Omega_i + \varepsilon)^{-p}}{\big\langle (\Omega + \varepsilon)^{-p} \big\rangle_{\text{train}}}$$
 
-with $\varepsilon$ = `loss_weighting_eps` [-], in units of $\sigma_k$. The ratio of the losses becomes, for $\Omega \gg \varepsilon$,
+with $\varepsilon$ = `loss_weighting_eps` [-], in units of $\sigma_k$. The training is driven by the gradient of the loss with respect to the parameters $\theta$, $\sum_i 2\,w_i\, r_i \cdot \partial\hat y_i/\partial\theta$, with $r_i = \hat y_i - y_i$ and $\|r_i\| = e_i\,\Omega_i$: the size of the contribution of a point is $w_i\,\|r_i\|$ if the sensitivity $\partial\hat y_i/\partial\theta$ is the same for all points. For $\Omega \gg \varepsilon$, the ratios of the losses and of these gradient contributions become
 
-$$\frac{\mathcal{L}_b}{\mathcal{L}_r} = \frac{N_b}{N_r}\,\frac{e_b^2}{e_r^2}\left(\frac{\Omega_b}{\Omega_r}\right)^{2-2p}$$
+$$\frac{\mathcal{L}_b}{\mathcal{L}_r} = \frac{N_b}{N_r}\,\frac{e_b^2}{e_r^2}\left(\frac{\Omega_b}{\Omega_r}\right)^{2-p}, \qquad \frac{G_b}{G_r} = \frac{N_b}{N_r}\,\frac{e_b}{e_r}\left(\frac{\Omega_b}{\Omega_r}\right)^{1-p}$$
 
-+ $p = 0$ is the usual loss; $p = 1$ gives the same weight to the same relative error (the balance of the loss is the ratio of the numbers of points); intermediate $p$ tolerate a relative error $e_b/e_r \propto (\Omega_b/\Omega_r)^{p-1}$ in the burnt gases.
-+ $\varepsilon$ bounds the weights: their ratio is at most $(\max\Omega/\varepsilon)^{2p}$. Below $\varepsilon$, the error is absolute (equilibrium, solver noise). The quantiles of $\Omega$ are printed at the start of training to choose it.
++ $p = 0$ is the usual loss; $p = 1$ ($w \propto 1/\Omega$) gives the same gradient contribution to the same relative error; $p = 2$ ($w \propto 1/\Omega^2$) the same loss, but then the gradient goes as $1/\Omega$ and the small increments take over the training.
++ $\varepsilon$ bounds the weights: their ratio is at most $\big((\max\Omega + \varepsilon)/\varepsilon\big)^{p}$. Below $\varepsilon$, the error is absolute (equilibrium, solver noise). It should be of the order of the error the network can reach, not of the smallest $\Omega$: below this level the error does not decrease with $\Omega$, and points with large weights and an error they cannot reduce take over the gradients. With `output_omegas: true`, the training log gives the median norm of the error of the validation points per decade of $\Omega$ (`ERROR_VS_OMEGA`, same units as $\Omega$): the plateau at small $\Omega$, or the median error of a training without weights, gives this level.
 + One weight per point, from all species: a species whose increment crosses 0 in the reaction zone (intermediate species at its peak) or is clipped at `threshold` does not make the point look like burnt gases. The balance between the species of a point is the one of the usual loss.
 + The weights are normalized to a mean of 1 on the training points; validation points use the same normalization. $\sigma_k$ are those of the cluster, so $\Omega$ and $\varepsilon$ are relative to the spread of the increments of the cluster.
 
+**What the weights do.** With $a_i = \|r_i\|$ the absolute error of a point (in units of $\sigma_k$) and $e_i = a_i/\Omega_i$ its relative error, the weighted loss of the point is, for $\Omega \gg \varepsilon$,
+
+$$w_i\,\|r_i\|^2 \;\propto\; a_i^2\,\Omega_i^{-p} \;=\; a_i^{\,2-p}\,e_i^{\,p}$$
+
++ $p = 0$: $a^2$, the same price for the same absolute error, whatever the size of the increment;
++ $p = 2$: $e^2$, the same price for the same relative error;
++ $p = 1$: $a\,e$, halfway between the two;
++ below $\varepsilon$ the weight is constant: the price is on the absolute error again.
+
+The training lowers the error where its price is the highest. The usual loss therefore flattens the absolute error over the decades of $\Omega$, and leaves a large relative error on the small increments. The weights flatten the relative error instead, and the absolute error of the largest increments grows. Neither becomes uniform: the network adjusts the errors within its capacity. Example: `scripts/H2_IGN_KERNEL_WEIGHTED_LOSS` with `T_threshold: 900`, one cluster of 60 x 60 units, $\varepsilon = 10^{-2}$, one training for each $p$, medians over the validation points of each decade (absolute error in units of $\sigma_k$):
+
+| Decade of $\Omega$ | Absolute error, $p = 0$ | Absolute error, $p = 1$ | Relative error, $p = 0$ | Relative error, $p = 1$ |
+|------|------|------|------|------|
+| 0.01 - 0.1 | 0.021 | 0.005 | 54 % | 14 % |
+| 0.1 - 1 | 0.022 | 0.013 | 8 % | 4.5 % |
+| 1 - 10 | 0.049 | 0.086 | 2 % | 3.6 % |
+| above 10 | 0.30 | 1.53 | 2 % | 11 % |
+
+In this example both models pass the 0D ignition test (error on the final temperature 0.3 % and 0.2 %): one training each does not rank them.
+
 **Resampling on $\Omega$.** `LearningDatabase.undersample_Omega` keeps the same number of points in each bin of $\log_{10}\Omega$ ($\sigma_k$ of the whole database, $\Omega$ below `Omega_min` in the first bin). The share of the loss of a bin of $\Omega$, for the same relative error, is
 
-$$S_{\text{bin}} \propto N_{\text{bin}}\;\Omega_{\text{bin}}^{\,2-2p}$$
+$$S_{\text{bin}} \propto N_{\text{bin}}\;\Omega_{\text{bin}}^{\,2-p}$$
 
-The resampling sets $N_{\text{bin}}$, the weights set the factor $\Omega^{2-2p}$: they are complementary. With the resampling and $p = 1$, each bin of $\Omega$ has the same share of the loss; with $p < 1$, the bins of large increments (reaction zone) have a larger share.
+The resampling sets $N_{\text{bin}}$, the weights set the factor $\Omega^{2-p}$: they are complementary. With the resampling, $p = 1$ gives each bin of $\Omega$ the same share of the gradient, $p = 2$ the same share of the loss; with smaller $p$, the bins of large increments (reaction zone) have a larger share.
 
 **Density of $\Omega$ in the weights.** Instead of discarding points, `loss_weighting_q` $= q > 0$ multiplies the weights by a density factor:
 
-$$w_i = \frac{(\Omega_i^2 + \varepsilon^2)^{-p}\;\max\big(N_{\text{bin}(i)},\, N_{\min}\big)^{-q}}{\langle\cdot\rangle_{\text{train}}}$$
+$$w_i = \frac{(\Omega_i + \varepsilon)^{-p}\;\max\big(N_{\text{bin}(i)},\, N_{\min}\big)^{-q}}{\langle\cdot\rangle_{\text{train}}}$$
 
 with $N_{\text{bin}(i)}$ the number of training points of the cluster in the bin of $\log_{10}\max(\Omega_i, \varepsilon)$ of point $i$ (bins of width given by the Freedman-Diaconis rule, as `undersample_1D`), and $N_{\min}$ = `loss_weighting_min_count`. The share of the loss of a bin becomes
 
-$$S_{\text{bin}} \propto N_{\text{bin}}^{\,1-q}\;\Omega_{\text{bin}}^{\,2-2p}$$
+$$S_{\text{bin}} \propto N_{\text{bin}}^{\,1-q}\;\Omega_{\text{bin}}^{\,2-p}$$
 
 $q = 1$ is equivalent, in expectation, to the undersampling on $\Omega$, without discarding points; $0 < q < 1$ is a partial rebalancing (inverse-frequency weighting of imbalanced regression: Yang et al., ICML 2021, https://arxiv.org/abs/2102.09554). The weights of rare bins are large: their few points can be overfitted, and the gradients of the mini-batches are noisier. $N_{\min}$ bounds these weights (bins with fewer points have the weights of a bin of $N_{\min}$ points), and the effective fraction of points shows their concentration. Validation points use the bins and counts of the training points.
+
+**Balance of the training.** With `output_omegas: true`, the plots `training/cluster_<i>/Omega_points_<epoch>.png`, `Omega_absolute_error_<epoch>.png`, `Omega_relative_error_<epoch>.png` and `ERROR_VS_OMEGA` in the training log give, per decade $d$ of $\Omega$ on the validation points, for the model kept after training and at the epochs of `omega_diagnostics_epochs`: the number of points, the median of the absolute error $\|r\|$, with $r_i = \hat y_i - y_i$ the error vector of a point (in units of $\sigma_k$; its plateau at small $\Omega$ is the error the network can reach, the level of $\varepsilon$), the median of the relative error $\|r\|/\Omega$ and the relative error of the decade $e_d = \sqrt{\sum_{i \in d}\|r_i\|^2 / \sum_{i \in d}\Omega_i^2}$, such that the unweighted loss of the decade is $e_d^2 \sum_{i \in d}\Omega_i^2$ (relative errors weighted by $\Omega^2$: points with $\Omega \approx 0$ count little, unlike in the median). The log also gives the share of the decade in the loss, $\sum_{i \in d} w_i\,\|r_i\|^2$ over all points: it shows where the remaining error is, set by the difficulty of each decade: the weights change the relative errors, which the network adjusts, more than the shares; compare $e_d$ between trainings to see their effect. The loss of one point goes as $w\,e^2\,\Omega^2 \propto N^{-q}\,e^2\,\Omega^{2-p}$. Training is badly balanced if decades with a median relative error well above 1 have large weights: their points cannot improve, and $\varepsilon$ should be larger.
 
 The weights move accuracy from the reaction zone to the small increments: the network has a finite capacity, so a large $p$ or a small $\varepsilon$ can degrade the ignition. The training prints the minimum and maximum weights and the effective fraction of points $(\sum w)^2 / (n \sum w^2)$ (1 for equal weights), and logs the unweighted validation loss (`val_loss_unweighted`) to compare models trained with different weights; the best model is selected on the weighted validation loss. The weighting needs the MSE loss (implemented as the MSE of $\sqrt{w}\,\hat y$ and $\sqrt{w}\,y$), and is not available with rollout training (the increments of the following steps depend on the predictions). With `project_elements`, both terms of the loss are weighted. Example: `scripts/H2_IGN_KERNEL_WEIGHTED_LOSS`.
 
@@ -228,7 +252,7 @@ The simulation error of a 0-D case $i$ run with time step $dt$ is the normalized
 
 $$\mathcal{E}_i(dt) = \frac{1}{N_i} \sum_{j=1}^{N_i} \frac{1}{N_S + 1} \left( \sum_{k=1}^{N_S} \frac{|f(Y_{k,j}^{NN}) - f(Y_{k,j}^{ref})|}{\sigma_k} + \frac{|T_j^{NN} - T_j^{ref}|}{\sigma_T} \right)$$
 
-with $f$ the transform of the network inputs (log or Box-Cox), $N_S$ the number of species of the network (N2 excluded without N chemistry), $\sigma$ the standard deviations of the training inputs over all clusters, and $N_i$ the number of time steps of the simulation. Each 0-D simulation stops when the CVODE temperature is within `T_eq_tolerance` of the equilibrium (HP) temperature of the initial mixture, and the ANN is run for the same number of steps; `max_simulation_time` only caps the simulations that do not reach equilibrium (`equilibrium_reached: false`). $\mathcal{E}(dt)$, the mean of $\mathcal{E}_i$ over the simulations run with $dt$, is written in `simulation_errors_<case type>_by_dt.csv` and plotted in `simulation_errors_<case type>_by_dt.png` (mean with standard deviation bars, and box plot of $\mathcal{E}_i$ per $dt$). The contribution of each variable, $E_T$ (`E_T`) and $E_k$ (`E_<species>`), is the term of $\mathcal{E}_i$ of this variable averaged over the steps; $\mathcal{E}_i$ is their mean. It shows which species drive the error (`simulation_errors_<case type>_by_variable.png`). For 1-D flames, $\mathcal{E}_i$ is a priori: each grid point of the converged flame (in `x_window`) is advanced by one step $dt$ with CVODE and with the ANN, and the sum over $j$ runs over these points instead of the time steps. It measures the error of one step, not its accumulation, so it is smaller than the 0-D error for the same network; it also decreases when the domain contains more points in fresh or burnt gases, hence `x_window`. `simulation_errors_<case type>_by_cluster.csv` gives, for each `dt` and cluster, the number of steps (0-D) or grid points (1-D) advanced by the network of the cluster, the mean and standard deviation of their error (mean over the variables of the normalized differences) and the mean of each variable. Cluster -1 gathers the steps done by CVODE in hybrid mode and the 1-D points below `T_threshold`. In 0-D the error of a step includes the error accumulated over the previous steps, possibly in other clusters; the 1-D errors (one step from the converged flame) are attributed to their cluster exactly.
+with $f$ the transform of the network inputs (log or Box-Cox), $N_S$ the number of species of the network (N2 excluded without N chemistry), $\sigma$ the standard deviations of the training inputs over all clusters, and $N_i$ the number of time steps of the simulation. Each 0-D simulation stops when the CVODE temperature is within `T_eq_tolerance` of the equilibrium (HP) temperature of the initial mixture and changes by less than `T_eq_tolerance` over the step (a rich mixture crosses the equilibrium temperature on the ignition front, before its overshoot), and the ANN is run for the same number of steps; `max_simulation_time` only caps the simulations that do not reach equilibrium (`equilibrium_reached: false`). $\mathcal{E}(dt)$, the mean of $\mathcal{E}_i$ over the simulations run with $dt$, is written in `simulation_errors_<case type>_by_dt.csv` and plotted in `simulation_errors_<case type>_by_dt.png` (mean with standard deviation bars, and box plot of $\mathcal{E}_i$ per $dt$). The contribution of each variable, $E_T$ (`E_T`) and $E_k$ (`E_<species>`), is the term of $\mathcal{E}_i$ of this variable averaged over the steps; $\mathcal{E}_i$ is their mean. It shows which species drive the error (`simulation_errors_<case type>_by_variable.png`). For 1-D flames, $\mathcal{E}_i$ is a priori: each grid point of the converged flame (in `x_window`) is advanced by one step $dt$ with CVODE and with the ANN, and the sum over $j$ runs over these points instead of the time steps. It measures the error of one step, not its accumulation, so it is smaller than the 0-D error for the same network; it also decreases when the domain contains more points in fresh or burnt gases, hence `x_window`. `simulation_errors_<case type>_by_cluster.csv` gives, for each `dt` and cluster, the number of steps (0-D) or grid points (1-D) advanced by the network of the cluster, the mean and standard deviation of their error (mean over the variables of the normalized differences) and the mean of each variable. Cluster -1 gathers the steps done by CVODE in hybrid mode and the 1-D points below `T_threshold`. In 0-D the error of a step includes the error accumulated over the previous steps, possibly in other clusters; the 1-D errors (one step from the converged flame) are attributed to their cluster exactly.
 
 # Speed-up benchmark
 

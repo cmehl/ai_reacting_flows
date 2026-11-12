@@ -3,10 +3,10 @@
 # mean and std), plots_validation/.
 # In each case section, parameters given as lists are swept: all combinations are run.
 
-models_folder: MODEL_NH3_0D            # Model folder in MODELS/
-spec_to_plot: [NH3, H2, O2, H2O, NO]   # Species plotted, and 1D errors computed on
+models_folder: MODEL_NH3_0D_WEIGHTED   # Model folder in MODELS/
+spec_to_plot: [NH3, H2, O2, H2O, "NO"] # Species plotted, and 1D errors computed on ("NO" quoted: YAML reads NO as false)
 
-yk_renormalization: 0                  # Element conservation: 0 none, 1 one species per element, 2 Wan et al. 2020, 3 same with O on all its species
+yk_renormalization: 3                  # Element conservation: 0 none, 1 one species per element, 2 Wan et al. 2020, 3 same with O on all its species
 hybrid_ann_cvode: 0                    # CVODE instead of ANN if conservation error > tol: 0 never, 1 sum of Y_k, 2 elements
 hybrid_ann_cvode_tol: 5.0e-05          # Tolerance on the conservation error [-] (paper: 2e-4 for 1, 20e-4 for 2)
 
@@ -21,7 +21,7 @@ hybrid_ann_cvode_tol: 5.0e-05          # Tolerance on the conservation error [-]
   max_simulation_time: 2.0e-03         # Maximum end time [s] if CVODE equilibrium is not reached
   T_eq_tolerance: 1.0                  # [K] CVODE and ANN stop when CVODE T is this close to equilibrium
   stability_factor: 2.0                # ANN continued for this times the steps after equilibrium (drifts), 0 to skip
-  conditions_file: null                # sim_test_0D.csv of a flamelets database: its Phi, T0 replace phi, T0
+  conditions_file: FLAMELETS_DTB_NH3_1ATM/sim_test_0D.csv # sim_test_0D.csv of a flamelets database: its Phi, T0 replace phi, T0
 
 # 0D constant-pressure pyrolysis of fuel, optionally diluted
 0D_pyrolysis:

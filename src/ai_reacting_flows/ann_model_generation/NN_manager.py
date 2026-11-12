@@ -17,7 +17,7 @@ import torch.optim as optim
 import ai_reacting_flows.tools.utilities as utils
 import ai_reacting_flows.tools.transforms as transforms
 from ai_reacting_flows.tools.element_projection import project_elements
-from ai_reacting_flows.tools.loss_weighting import increment_norm, increment_weights, effective_fraction
+from ai_reacting_flows.tools.loss_weighting import increment_norm, increment_weights, error_per_decade, effective_fraction
 from ai_reacting_flows.ann_model_generation.NN_models import MLPModel, PerSpeciesMLP, DeepONet, DeepONet_shift
 from ai_reacting_flows.databases_processing.processing_parameters import read_processing_parameters, MECHANISM_FILE
 
@@ -91,6 +91,7 @@ class NN_manager():
         self.batch_size = learning_data.get("batch_size", 2048)
         self.epochs_list = learning_data["epochs_list"]
         self.val_every = learning_data.get("val_every", 10)
+        self.omega_diagnostics_epochs = learning_data.get("omega_diagnostics_epochs", [])   # Epochs of the plots per decade of Omega (also after training)
         self.project_elements = learning_data.get("project_elements", False)              # Element projection in the loss
         self.raw_state_loss_weight = learning_data.get("raw_state_loss_weight", 1.0)      # Weight of the prediction before projection
         self.loss_weighting_p = learning_data.get("loss_weighting_p", 0.0)                # Exponent of the increment weights (0: none)
@@ -433,6 +434,85 @@ class NN_manager():
         return torch.stack(losses)
 
 
+    def _log_error_vs_Omega(self, i_cluster, model, X_val, Y_val, Yscaler_mean, Yscaler_std, W_val, tag):
+        """Log and plot the errors of the validation points per decade of Omega (see tools/loss_weighting.py), for
+        outputs that are increments. Error of the network output, in units of the standard deviations of the outputs.
+        W_val: loss weights (n, 1) of the validation points, None for the usual loss. tag: epoch of the model, in the
+        log lines and the names of the plots (e.g. epoch00100, or best_epoch00480 for the model kept after training)."""
+
+        model.eval()
+        with torch.no_grad():
+            err = torch.linalg.norm(model(X_val) - Y_val, dim=1).cpu().numpy()
+        model.train()
+
+        std = Yscaler_std.cpu().numpy()
+        omega = transforms.unscale(Y_val.cpu().numpy(), Yscaler_mean.cpu().numpy(), std)
+        w = None if W_val is None else W_val[:, 0].cpu().numpy()
+
+        Omega = increment_norm(omega, std)
+        rows = error_per_decade(Omega, err, w)
+
+        msg = f"ERROR_VS_OMEGA cluster={i_cluster}, {tag}, median_error={np.median(err):.3e}"
+        print(f"    >> {msg}")
+        self._log(msg)
+
+        for decade, n_points, median_err, median_ratio, loss_share, e_decade in rows:
+            msg = (f"ERROR_VS_OMEGA cluster={i_cluster}, {tag}, log10_Omega={decade}, n={n_points}, "
+                   f"median_error={median_err:.3e}, median_error_over_Omega={median_ratio:.3e}, e_decade={e_decade:.3e}, "
+                   f"loss_share={loss_share:.3f}")
+            print(f"    >> {msg}")
+            self._log(msg)
+
+        self._plot_error_vs_Omega(i_cluster, rows, tag)
+
+
+    def _plot_error_vs_Omega(self, i_cluster, rows, tag):
+        """Plots per decade of Omega (rows of error_per_decade), in training/cluster_<i>/, with the tag (epoch) at the
+        end of the names: numbers of points (Omega_points_<tag>.png), median absolute error, in units of the standard
+        deviations of the outputs (Omega_absolute_error_<tag>.png), median relative error and relative error of the
+        decade e_decade (Omega_relative_error_<tag>.png)."""
+
+        decades, n_points, median_err, median_ratio, _, e_decade = map(np.array, zip(*rows))
+        x = np.arange(len(decades))     # One position per decade present (no gap for Omega = 0, at the floor)
+        folder = f"{self.directory}/training/cluster_{i_cluster}"
+
+        # Numbers of points
+        fig, ax = plt.subplots()
+        ax.bar(x, n_points, color="grey")
+        ax.set_yscale("log")
+        ax.set_ylabel("Validation points")
+        ax.set_xticks(x, decades)
+        ax.set_xlabel(r"Decade of $\log_{10}\Omega$")
+        fig.tight_layout()
+        fig.savefig(f"{folder}/Omega_points_{tag}.png")
+        plt.close(fig)
+
+        # Absolute error of each decade: its plateau at small Omega is the error the network can reach
+        fig, ax = plt.subplots()
+        ax.plot(x, median_err, color="k", marker="o")
+        ax.set_yscale("log")
+        ax.set_ylabel(r"Median of $\|r\|$ [-] (units of $\sigma_k$)")
+        ax.set_xticks(x, decades)
+        ax.set_xlabel(r"Decade of $\log_{10}\Omega$")
+        fig.tight_layout()
+        fig.savefig(f"{folder}/Omega_absolute_error_{tag}.png")
+        plt.close(fig)
+
+        # Relative error of each decade
+        fig, ax = plt.subplots()
+        ax.plot(x, median_ratio, color="b", marker="o", label=r"Median of $\|r\|\,/\,\Omega$")
+        ax.plot(x, e_decade, color="r", marker="s", label=r"$e_{decade} = \sqrt{\sum \|r\|^2 / \sum \Omega^2}$")
+        ax.axhline(1.0, ls="--", color="k")
+        ax.set_yscale("log")
+        ax.set_ylabel("Relative error [-]")
+        ax.legend()
+        ax.set_xticks(x, decades)
+        ax.set_xlabel(r"Decade of $\log_{10}\Omega$")
+        fig.tight_layout()
+        fig.savefig(f"{folder}/Omega_relative_error_{tag}.png")
+        plt.close(fig)
+
+
     def train_model(self, i_cluster, model, loss_fn, optimizer, scheduler, X_train, X_val, Y_train, Y_val, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std):
 
         # Increment weights of the loss (None: usual loss), validation normalized as training
@@ -497,6 +577,7 @@ class NN_manager():
         stats_A_elements = np.empty((n_val_points, A_element.shape[0], 3))
 
         best_val_loss = float("inf")
+        best_epoch = n_epochs - 1   # Epoch of the model kept after training (last one if no validation)
         best_state_dict = None
 
         val_loss_list = np.empty(n_val_points)
@@ -602,6 +683,7 @@ class NN_manager():
                 if best_state_dict is None or val_loss.item() < best_val_loss:
                     best_val_loss = val_loss.item()
                     best_state_dict = copy.deepcopy(model.state_dict())
+                    best_epoch = epoch
 
                 val_loss_list[idx] = val_loss.item()
 
@@ -632,9 +714,17 @@ class NN_manager():
             if epoch % val_every == 0 and val_loss is not None:
                 print(f"    >> Validation loss: {val_loss.item()}")
 
+            # Errors and loss per decade of Omega at the selected epochs
+            if self.output_omegas and epoch in self.omega_diagnostics_epochs:
+                self._log_error_vs_Omega(i_cluster, model, X_val, Y_val, Yscaler_mean, Yscaler_std, W_val, f"epoch{epoch:05d}")
+
         # Restore best model (based on validation loss) before returning
         if best_state_dict is not None:
             model.load_state_dict(best_state_dict)
+
+        # Postprocessing: error of the best model versus the size of the increments
+        if self.output_omegas:
+            self._log_error_vs_Omega(i_cluster, model, X_val, Y_val, Yscaler_mean, Yscaler_std, W_val, f"best_epoch{best_epoch:05d}")
 
         # Postprocessing: validation loss of each step of the rollout, with the best model
         if self.rollout:

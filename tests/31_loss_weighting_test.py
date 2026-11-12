@@ -3,13 +3,14 @@ Test 31: increment weights of the training loss (learning.loss_weighting_p, loss
 loss_weighting_min_count).
 
 Check:
-- increment_norm and increment_weights: p = q = 0 gives weights 1; weights (Omega^2 + eps^2)^(-p), one per point,
+- increment_norm and increment_weights: p = q = 0 gives weights 1; weights (Omega + eps)^(-p), one per point,
   normalized to a mean of 1, with Omega^2 = sum_k (omega_k / sigma_k)^2; reference given for validation points;
 - density factor: with q = 1, all bins of log10(Omega) have the same total weight; min_count bounds the weights of
   rare bins;
 - NN_manager._loss_weights on a small H2 learning database: Omega computed from the Cantera mass fractions;
 - the weighted loss is the mean of w (y_pred - y)^2, and the usual loss with weights 1; training runs and logs the
   weights and the unweighted validation loss;
+- error_per_decade, and its log and plots after training, for outputs that are increments only;
 - errors for outputs that are not increments of ln Y, and for another loss than MSE.
 
 Independent of the other tests.
@@ -24,11 +25,11 @@ import torch
 import torch.nn as nn
 import cantera as ct
 
-from ai_reacting_flows.tools.loss_weighting import increment_norm, increment_weights, effective_fraction
+from ai_reacting_flows.tools.loss_weighting import increment_norm, increment_weights, error_per_decade, effective_fraction
 from ai_reacting_flows.ann_model_generation.NN_manager import NN_manager
 from h2_learning_database import write_h2_learning_database, mech_file, threshold
 
-p = 0.5
+p = 1.0
 eps = 1.0e-2
 
 
@@ -55,11 +56,11 @@ def test_increment_weights():
     assert np.allclose(w, 1.0)
 
     w, ref = increment_weights(Omega, p, eps)
-    w_ref = (Omega**2 + eps**2) ** (-p)
+    w_ref = (Omega + eps) ** (-p)
     assert np.allclose(w, w_ref / w_ref.mean()) and np.isclose(w.mean(), 1.0)
 
     # Bounded ratio, and smaller weights for larger increments
-    assert w[0] < w[1] < w[2] and w[2] / w[0] <= (Omega[0] / eps) ** (2 * p) * (1 + 1e-12)
+    assert w[0] < w[1] < w[2] and w[2] / w[0] <= ((Omega[0] + eps) / eps) ** p * (1 + 1e-12)
 
     # Validation points with the normalization of training
     w_val, _ = increment_weights(Omega[:1], p, eps, ref=ref)
@@ -125,6 +126,56 @@ def test_loss_weighting_training(tmp_path):
     manager.train_all_clusters()
     log = open(glob.glob(str(tmp_path / "nn_training_*.log"))[0]).read()
     assert "LOSS_WEIGHTS cluster=0" in log and "val_loss_unweighted=" in log
+
+
+def test_error_per_decade():
+    Omega = np.array([2.0e-3, 5.0e-3, 2.0e-1, 0.0])
+    err = np.array([1.0e-2, 3.0e-2, 4.0e-2, 1.0e-2])
+
+    rows = error_per_decade(Omega, err)
+
+    # Decades -12 (Omega = 0, floored), -3 and -1
+    assert [row[0] for row in rows] == [-12, -3, -1] and [row[1] for row in rows] == [1, 2, 1]
+    assert np.isclose(rows[1][2], 2.0e-2) and np.isclose(rows[1][3], np.median(err[:2] / Omega[:2]))
+    assert np.isclose(rows[2][3], 0.2)
+    assert np.isclose(rows[1][5], np.sqrt(np.sum(err[:2]**2) / np.sum(Omega[:2]**2)))
+
+    # Shares of the loss (w err^2)
+    w = np.array([1.0, 2.0, 4.0, 8.0])
+    rows = error_per_decade(Omega, err, w)
+    assert np.isclose(sum(row[4] for row in rows), 1.0)
+    assert np.isclose(rows[2][4], 4.0 * err[2]**2 / np.sum(w * err**2))
+
+
+def test_error_vs_Omega_log(tmp_path):
+    os.chdir(tmp_path)
+    write_h2_learning_database(tmp_path)
+
+    # Without weights: the error is also logged, at the selected epochs and for the best model
+    set_learning(tmp_path, epochs_list=[3], val_every=1, omega_diagnostics_epochs=[1])
+    NN_manager().train_all_clusters()
+    log = open(glob.glob(str(tmp_path / "nn_training_*.log"))[0]).read()
+    assert "loss_share=" in log
+    folder = tmp_path / "MODELS" / "MODEL_TEST" / "training" / "cluster_0"
+    best = [f for f in os.listdir(folder) if f.startswith("Omega_points_best_epoch")]
+    assert len(best) == 1 and "ERROR_VS_OMEGA cluster=0, epoch00001, median_error=" in log
+    for name in ["Omega_points", "Omega_absolute_error", "Omega_relative_error"]:
+        assert os.path.isfile(folder / f"{name}_epoch00001.png")
+        assert os.path.isfile(folder / best[0].replace("Omega_points", name))
+    assert sorted(f for f in os.listdir(folder) if f.startswith("Omega")) == sorted(
+        [f"{name}_{tag}.png" for name in ["Omega_points", "Omega_absolute_error", "Omega_relative_error"]
+         for tag in ["epoch00001", best[0][len("Omega_points_"):-4]]])
+    for name in glob.glob(str(tmp_path / "nn_training_*.log")):
+        os.remove(name)
+
+    # Outputs that are states: no increments, nothing logged
+    dtb_yaml = tmp_path / "STOCH_DTB_TEST" / "dtb" / "dtb_processing.yaml"
+    params = yaml.safe_load(open(dtb_yaml))
+    params["data_processing"]["output_omegas"] = False
+    yaml.dump(params, open(dtb_yaml, "w"), default_flow_style=False)
+    NN_manager().train_all_clusters()
+    assert "ERROR_VS_OMEGA" not in open(glob.glob(str(tmp_path / "nn_training_*.log"))[0]).read()
+    assert not any(f.startswith("Omega") for f in os.listdir(tmp_path / "MODELS" / "MODEL_TEST" / "training" / "cluster_0"))
 
 
 def test_loss_weighting_errors(tmp_path):
