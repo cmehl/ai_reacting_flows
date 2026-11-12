@@ -181,6 +181,8 @@ $P(Y^*)$ is converted back to a network output (`transforms.Yk_to_output`) to be
 
 # Loss weighting
 
+CM: loss weighting is still a work in progress.
+
 With `output_omegas: true` and `log_transform_Y: 1`, the target of species $k$ at point $i$ is the increment $\hat\omega_{ik} = \ln Y_k(t+dt) - \ln Y_k(t)$, scaled as $y_{ik} = (\hat\omega_{ik} - \mu_k)/\sigma_k$, with $\mu_k$ and $\sigma_k$ the mean and standard deviation of the cluster. The mean cancels in the error: with $e_{ik}$ the relative error on $\hat\omega_{ik}$, the MSE loss of the point is
 
 $$\sum_k \left(\frac{\hat\omega^{pred}_{ik} - \hat\omega^{ref}_{ik}}{\sigma_k}\right)^2 = \sum_k e_{ik}^2 \left(\frac{\hat\omega^{ref}_{ik}}{\sigma_k}\right)^2 \;\overset{e_{ik} = e_i}{=}\; e_i^2\, \Omega_i^2, \qquad \Omega_i^2 = \sum_k \left(\frac{\hat\omega^{ref}_{ik}}{\sigma_k}\right)^2$$
@@ -199,7 +201,7 @@ with $\varepsilon$ = `loss_weighting_eps` [-], in units of $\sigma_k$. The train
 
 $$\frac{\mathcal{L}_b}{\mathcal{L}_r} = \frac{N_b}{N_r}\,\frac{e_b^2}{e_r^2}\left(\frac{\Omega_b}{\Omega_r}\right)^{2-p}, \qquad \frac{G_b}{G_r} = \frac{N_b}{N_r}\,\frac{e_b}{e_r}\left(\frac{\Omega_b}{\Omega_r}\right)^{1-p}$$
 
-+ $p = 0$ is the usual loss; $p = 1$ ($w \propto 1/\Omega$) gives the same gradient contribution to the same relative error; $p = 2$ ($w \propto 1/\Omega^2$) the same loss, but then the gradient goes as $1/\Omega$ and the small increments take over the training (in the H2 tests, $p = 2$ did not ignite; $p = 1$ with $\varepsilon = 10^{-2}$ lowers the error of the small increments about 5 times, but the median error on the ignition delay of the 0D test goes from 1 % to 18 % over 15 trainings with different seeds, and $\varepsilon = 10^{-4}$ does not ignite correctly).
++ $p = 0$ is the usual loss; $p = 1$ ($w \propto 1/\Omega$) gives the same gradient contribution to the same relative error; $p = 2$ ($w \propto 1/\Omega^2$) the same loss, but then the gradient goes as $1/\Omega$ and the small increments take over the training.
 + $\varepsilon$ bounds the weights: their ratio is at most $\big((\max\Omega + \varepsilon)/\varepsilon\big)^{p}$. Below $\varepsilon$, the error is absolute (equilibrium, solver noise). It should be of the order of the error the network can reach, not of the smallest $\Omega$: below this level the error does not decrease with $\Omega$, and points with large weights and an error they cannot reduce take over the gradients. With `output_omegas: true`, the training log gives the median norm of the error of the validation points per decade of $\Omega$ (`ERROR_VS_OMEGA`, same units as $\Omega$): the plateau at small $\Omega$, or the median error of a training without weights, gives this level.
 + One weight per point, from all species: a species whose increment crosses 0 in the reaction zone (intermediate species at its peak) or is clipped at `threshold` does not make the point look like burnt gases. The balance between the species of a point is the one of the usual loss.
 + The weights are normalized to a mean of 1 on the training points; validation points use the same normalization. $\sigma_k$ are those of the cluster, so $\Omega$ and $\varepsilon$ are relative to the spread of the increments of the cluster.

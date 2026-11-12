@@ -6,7 +6,7 @@ def fHRR(x):
 
 database = LearningDatabase()
 database.density_scatter("PC1","PC2")
-database.apply_temperature_threshold()
+# database.apply_temperature_threshold()
 database.pdf_Omega()                 # PDFs of Omega and log10(Omega), the norm of the scaled increments of the loss weights
 database.scatter_Omega_progvar()     # log10(Omega) versus progress variable, colored by temperature
 # database.undersample_HRR("Temperature", "H2O", hrr_func = fHRR, keep_low_c = True, n_samples = 1000000, n_bins = 100, plot_distrib = True)
