@@ -78,15 +78,12 @@ def Omega_decades(Omega):
 
 def error_per_decade(Omega, err, w=None):
     """Errors per decade of Omega, list of (decade, number of points, median of err, median of err / Omega, share of the
-    weighted loss, share of the gradient drive, relative error of the decade e_decade).
+    weighted loss, relative error of the decade e_decade).
 
     Omega [-] (n_points): norm of the scaled increments (increment_norm), err [-] (n_points): norm of the error of the
     scaled network outputs, in the same units, w [-] (n_points): loss weights (None: weights 1). The error levels off at
     small Omega: this plateau is the error the network can reach, which gives the order of magnitude of
-    loss_weighting_eps. Share of the loss: sum of w err^2 of the decade over all points. Share of the gradient drive:
-    sum of w err of the decade over all points. The gradient of the loss of a point is 2 w_i (r_i . dy_i/dtheta), with
-    r_i the error vector, so w err is its size if the sensitivity dy_i/dtheta of the network is the same for all
-    points, and if the contributions of the points do not cancel. Relative error of the decade:
+    loss_weighting_eps. Share of the loss: sum of w err^2 of the decade over all points. Relative error of the decade:
     e_decade = sqrt(sum err^2 / sum Omega^2), so that the unweighted loss of the decade is e_decade^2 sum Omega^2 (mean
     of the relative errors err / Omega weighted by Omega^2: points with Omega close to 0 count little).
     """
@@ -98,7 +95,6 @@ def error_per_decade(Omega, err, w=None):
     decades = Omega_decades(Omega)
 
     total_loss = np.sum(w * err**2)
-    total_drive = np.sum(w * err)
 
     rows = []
     for decade in np.unique(decades):
@@ -106,7 +102,6 @@ def error_per_decade(Omega, err, w=None):
         rows.append((int(decade), int(in_decade.sum()), float(np.median(err[in_decade])),
                      float(np.median(err[in_decade] / Omega_floored[in_decade])),
                      float(np.sum(w[in_decade] * err[in_decade]**2) / total_loss),
-                     float(np.sum(w[in_decade] * err[in_decade]) / total_drive),
                      float(np.sqrt(np.sum(err[in_decade]**2) / np.sum(Omega_floored[in_decade]**2)))))
 
     return rows

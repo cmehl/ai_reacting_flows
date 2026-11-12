@@ -457,10 +457,10 @@ class NN_manager():
         print(f"    >> {msg}")
         self._log(msg)
 
-        for (decade, n_points, median_err, median_ratio, loss_share, drive_share, e_decade), g_norm, g_projection in zip(rows, norm_share, projection_share):
+        for (decade, n_points, median_err, median_ratio, loss_share, e_decade), g_norm, g_projection in zip(rows, norm_share, projection_share):
             msg = (f"ERROR_VS_OMEGA cluster={i_cluster}, {tag}, log10_Omega={decade}, n={n_points}, "
                    f"median_error={median_err:.3e}, median_error_over_Omega={median_ratio:.3e}, e_decade={e_decade:.3e}, "
-                   f"loss_share={loss_share:.3f}, gradient_drive_share={drive_share:.3f}, "
+                   f"loss_share={loss_share:.3f}, "
                    f"gradient_norm_share={g_norm:.3f}, gradient_projection_share={g_projection:.3f}")
             print(f"    >> {msg}")
             self._log(msg)
@@ -510,13 +510,18 @@ class NN_manager():
     def _plot_error_vs_Omega(self, i_cluster, rows, norm_share, projection_share, tag):
         """Plots per decade of Omega (rows of error_per_decade, gradient shares of _gradient_shares), in
         training/cluster_<i>/, with the tag (epoch) at the end of the names: numbers of points (Omega_points_<tag>.png),
-        share of the loss (Omega_loss_share_<tag>.png), shares of the gradient (Omega_gradient_shares_<tag>.png), median
-        relative error and relative error of the decade e_decade (Omega_relative_error_<tag>.png). Training is badly balanced if a large share of the gradient is
-        in decades with a median relative error well above 1."""
+        contributions of one point of the decade to the loss (Omega_loss_per_point_<tag>.png) and to the gradient
+        (Omega_gradient_per_point_<tag>.png), median relative error and relative error of the decade e_decade
+        (Omega_relative_error_<tag>.png). Contributions per point are relative to the average point (1): share of the
+        decade divided by its fraction of points N_d / N. Training is badly balanced if points of decades with a median
+        relative error well above 1 contribute much to the gradient."""
 
-        decades, n_points, _, median_ratio, loss_share, drive_share, e_decade = map(np.array, zip(*rows))
+        decades, n_points, _, median_ratio, loss_share, e_decade = map(np.array, zip(*rows))
         x = np.arange(len(decades))     # One position per decade present (no gap for Omega = 0, at the floor)
         folder = f"{self.directory}/training/cluster_{i_cluster}"
+
+        # Fraction of the points in each decade, to turn shares into contributions per point
+        point_fraction = n_points / n_points.sum()
 
         # Numbers of points
         fig, ax = plt.subplots()
@@ -529,28 +534,31 @@ class NN_manager():
         fig.savefig(f"{folder}/Omega_points_{tag}.png")
         plt.close(fig)
 
-        # Where the remaining loss is
+        # Loss of one point of the decade, relative to the average point
         fig, ax = plt.subplots()
-        ax.bar(x, loss_share, color="k")
-        ax.set_ylabel(r"Share of the loss $\sum w\,\|r\|^2$ [-]")
+        ax.bar(x, loss_share / point_fraction, color="k")
+        ax.axhline(1.0, ls="--", color="grey")
+        ax.set_yscale("log")
+        ax.set_ylabel(r"Loss per point $w\,\|r\|^2$ / average point [-]")
         ax.set_xticks(x, decades)
         ax.set_xlabel(r"Decade of $\log_{10}\Omega$")
         fig.tight_layout()
-        fig.savefig(f"{folder}/Omega_loss_share_{tag}.png")
+        fig.savefig(f"{folder}/Omega_loss_per_point_{tag}.png")
         plt.close(fig)
 
-        # Where the training effort goes: proxy and real gradient
+        # Gradient of one point of the decade, relative to the average point (projection can be negative)
         fig, ax = plt.subplots()
-        ax.bar(x - 0.27, drive_share, width=0.27, color="r", label=r"Drive (proxy): $\sum w\,\|r\|$")
-        ax.bar(x, norm_share, width=0.27, color="b", label=r"Norm: $\|g_d\| / \sum \|g_d\|$")
-        ax.bar(x + 0.27, projection_share, width=0.27, color="g", label=r"Projection: $g_d \cdot g / \|g\|^2$")
+        ax.bar(x - 0.2, norm_share / point_fraction, width=0.4, color="b", label=r"Norm: $\|g_d\| / \sum \|g_d\|$")
+        ax.bar(x + 0.2, projection_share / point_fraction, width=0.4, color="g", label=r"Projection: $g_d \cdot g / \|g\|^2$")
         ax.axhline(0.0, color="k", lw=0.8)
-        ax.set_ylabel("Share of the gradient [-]")
+        ax.axhline(1.0, ls="--", color="grey")
+        ax.set_yscale("symlog", linthresh=1.0e-2)
+        ax.set_ylabel("Gradient per point / average point [-]")
         ax.legend()
         ax.set_xticks(x, decades)
         ax.set_xlabel(r"Decade of $\log_{10}\Omega$")
         fig.tight_layout()
-        fig.savefig(f"{folder}/Omega_gradient_shares_{tag}.png")
+        fig.savefig(f"{folder}/Omega_gradient_per_point_{tag}.png")
         plt.close(fig)
 
         # Accuracy of each decade

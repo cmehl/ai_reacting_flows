@@ -139,14 +139,13 @@ def test_error_per_decade():
     assert [row[0] for row in rows] == [-12, -3, -1] and [row[1] for row in rows] == [1, 2, 1]
     assert np.isclose(rows[1][2], 2.0e-2) and np.isclose(rows[1][3], np.median(err[:2] / Omega[:2]))
     assert np.isclose(rows[2][3], 0.2)
-    assert np.isclose(rows[1][6], np.sqrt(np.sum(err[:2]**2) / np.sum(Omega[:2]**2)))
+    assert np.isclose(rows[1][5], np.sqrt(np.sum(err[:2]**2) / np.sum(Omega[:2]**2)))
 
-    # Shares of the loss (w err^2) and of the gradient drive (w err)
+    # Shares of the loss (w err^2)
     w = np.array([1.0, 2.0, 4.0, 8.0])
     rows = error_per_decade(Omega, err, w)
-    assert np.isclose(sum(row[4] for row in rows), 1.0) and np.isclose(sum(row[5] for row in rows), 1.0)
+    assert np.isclose(sum(row[4] for row in rows), 1.0)
     assert np.isclose(rows[2][4], 4.0 * err[2]**2 / np.sum(w * err**2))
-    assert np.isclose(rows[2][5], 4.0 * err[2] / np.sum(w * err))
 
 
 def test_error_vs_Omega_log(tmp_path):
@@ -161,11 +160,11 @@ def test_error_vs_Omega_log(tmp_path):
     folder = tmp_path / "MODELS" / "MODEL_TEST" / "training" / "cluster_0"
     best = [f for f in os.listdir(folder) if f.startswith("Omega_points_best_epoch")]
     assert len(best) == 1 and "ERROR_VS_OMEGA cluster=0, epoch00001, median_error=" in log
-    for name in ["Omega_points", "Omega_loss_share", "Omega_gradient_shares", "Omega_relative_error"]:
+    for name in ["Omega_points", "Omega_loss_per_point", "Omega_gradient_per_point", "Omega_relative_error"]:
         assert os.path.isfile(folder / f"{name}_epoch00001.png")
         assert os.path.isfile(folder / best[0].replace("Omega_points", name))
     assert sorted(f for f in os.listdir(folder) if f.startswith("Omega")) == sorted(
-        [f"{name}_{tag}.png" for name in ["Omega_points", "Omega_loss_share", "Omega_gradient_shares", "Omega_relative_error"]
+        [f"{name}_{tag}.png" for name in ["Omega_points", "Omega_loss_per_point", "Omega_gradient_per_point", "Omega_relative_error"]
          for tag in ["epoch00001", best[0][len("Omega_points_"):-4]]])
     for name in glob.glob(str(tmp_path / "nn_training_*.log")):
         os.remove(name)
