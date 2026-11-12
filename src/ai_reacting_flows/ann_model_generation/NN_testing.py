@@ -192,7 +192,8 @@ class NNTesting():
         max_simulation_time : float
             Maximum end time [s], used only if CVODE does not reach equilibrium before.
         T_eq_tolerance : float
-            CVODE stops when its temperature is within T_eq_tolerance [K] of the HP equilibrium
+            CVODE stops when its temperature is within T_eq_tolerance [K] of the HP equilibrium, and changes by less
+            than T_eq_tolerance over the step (a rich mixture crosses T_eq on the ignition front, before its overshoot)
             temperature of the initial mixture. The ANN is run for the same number of steps.
         stability_factor : float
             After these steps, the ANN alone (no CVODE fallback) is continued for stability_factor times
@@ -247,6 +248,7 @@ class NNTesting():
             simtime += dt
 
             # New reactor at each step, as in a CFD code (CVODE restarted from the current state)
+            T_previous = T_cvode
             start = perf_counter()
             T_cvode, Y_cvode = self.advance_state_CVODE(T_cvode, Y_cvode, pressure, dt)
             time_cvode += perf_counter() - start
@@ -256,7 +258,9 @@ class NNTesting():
             if reactor_type=="ignition" and T_cvode > T0+200.0 and tau_ign_CVODE==0.0:
                 tau_ign_CVODE = simtime
 
-            equilibrium_reached = abs(T_cvode - T_eq) <= T_eq_tolerance
+            # Equilibrium: T within T_eq_tolerance of T_eq, and no longer changing by more than T_eq_tolerance per step
+            # (a rich mixture crosses T_eq on the ignition front, before its overshoot)
+            equilibrium_reached = abs(T_cvode - T_eq) <= T_eq_tolerance and abs(T_cvode - T_previous) <= T_eq_tolerance
 
         # Number of time steps, the same for the ANN
         nb_ite = len(states.T) - 1

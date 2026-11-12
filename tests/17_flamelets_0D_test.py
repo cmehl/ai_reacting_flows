@@ -5,7 +5,8 @@ Computes a few H2/air 0D reactors with DatabaseFlamelets.compute_0d_reactors and
 solve_mode = dt_cvode, storing one CVODE step out of 5 (cvode_stride).
 Check: the reactors are computed without error and the stored states have a progress
 variable in [0, 1]. With T_eq_tolerance [K], each reactor ends when its temperature is within
-T_eq_tolerance of the HP equilibrium temperature of its initial mixture.
+T_eq_tolerance of the HP equilibrium temperature of its initial mixture, and rich NH3 reactors, which
+cross the equilibrium temperature on the ignition front, end after their temperature overshoot.
 
 Independent of the other tests.
 """
@@ -55,3 +56,21 @@ def test_flamelets_0D_T_eq_tolerance(tmp_path):
         gas.equilibrate("HP")
         assert abs(sim["Temperature"].iloc[-1] - gas.T) <= T_eq_tolerance
         assert abs(sim["Temperature"].iloc[-2] - gas.T) > T_eq_tolerance
+
+
+def test_flamelets_0D_rich_overshoot(tmp_path):
+    os.chdir(tmp_path)
+    os.mkdir("FLAMELETS_DTB_TEST")
+
+    # Rich NH3/air: T rises about 50 K per step on the ignition front through T_eq, up to an overshoot of about 100 K.
+    # A tolerance of 30 K alone would end all reactors on the front
+    mech_nh3 = os.path.join(os.path.dirname(mech_file), "mech_nh3_noArHe.yaml")
+    params_nh3 = dict(params, mech_file=mech_nh3, fuel=["NH3"])
+    zerod_rich = {"phi_bounds": [1.2, 1.3], "T0_bounds": [1900.0, 2000.0], "n_samples": 4, "max_sim_time": 2.0e-3,
+                  "solve_mode": "dt_cfd", "T_eq_tolerance": 30.0}
+    dtb = DatabaseFlamelets(params_nh3, dc.DummyComm())
+    dtb.compute_0d_reactors(zerod_rich)
+
+    for _, sim in dtb.df.groupby("Simulation number"):
+        T = sim["Temperature"].to_numpy()
+        assert np.argmax(T) < len(T) - 1
