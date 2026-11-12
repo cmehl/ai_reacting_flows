@@ -352,7 +352,7 @@ For `DeepONet`, these three keys are dicts with `branch` and `trunk` entries (pl
 | Key | Description |
 |-----|-------------|
 | `models_folder` | Model folder in `MODELS/` (e.g. `MODEL_H2_POF_2023`) |
-| `spec_to_plot` | Species plotted, and on which 1-D errors are computed |
+| `spec_to_plot` | Species plotted, and on which 1-D errors are computed. Write `"NO"` with quotes: YAML reads an unquoted `NO` as the boolean `false` (same for any list of species in the YAML inputs) |
 | `yk_renormalization` | Correction of the ANN mass fractions to conserve the elements: `0` none, `1` one species per element, `2` Wan *et al.* (2020), `3` Wan *et al.* extended to O (see [theory](docs/theory.md#element-conservation-of-the-ann-mass-fractions-yk_renormalization)) |
 | `hybrid_ann_cvode` | Hybrid ANN/CVODE model of Mehl & Aubagnac-Karkar (2023): CVODE is used instead of the ANN when the conservation error of its prediction exceeds `hybrid_ann_cvode_tol`. `0`: never. `1`: error on the sum of mass fractions $\|\sum_k Y_k - 1\|$. `2`: largest relative error on the element mass fractions (see [theory](docs/theory.md#hybrid-anncvode-model-hybrid_ann_cvode)) |
 | `hybrid_ann_cvode_tol` | Tolerance on the conservation error [-] (in the paper, about `2.0e-04` for `1` and `2.0e-03` for `2`) |
