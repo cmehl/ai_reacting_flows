@@ -1219,6 +1219,12 @@ class LearningDatabase(object):
         if self.log_transform_X==0 and self.log_transform_Y>0:
             sys.exit("ERROR: log_transform_Y cannot be active if log_transform_X==0 !")
 
+        # Outputs as differences in transformed space, f_Y(Y(t+dt)) - f_X(Y(t)): only an increment if f_X = f_Y
+        if self.output_omegas:
+            if self.log_transform_X>0 and self.log_transform_Y>0:
+                if self.log_transform_X != self.log_transform_Y:
+                    sys.exit("ERROR: with output_omegas, log_transform_X and log_transform_Y must be the same transform (or log_transform_Y: 0) !")
+
         if self.rollout and self.dt_var:
             sys.exit("ERROR: rollout is done with a constant dt, it cannot be used with dt_var !")
 

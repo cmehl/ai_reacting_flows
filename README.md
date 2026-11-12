@@ -302,7 +302,7 @@ Cases are sampled in the given bounds with Latin hypercube sampling.
 | `database_params.dt_var` | `true` for a multi-dt database ($dt$ is an input, always as $\log(dt)$, whatever `log_transform_X`) |
 | `database_params.rollout` | `true` for a database from `time_step_type: rollout`, for [rollout training](docs/theory.md#rollout-training) (optional, default `false`; not with `dt_var`; not validated with Box-Cox) |
 | `database_params.fuel`, `database_params.mech_file` | Fuel and mechanism |
-| `data_processing.log_transform_X`, `log_transform_Y` | 0: none, 1: log, 2: Box-Cox (with `lambda_bct`, optional, default 0.1) |
+| `data_processing.log_transform_X`, `log_transform_Y` | 0: none, 1: log, 2: Box-Cox (with `lambda_bct`, optional, default 0.1). `log_transform_Y` > 0 needs `log_transform_X` > 0; with `output_omegas`, both must be the same transform (or `log_transform_Y: 0`) |
 | `data_processing.threshold` | Mass fractions are clipped to this value before log transform (to 0 before Box-Cox) |
 | `data_processing.T_threshold` | States below this temperature [K] are removed |
 | `data_processing.output_omegas` | If `true`, outputs are $Y_k(t+dt)-Y_k(t)$ instead of $Y_k(t+dt)$ |
