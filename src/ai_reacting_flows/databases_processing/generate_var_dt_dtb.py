@@ -85,7 +85,7 @@ def GenerateVariable_dt(dtb_type: str, params: dict, comm: "MPI.Comm") -> str:
     size = comm.Get_size()
 
     # One seed per rank, so that ranks do not draw the same random time steps
-    # (only the shuffle of rank 0 is used, as X is scattered from rank 0)
+    # (rank 0 also shuffles the states before scattering them)
     np.random.seed(1234 + rank)
 
     _validate_params(params)
@@ -97,19 +97,24 @@ def GenerateVariable_dt(dtb_type: str, params: dict, comm: "MPI.Comm") -> str:
     if not os.path.isfile(file_h5):
         raise FileNotFoundError(f"Input database file not found: {file_h5}")
 
-    # States of all iterations (Y is recomputed for each dt)
-    X, col_names_X, _, col_names_Y, _ = read_solutions(file_h5, read_Y=False)
-
+    # States of all iterations (Y is recomputed for each dt), read by rank 0 only: it scatters them to the ranks
     if rank == 0:
+        X, col_names_X, _, col_names_Y, _ = read_solutions(file_h5, read_Y=False)
         print(f"X columns: {col_names_X} \n")
 
-    # Build state array with empty target column, later filled by `react_multi_dt`.
-    # Y = np.empty(X.shape)
-    # Stack features and responses along the third axis: state[..., 0] / state[..., 1]
-    np.random.shuffle(X) # DAK: check why we shuffle X
-    # state_list = np.dstack((X, Y))
+        # Build state array with empty target column, later filled by `react_multi_dt`.
+        # Y = np.empty(X.shape)
+        # Stack features and responses along the third axis: state[..., 0] / state[..., 1]
+        np.random.shuffle(X) # DAK: check why we shuffle X
+        # state_list = np.dstack((X, Y))
 
-    state_list = X.copy()
+        state_list = X.copy()
+
+    else:
+        col_names_X, col_names_Y, state_list = None, None, None
+
+    # Column names, written by all ranks in their groups of the output file
+    col_names_X, col_names_Y = comm.bcast((col_names_X, col_names_Y), root=0)
 
     # Temperature threshold (same quantity as database processing; keep explicit).
     # T_thresh = params["T_threshold"]
@@ -139,8 +144,9 @@ def GenerateVariable_dt(dtb_type: str, params: dict, comm: "MPI.Comm") -> str:
 
         fact_min, fact_max = 1.0, 1.0  # Extend the learned dt, kept for future flexibility.
 
-    # Split across MPI ranks.
-    state_list = np.array_split(state_list, size)
+    # Split across MPI ranks (by rank 0, which holds the states)
+    if rank == 0:
+        state_list = np.array_split(state_list, size)
     state_list = comm.scatter(state_list, root=0)
 
     gas = ct.Solution(params["mech_file"])
