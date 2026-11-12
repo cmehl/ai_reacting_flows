@@ -204,6 +204,26 @@ $$\frac{\mathcal{L}_b}{\mathcal{L}_r} = \frac{N_b}{N_r}\,\frac{e_b^2}{e_r^2}\lef
 + One weight per point, from all species: a species whose increment crosses 0 in the reaction zone (intermediate species at its peak) or is clipped at `threshold` does not make the point look like burnt gases. The balance between the species of a point is the one of the usual loss.
 + The weights are normalized to a mean of 1 on the training points; validation points use the same normalization. $\sigma_k$ are those of the cluster, so $\Omega$ and $\varepsilon$ are relative to the spread of the increments of the cluster.
 
+**What the weights do.** With $a_i = \|r_i\|$ the absolute error of a point (in units of $\sigma_k$) and $e_i = a_i/\Omega_i$ its relative error, the weighted loss of the point is, for $\Omega \gg \varepsilon$,
+
+$$w_i\,\|r_i\|^2 \;\propto\; a_i^2\,\Omega_i^{-p} \;=\; a_i^{\,2-p}\,e_i^{\,p}$$
+
++ $p = 0$: $a^2$, the same price for the same absolute error, whatever the size of the increment;
++ $p = 2$: $e^2$, the same price for the same relative error;
++ $p = 1$: $a\,e$, halfway between the two;
++ below $\varepsilon$ the weight is constant: the price is on the absolute error again.
+
+The training lowers the error where its price is the highest. The usual loss therefore flattens the absolute error over the decades of $\Omega$, and leaves a large relative error on the small increments. The weights flatten the relative error instead, and the absolute error of the largest increments grows. Neither becomes uniform: the network adjusts the errors within its capacity. Example: `scripts/H2_IGN_KERNEL_WEIGHTED_LOSS` with `T_threshold: 900`, one cluster of 60 x 60 units, $\varepsilon = 10^{-2}$, one training for each $p$, medians over the validation points of each decade (absolute error in units of $\sigma_k$):
+
+| Decade of $\Omega$ | Absolute error, $p = 0$ | Absolute error, $p = 1$ | Relative error, $p = 0$ | Relative error, $p = 1$ |
+|------|------|------|------|------|
+| 0.01 - 0.1 | 0.021 | 0.005 | 54 % | 14 % |
+| 0.1 - 1 | 0.022 | 0.013 | 8 % | 4.5 % |
+| 1 - 10 | 0.049 | 0.086 | 2 % | 3.6 % |
+| above 10 | 0.30 | 1.53 | 2 % | 11 % |
+
+In this example both models pass the 0D ignition test (error on the final temperature 0.3 % and 0.2 %): one training each does not rank them.
+
 **Resampling on $\Omega$.** `LearningDatabase.undersample_Omega` keeps the same number of points in each bin of $\log_{10}\Omega$ ($\sigma_k$ of the whole database, $\Omega$ below `Omega_min` in the first bin). The share of the loss of a bin of $\Omega$, for the same relative error, is
 
 $$S_{\text{bin}} \propto N_{\text{bin}}\;\Omega_{\text{bin}}^{\,2-p}$$
