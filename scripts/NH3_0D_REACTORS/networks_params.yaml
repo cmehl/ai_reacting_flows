@@ -28,4 +28,7 @@ learning:
   - 1500
   decay_rate: 0.995
   loss_weighting_p: 1.0        # Weights (Omega + eps)^(-p) of the points, Omega^2 = sum_k (omega_k / sigma_k)^2: 0 none, 1 same gradient, 2 same loss for the same relative error
-  loss_weighting_eps: 1.0e-02  # Floor of Omega [-] (units of sigma_k), about the error the network can reach
+  loss_weighting_eps: 5.0e-02  # Floor of Omega [-] (units of sigma_k), about the error the network can reach: see ERROR_VS_OMEGA in the training log
+  loss_weighting_q: 0.0        # Density factor N_bin^(-q) of the weights (bins of log10(Omega)): 1 as undersample_Omega without discarding points
+  loss_weighting_min_count: 100 # Floor of N_bin, bounds the weights of rare bins
+  omega_diagnostics_epochs: [300, 750, 1200]   # Epochs (from 0) of the plots per decade of Omega in training/cluster_<i>/ (also after training)
