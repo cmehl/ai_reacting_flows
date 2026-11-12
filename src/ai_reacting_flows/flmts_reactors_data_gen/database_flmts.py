@@ -958,13 +958,16 @@ class DatabaseFlamelets(object):
 
         Y_local = np.empty((len(local_indices), n_cols))
 
+        # Rows read from a numpy array (a pandas row access with iloc is ~60 times slower)
+        X_values = X.values
+
         for k_local, k_global in enumerate(local_indices):
 
-            row = X.iloc[k_global]
+            row = X_values[k_global]
 
-            T = row.iloc[0]
-            p = row.iloc[1]
-            Yk = row.iloc[2:2 + self.nb_spec].values
+            T = row[0]
+            p = row[1]
+            Yk = row[2:2 + self.nb_spec]
 
             self.gas.TPY = T, p, Yk
 
