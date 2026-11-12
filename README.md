@@ -273,7 +273,7 @@ Multi-dt generation (`generate_multi_dt.py`) reads the same file, with the addit
 | `pressure` | Pressure [Pa] |
 | `time_step` | $dt$ [s] between `X` and `Y` |
 | `include_zerod`, `include_oned_prem`, `include_oned_diff` | Which canonical cases to compute |
-| `zerod_params` | `phi_bounds`, `T0_bounds` [K], `n_samples`, `max_sim_time` [s], `solve_mode` (`dt_cfd`: constant $dt$, `dt_cvode`: CVODE internal steps), `cvode_stride` (`dt_cvode` only: one CVODE step out of `cvode_stride` is stored, optional, default 1) |
+| `zerod_params` | `phi_bounds`, `T0_bounds` [K], `n_samples`, `max_sim_time` [s], `solve_mode` (`dt_cfd`: constant $dt$, `dt_cvode`: CVODE internal steps), `cvode_stride` (`dt_cvode` only: one CVODE step out of `cvode_stride` is stored, optional, default 1), `T_eq_tolerance` [K] (a simulation ends when its temperature is within `T_eq_tolerance` of the HP equilibrium temperature, as `T_eq_tolerance` of the 0D tests; optional, default: when the distance of $(X_k, T)$ to equilibrium is below 0.5 % of its norm, about 14 K at 2800 K. `max_sim_time` caps both) |
 | `oned_prem_params` | `phi_bounds`, `T0_bounds` [K], `n_samples` |
 | `oned_diff_params` | `strain_bounds` [1/s], `T0_bounds` [K], `n_samples`, `width` [m] |
 | `augment_dataset` | If `true`, add randomly perturbed states (enthalpy and $Y_k$), following Ding *et al.* |

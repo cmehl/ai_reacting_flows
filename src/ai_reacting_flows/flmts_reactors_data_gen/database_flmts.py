@@ -89,6 +89,7 @@ class DatabaseFlamelets(object):
         max_sim_time = zerod_params["max_sim_time"]
         solve_mode = zerod_params["solve_mode"]
         cvode_stride = zerod_params.get("cvode_stride", 1)   # dt_cvode: one CVODE step out of cvode_stride is stored
+        T_eq_tolerance = zerod_params.get("T_eq_tolerance", None)   # [K] end when |T - T_eq| <= T_eq_tolerance, None: 0.5 % criterion
          
         self.n_samples_0D = n_samples
         self.sim_numbers_0D = np.arange(n_samples)
@@ -129,7 +130,7 @@ class DatabaseFlamelets(object):
         self.comm.Barrier()
          
         # PERFORMING SIMULATIONS
-        # Hard coded for the moment
+        # Default end of the simulations: distance to equilibrium of (X_k, T) below equil_tol [%] of its norm
         equil_tol = 0.5
 
         # Chemical mechanisms
@@ -225,9 +226,14 @@ class DatabaseFlamelets(object):
 
                 
                 n_iter +=1
-                # max iteration                    
-                if residual < equil_tol:
-                    equil_bool = True
+                # End of the simulation at equilibrium
+                if T_eq_tolerance is None:
+                    # Relative distance of (X_k, T) to equilibrium below equil_tol [%]
+                    equil_bool = residual < equil_tol
+
+                else:
+                    # Temperature within T_eq_tolerance [K] of the equilibrium temperature (as NNTesting)
+                    equil_bool = abs(r.T - gas_equil.T) <= T_eq_tolerance
             
             # ============================== Construction of the database =========
             # Get the total number of rows for the current simulation
