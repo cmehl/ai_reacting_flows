@@ -347,7 +347,7 @@ An MLP definition contains:
 
 For `PerSpeciesMLP`, this definition is that of the network of each species (one output), with dense layers only. The networks of all species are computed together (weights of a layer stacked for all species, one batched product per layer), as in the inference of NNICE, which is much faster than one network after the other. Example: `scripts/H2_IGN_KERNEL_PER_SPECIES`.
 
-For `DeepONet`, these three keys are dicts with `branch` and `trunk` entries (plus `shift` for `DeepONetShift`), and `n_neurons` is added. The trunk takes $dt$ as input.
+For `DeepONet`, these three keys are dicts with `branch` and `trunk` entries (plus `shift` for `DeepONetShift`), and `n_neurons` is added. The trunk takes $dt$ as input: DeepONets need a database with multiple $dt$ (`dt_var: true`). Their h5 export (read by NNICE) is not implemented yet: training stops after the `.pth` file of the first cluster is saved.
 
 ## `nn_testing.yaml` (testing)
 

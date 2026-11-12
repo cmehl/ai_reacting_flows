@@ -102,7 +102,7 @@ class PerSpeciesMLP(nn.Module):
 class DeepONet(nn.Module):
     
     def __init__(self, device, hidden_layers : dict[str,list[int]], layers_type : dict[str,list[str]], activations : dict[str,list], n_out, n_neuron):
-        super(MLPModel, self).__init__()
+        super().__init__()
 
         self.branch = MLPModel(device, hidden_layers["branch"], layers_type["branch"] ,activations["branch"])
         self.trunk = MLPModel(device, hidden_layers["trunk"], layers_type["trunk"] ,activations["trunk"])
@@ -131,7 +131,7 @@ class DeepONet(nn.Module):
 class DeepONet_shift(nn.Module):
     
     def __init__(self, device, hidden_layers : dict[str,list[int]], layers_type : dict[str,list[str]], activations : dict[str,list], n_out, n_neuron):
-        super(MLPModel, self).__init__()
+        super().__init__()
 
         self.branch = MLPModel(device, hidden_layers["branch"], layers_type["branch"] ,activations["branch"])
         self.trunk = MLPModel(device, hidden_layers["trunk"], layers_type["trunk"] ,activations["trunk"])
