@@ -863,7 +863,9 @@ class NNTesting():
         1D errors and plots, full domain if null), conditions_file (sim_test_*.csv of a flamelets database
         whose conditions replace those of the series, see read_conditions_file, not used if null).
         Returns the summary: errors of each case, mean and standard deviation over the cases, and the
-        simulation error aggregated per dt (E(dt)). The errors of each case are also written in
+        simulation error aggregated per dt (E(dt)). A case that fails (e.g. the ANN diverges and Cantera cannot set
+        its state) is skipped: the series continues, and the number of failed cases (n_failed) and their parameters
+        and errors (failed_cases) are printed, logged (CASE_FAILED, SERIES_FAILURES) and written in the summary. The errors of each case are also written in
         simulation_errors_<case_type>.csv, and E(dt) in simulation_errors_<case_type>_by_dt.csv (plotted in
         simulation_errors_<case_type>_by_dt.png), with the mean contribution of each variable (plotted in
         simulation_errors_<case_type>_by_variable.png) and the mean speed-up. The errors per cluster and
@@ -883,12 +885,26 @@ class NNTesting():
         print(f"\n>> Series {case_type}: {len(cases)} cases")
 
         entries = []
+        failed = []         # Cases that failed: parameters and error message
         point_errors = []   # Errors of each step (0D) or grid point (1D), for the errors per cluster
         for case in cases:
 
             print(f"\n>> {case_type}: {case}")
-            result = self.run_case(case_type, case)
-            errors = self.case_errors(case_type, result, x_window)
+
+            # A failing case (e.g. diverging ANN) is recorded and skipped
+            try:
+                result = self.run_case(case_type, case)
+                errors = self.case_errors(case_type, result, x_window)
+            except Exception as error:
+                # On one line, without the frames of asterisks of Cantera errors
+                lines = [line.strip() for line in str(error).splitlines() if line.strip().strip("*")]
+                message = f"{type(error).__name__}: {' '.join(lines)}"
+                print(f">> CASE FAILED: {message}")
+                self._log(f"CASE_FAILED {case_type} {case}: {message}")
+                failed.append({"params": case, "error": message})
+                plt.close("all")
+                continue
+
             print_errors(errors)
 
             if series["plots"]:
@@ -904,13 +920,26 @@ class NNTesting():
             points.insert(0, "dt", case["dt"])
             point_errors.append(points)
 
+        # Number of failed cases
+        msg = f"SERIES_FAILURES {case_type}: {len(failed)} failed cases of {len(cases)}"
+        print(f"\n>> {msg}")
+        self._log(msg)
+
+        # All cases failed: summary of the failures only
+        if len(entries) == 0:
+            summary = {"n_cases": 0, "n_failed": len(failed), "failed_cases": failed}
+            with open(os.path.join(self.output_folder, f"summary_{case_type}.yaml"), "w") as file:
+                yaml.dump(summary, file, default_flow_style=False, sort_keys=False)
+            return summary
+
         # Mean and standard deviation over the cases (cases without value, e.g. no ignition, are skipped)
         mean, std = {}, {}
         for key in entries[0]["errors"]:
             values = [entry["errors"][key] for entry in entries if entry["errors"][key] is not None]
             mean[key], std[key] = metrics.mean_std(values)
 
-        summary = {"n_cases": len(entries), "mean": mean, "std": std, "cases": entries}
+        summary = {"n_cases": len(entries), "n_failed": len(failed), "mean": mean, "std": std, "cases": entries,
+                   "failed_cases": failed}
 
         # Table of the errors of each simulation (one row per case: parameters and errors)
         table = pd.DataFrame([{**entry["params"], **entry["errors"]} for entry in entries])
