@@ -12,7 +12,7 @@ sns.set_style("darkgrid")
 
 from sklearn.model_selection import train_test_split
 
-from ai_reacting_flows.tools.utilities import compute_X_element, check_elements
+from ai_reacting_flows.tools.utilities import get_elements_matrix, check_elements
 
 class DatabaseFlamelets(object):
 
@@ -751,6 +751,19 @@ class DatabaseFlamelets(object):
 
 
     def augment_data(self):
+        """Add one randomly perturbed state per flamelet state (HFRD method of Ding et al., Combust. Flame 231,
+        2021, https://doi.org/10.1016/j.combustflame.2021.111493): temperature [K] and mass fractions [-] are perturbed,
+        with one random number for the temperature and one per species. The temperature and the mass fraction of N2
+        change by at most 1/8 of their range in the flamelet states of the same reactor type; the mass fractions of
+        the other species are changed by a power law, Y_k^(1 + d/10) with d in [-1, 1], and normalised.
+        N2 treated as in Zhang et al., https://arxiv.org/abs/2312.05800. The mechanism must include N2.
+
+        The heat release rate [W/m3] of a perturbed state is recomputed; its progress variable [-] is the one of
+        its flamelet state.
+
+        A perturbed state is kept if its temperature is above 300 K and if its mass fractions of elements
+        (C, H, O, N) [-] are in the range of the flamelet states of the same reactor type (with a relative margin).
+        """
 
         self.df_flamelet = self.df.copy()
 
@@ -772,14 +785,34 @@ class DatabaseFlamelets(object):
             max_values_1D_diff = self.df[self.df["reactor_type"]==2].max()    # We should probably do it by simulation type !!
             min_values_1D_diff = self.df[self.df["reactor_type"]==2].min()
 
-        h_idx = 2 + self.nb_spec
+        # Range of temperature [K] of the flamelet states, by reactor type
+        T_idx = 0
         bounds = {}
         if self.include_zerod:
-            bounds[0] = (max_values_0D.iloc[h_idx], min_values_0D.iloc[h_idx])
+            bounds[0] = (max_values_0D.iloc[T_idx], min_values_0D.iloc[T_idx])
         if self.include_oned_prem:
-            bounds[1] = (max_values_1D_prem.iloc[h_idx], min_values_1D_prem.iloc[h_idx])
+            bounds[1] = (max_values_1D_prem.iloc[T_idx], min_values_1D_prem.iloc[T_idx])
         if self.include_oned_diff:
-            bounds[2] = (max_values_1D_diff.iloc[h_idx], min_values_1D_diff.iloc[h_idx])
+            bounds[2] = (max_values_1D_diff.iloc[T_idx], min_values_1D_diff.iloc[T_idx])
+
+        # Mass fractions of elements (C, H, O, N) of the flamelet states
+        elements_matrix = get_elements_matrix(gas)
+        Z_el = self.df[gas.species_names].to_numpy(dtype=float) @ elements_matrix.T
+
+        # Accepted range of the mass fractions of elements, by reactor type
+        # The relative margin keeps a non-zero range for a database with a single mixture composition
+        margin = 0.01
+        Z_el_bounds = {}
+        for i_reac in bounds:
+            Z_el_reac = Z_el[(self.df["reactor_type"]==i_reac).to_numpy()]
+            Z_el_bounds[i_reac] = (Z_el_reac.min(axis=0) * (1.0 - margin), Z_el_reac.max(axis=0) * (1.0 + margin))
+
+        # Range of the mass fraction of N2 [-] of the flamelet states, by reactor type
+        i_N2 = gas.species_index("N2")
+        Y_N2_bounds = {}
+        for i_reac in bounds:
+            Y_N2_reac = self.df["N2"][self.df["reactor_type"]==i_reac]
+            Y_N2_bounds[i_reac] = (Y_N2_reac.max(), Y_N2_reac.min())
 
 
         # Split row indices across ranks
@@ -805,33 +838,31 @@ class DatabaseFlamelets(object):
                 T = row.iloc[0]
                 p = row.iloc[1]
                 Yk = row.iloc[2:2 + self.nb_spec].values
-                h = row.iloc[2 + self.nb_spec]
                 i_reac = row.iloc[5 + self.nb_spec]
 
-                hmax, hmin = bounds[i_reac]
+                Tmax, Tmin = bounds[i_reac]
+                Y_N2_max, Y_N2_min = Y_N2_bounds[i_reac]
                 
-                # Random numbers
+                # Random numbers: c for the temperature, d for the mass fractions (one per species)
                 c = rng.uniform(-1, 1)
-                d = rng.uniform(-1, 1)
+                d = rng.uniform(-1, 1, size=self.nb_spec)
 
                 # Parameters
                 a = 8
-                b = 5
+                b = 10
                 
-                # New state
-                hnew = h + (c/a) * (hmax - hmin)
-                Yk = np.clip(Yk, 0, 1)
-                Yknew = Yk**(1.+d/b)
-                Yknew = Yknew / Yknew.sum()
-
                 # New temperature
-                try:
-                    gas.HPY = hnew, p, Yknew
-                    Tnew = gas.T
-                except ct.CanteraError:
-                    print(f">> T computation crashed for row {i}")
-                    accepted = False
-                    continue
+                Tnew = T + (c/a) * (Tmax - Tmin)
+                Yk = np.clip(Yk, 0, 1)
+
+                # New mass fraction of N2: as the temperature, a power law would change this major species too much
+                Y_N2_new = Yk[i_N2] + (d[i_N2]/a) * (Y_N2_max - Y_N2_min)
+
+                # New mass fractions of the other species, normalised so that the sum with N2 is 1
+                Yknew = Yk**(1.+d/b)
+                Yknew[i_N2] = 0.0
+                Yknew = Yknew * (1.0 - Y_N2_new) / Yknew.sum()
+                Yknew[i_N2] = Y_N2_new
 
 
                 # Skip under some conditions
@@ -839,21 +870,38 @@ class DatabaseFlamelets(object):
                     accepted = False
                     continue
 
-                # Elements (C, H, O, N)
-                X_el = compute_X_element(gas, Yknew)
-                O_N_ratio = X_el[2]/X_el[3]
-                # if O_N_ratio<0.25 or O_N_ratio > 0.28:
-                #     accepted = False
+                # Skip if the mass fraction of N2 is not in [0, 1]
+                if Y_N2_new<0.0 or Y_N2_new>1.0:
+                    accepted = False
+                    continue
+
+                # Skip if a mass fraction of element (C, H, O, N) is outside the range of the flamelet states
+                Z_el_new = elements_matrix @ Yknew
+                Z_el_min, Z_el_max = Z_el_bounds[i_reac]
+                if np.any(Z_el_new < Z_el_min) or np.any(Z_el_new > Z_el_max):
+                    accepted = False
+                    continue
 
 
                 if accepted:
+
+                    # Enthalpy [J/kg] of the new state
+                    gas.TPY = Tnew, p, Yknew
+                    hnew = gas.enthalpy_mass
+
+                    # Heat release rate [W/m3] of the new state, as for the flamelet states
+                    h_species = gas.standard_enthalpies_RT * ct.gas_constant * Tnew
+                    hrr_new = -np.dot(gas.net_production_rates, h_species)
+
                     row_new = np.empty(7+self.nb_spec)
                     row_new[0] = Tnew
                     row_new[1] = p
                     row_new[2:2 + self.nb_spec] = Yknew
                     row_new[2 + self.nb_spec] = hnew
-                    row_new[3 + self.nb_spec] = row.iloc[3 + self.nb_spec]   #CM: recompute proper progvar 
-                    row_new[4 + self.nb_spec] = row.iloc[4 + self.nb_spec]   #CM: recompute proper HRR
+                    # Progress variable of the flamelet state: its normalisation (unburnt and equilibrium states of
+                    # the flamelet) is not defined for the new state. It is only used to undersample the database
+                    row_new[3 + self.nb_spec] = row.iloc[3 + self.nb_spec]
+                    row_new[4 + self.nb_spec] = hrr_new
                     row_new[5 + self.nb_spec] = row.iloc[5 + self.nb_spec]
                     row_new[6 + self.nb_spec] = row.iloc[6 + self.nb_spec]
 
