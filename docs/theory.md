@@ -181,7 +181,7 @@ $P(Y^*)$ is converted back to a network output (`transforms.Yk_to_output`) to be
 
 # Loss weighting
 
-CM: loss weighting is still a work in progress.
+> **Work in progress.** Loss weighting is experimental. So far the weights have not improved the tests of the networks: in a study with 15 seeds per setting on `H2_IGN_KERNEL_WEIGHTED_LOSS` (one cluster, MLP 20 x 20, one 0D ignition test), they did not improve the 0D test, and $p = 1$, $\varepsilon = 10^{-2}$ degraded the ignition delay. This database had no burnt states with small $\Omega$ (its small $\Omega$ are cold gases), so the case the weights aim at, burnt gases near equilibrium, is still untested. The weights with rollout training have not been evaluated yet. The options, their defaults and this section may still change. Compare any weighted model with an unweighted one trained with several seeds before using it.
 
 With `output_omegas: true` and `log_transform_Y: 1`, the target of species $k$ at point $i$ is the increment $\hat\omega_{ik} = \ln Y_k(t+dt) - \ln Y_k(t)$, scaled as $y_{ik} = (\hat\omega_{ik} - \mu_k)/\sigma_k$, with $\mu_k$ and $\sigma_k$ the mean and standard deviation of the cluster. The mean cancels in the error: with $e_{ik}$ the relative error on $\hat\omega_{ik}$, the MSE loss of the point is
 

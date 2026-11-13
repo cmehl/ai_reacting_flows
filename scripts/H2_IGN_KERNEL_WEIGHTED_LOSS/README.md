@@ -1,5 +1,8 @@
 # H2 ignition kernel, loss weighted by the increments
 
+**Work in progress:** loss weighting is experimental and has not improved the tests of the networks so far (see
+[theory](../../docs/theory.md#loss-weighting)). Compare with `H2_IGN_KERNEL` over several seeds before drawing conclusions.
+
 Same case as `H2_IGN_KERNEL` (database and testing inputs identical), with a database undersampled on the norm of
 the scaled increments $\Omega$ (`undersample_Omega` in `dtb_processing.py`, instead of the HRR undersampling) and the
 loss weighted by the increments of the species (`loss_weighting_p`, `loss_weighting_eps` in `networks_params.yaml`, see

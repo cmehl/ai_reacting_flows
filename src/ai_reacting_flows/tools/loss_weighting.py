@@ -2,6 +2,9 @@
 Weights of the training loss based on the increments of the species (learning.loss_weighting_p, loss_weighting_eps,
 loss_weighting_q, loss_weighting_min_count).
 
+WORK IN PROGRESS: these weights have not yet improved the tests of the networks (0D ignition, burnt gases). The
+options and their defaults may still change.
+
 With output_omegas and log_transform_Y: 1, the target of species k at point i is the increment
 omega_ik = ln Y_k(t+dt) - ln Y_k(t) [-], scaled by the standard deviation sigma_k of the cluster. If all species of a
 point have the same relative error e_i, the MSE loss of the point is e_i^2 Omega_i^2, with the norm of the scaled increments
