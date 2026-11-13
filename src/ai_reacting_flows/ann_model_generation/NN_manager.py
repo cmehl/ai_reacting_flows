@@ -108,14 +108,12 @@ class NN_manager():
         self.loss_weighting_min_count = learning_data.get("loss_weighting_min_count", 100) # Floor of the numbers of points per bin of Omega
         self.loss_weighting = self.loss_weighting_p > 0.0 or self.loss_weighting_q > 0.0
 
-        # Increment weights (tools/loss_weighting.py): only for increments of ln Y, with the MSE loss, one step
+        # Increment weights (tools/loss_weighting.py): only for increments of ln Y, with the MSE loss
         if self.loss_weighting:
             if not (self.output_omegas and self.log_transform_Y == 1):
                 raise ValueError("Loss weighting (loss_weighting_p or loss_weighting_q > 0) needs output_omegas: true and log_transform_Y: 1 (increments of ln Y)")
             if str(self.loss_name).lower() != "mse":
                 raise ValueError("Loss weighting (loss_weighting_p or loss_weighting_q > 0) needs the MSE loss")
-            if self.rollout:
-                raise ValueError("Loss weighting (loss_weighting_p or loss_weighting_q > 0) is not available with rollout training")
             if self.loss_weighting_eps is None:
                 raise ValueError("loss_weighting_eps must be given with loss_weighting_p or loss_weighting_q > 0")
 
@@ -372,13 +370,13 @@ class NN_manager():
         return w[:, None], ref, Omega
 
 
-    def _rollout_loss(self, model, loss_fn, X, Y_rollout, Y_N2, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std, raw_weight=0.0):
+    def _rollout_loss(self, model, loss_fn, X, Y_rollout, Y_N2, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std, raw_weight=0.0, weights=None):
         """Loss of a rollout: mean over the steps of _rollout_step_losses. With one step, it is the usual loss."""
 
-        return self._rollout_step_losses(model, loss_fn, X, Y_rollout, Y_N2, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std, raw_weight).mean()
+        return self._rollout_step_losses(model, loss_fn, X, Y_rollout, Y_N2, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std, raw_weight, weights).mean()
 
 
-    def _rollout_step_losses(self, model, loss_fn, X, Y_rollout, Y_N2, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std, raw_weight=0.0):
+    def _rollout_step_losses(self, model, loss_fn, X, Y_rollout, Y_N2, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std, raw_weight=0.0, weights=None):
         """Loss of each step of a rollout, tensor (n_steps): from the states of X, the network is applied n_steps
         times, each time on its own prediction, with temperatures from enthalpy conservation. Loss on the error of
         the predicted state, in units of the standard deviation of the outputs (see docs/theory.md). All steps use
@@ -387,6 +385,8 @@ class NN_manager():
 
         X: scaled inputs at t (n, n_in), Y_rollout: transformed (not scaled) mass fractions at t+k*dt
         (n, n_steps, n_species_ANN), Y_N2: mass fractions of N2 [-] (n), not used if N2 is predicted.
+        weights: loss weights (n, 1) of the initial states, from the true increments of the first step: the same
+        weight for all the steps of a rollout. None for the usual loss.
         """
         n_steps = Y_rollout.shape[1]
 
@@ -423,11 +423,11 @@ class NN_manager():
 
             if self.project_elements:
                 Y_new, y_projected = self._projected_output(X, Y_old, Y_new, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std)
-                losses.append(loss_fn(y_projected, y_target) + raw_weight * loss_fn(y_pred, y_target))
+                losses.append(self._loss(loss_fn, y_projected, y_target, weights) + raw_weight * self._loss(loss_fn, y_pred, y_target, weights))
 
             # Usual loss
             else:
-                losses.append(loss_fn(y_pred, y_target))
+                losses.append(self._loss(loss_fn, y_pred, y_target, weights))
 
             # Next input, built as at inference (NNInference.advance): the temperature update uses the predicted
             # state, not clipped (the clip only applies to the network input)
@@ -618,17 +618,17 @@ class NN_manager():
             for i in range(0, len(X_train), self.batch_size):
 
                 Xbatch = X_train[i:i+self.batch_size]
+                wbatch = None if W_train is None else W_train[i:i+self.batch_size]
 
                 # Network applied on its own predictions
                 if self.rollout:
                     loss = self._rollout_loss(model, loss_fn, Xbatch, Y_rollout_train[i:i+self.batch_size], Y_N2_train[i:i+self.batch_size],
-                                              Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std, self.raw_state_loss_weight)
+                                              Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std, self.raw_state_loss_weight, wbatch)
 
                 # One step
                 else:
                     y_pred = model(Xbatch)
                     ybatch = Y_train[i:i+self.batch_size]
-                    wbatch = None if W_train is None else W_train[i:i+self.batch_size]
                     loss = self._one_step_loss(loss_fn, Xbatch, y_pred, ybatch, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std,
                                                self.raw_state_loss_weight, wbatch)
 
@@ -656,7 +656,8 @@ class NN_manager():
                     # VALIDATION LOSS (with project_elements: on the projected state only, used at inference)
                     y_val_pred = model(X_val)
                     if self.rollout:
-                        val_loss = self._rollout_loss(model, loss_fn, X_val, Y_rollout_val, Y_N2_val, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std)
+                        val_loss = self._rollout_loss(model, loss_fn, X_val, Y_rollout_val, Y_N2_val, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std,
+                                                      weights=W_val)
                     else:
                         val_loss = self._one_step_loss(loss_fn, X_val, y_val_pred, Y_val, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std,
                                                        weights=W_val)
@@ -664,7 +665,14 @@ class NN_manager():
                     # Unweighted validation loss, to compare models trained with different weights
                     val_loss_unweighted = None
                     if W_val is not None:
-                        val_loss_unweighted = self._one_step_loss(loss_fn, X_val, y_val_pred, Y_val, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std)
+
+                        # Network applied on its own predictions
+                        if self.rollout:
+                            val_loss_unweighted = self._rollout_loss(model, loss_fn, X_val, Y_rollout_val, Y_N2_val, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std)
+
+                        # One step
+                        else:
+                            val_loss_unweighted = self._one_step_loss(loss_fn, X_val, y_val_pred, Y_val, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std)
 
                     # Physical mass fractions at t (input) and t+dt (prediction)
                     yval_in, yk_abs = self._physical_Yk(X_val, y_val_pred, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std)
@@ -738,7 +746,8 @@ class NN_manager():
         if self.rollout:
             model.eval()
             with torch.no_grad():
-                val_step_losses = self._rollout_step_losses(model, loss_fn, X_val, Y_rollout_val, Y_N2_val, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std)
+                val_step_losses = self._rollout_step_losses(model, loss_fn, X_val, Y_rollout_val, Y_N2_val, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std,
+                                                            weights=W_val)
             model.train()
 
             val_step_losses = val_step_losses.cpu().numpy()

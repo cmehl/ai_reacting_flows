@@ -12,10 +12,13 @@ Check:
 - with 3 steps, it is the loss on the absolute states of a chain computed separately with NNInference.advance
   (same network inputs, including the temperature update from enthalpy conservation, N2 unchanged);
 - the validation losses per step written after training have this loss as mean, and the usual loss as first step.
+- with loss weights (loss_weighting_p, loss_weighting_q): all the steps of a rollout have the weight of the first step
+  of their initial state, weights 1 give the unweighted loss, and training logs the weights and the unweighted loss.
 
 Independent of the other tests.
 """
 import os
+import glob
 import h5py
 import numpy as np
 import oyaml as yaml
@@ -195,3 +198,62 @@ def test_rollout_processing_training(tmp_path, output_omegas, log_transform_Y, l
     assert np.array_equal(step_losses[:, 0], np.arange(1, rollout_steps + 1))
     assert np.isclose(step_losses[0, 1], usual_loss, rtol=1.0e-10)
     assert np.isclose(step_losses[:, 1].mean(), rollout_loss(rollout_steps), rtol=1.0e-10)
+
+
+def test_rollout_loss_weighting(tmp_path):
+    os.chdir(tmp_path)
+    write_rollout_database(tmp_path / "STOCH_DTB_TEST")
+    write_inputs(True, 1, 1)
+    LearningDatabase().process_database()
+
+    params = yaml.safe_load(open("networks_params.yaml"))
+    params["learning"].update({"loss_weighting_p": 1.0, "loss_weighting_eps": 1.0e-2, "loss_weighting_q": 0.5,
+                               "loss_weighting_min_count": 5, "val_every": 1})
+    with open("networks_params.yaml", "w") as file:
+        yaml.dump(params, file, default_flow_style=False)
+
+    # Training with the weights
+    manager = NN_manager()
+    manager.train_all_clusters()
+    log = open(glob.glob(str(tmp_path / "nn_training_*.log"))[0]).read()
+    assert "LOSS_WEIGHTS cluster=0" in log and "val_loss_unweighted=" in log
+
+    device = manager.device
+    model = torch.load("MODELS/MODEL_TEST/cluster0_model.pth", map_location=device, weights_only=False)
+
+    def tensor(a):
+        return torch.tensor(a, dtype=torch.float64, device=device)
+
+    # Weights of the validation points, with the bins and normalization of the training points
+    _, X_val, Y_train, Y_val = manager.read_training_data(0)
+    _, Y_rollout_val, _, Y_N2_val = manager.read_rollout_data(0)
+    Xm, Xv, Ym, Yv = manager.get_scalers_stats(0)
+    X_std, Y_std = np.sqrt(Xv), np.sqrt(Yv)
+    _, ref, _ = manager._loss_weights(Y_train, Ym, Y_std)
+    W_val, _, _ = manager._loss_weights(Y_val, Ym, Y_std, ref)
+    assert W_val.max() / W_val.min() > 2.0
+
+    def step_losses(weights):
+        with torch.no_grad():
+            return manager._rollout_step_losses(model, torch.nn.MSELoss(), tensor(X_val), tensor(Y_rollout_val), tensor(Y_N2_val),
+                                                tensor(Xm), tensor(X_std), tensor(Ym), tensor(Y_std), weights=weights).cpu().numpy()
+
+    weighted, unweighted = step_losses(tensor(W_val)), step_losses(None)
+
+    # Weights 1: unweighted loss. First step: weighted usual loss
+    assert np.allclose(step_losses(torch.ones(len(X_val), 1, dtype=torch.float64, device=device)), unweighted, rtol=1.0e-10)
+    with torch.no_grad():
+        first_step = torch.mean(tensor(W_val) * (model(tensor(X_val)) - tensor(Y_val))**2).item()
+    assert np.isclose(weighted[0], first_step, rtol=1.0e-10)
+    assert not np.allclose(weighted, unweighted, rtol=1.0e-3)
+
+    # One point with a weight: only the errors of its chain are multiplied, at all steps
+    w_one = np.ones((len(X_val), 1))
+    w_one[0] = 3.0
+    only_first = np.zeros((len(X_val), 1))
+    only_first[0] = 1.0
+    assert np.allclose(step_losses(tensor(w_one)), unweighted + 2.0 * step_losses(tensor(only_first)), rtol=1.0e-10)
+
+    # Validation losses per step written after training: weighted
+    written = np.loadtxt("MODELS/MODEL_TEST/training/cluster_0/rollout_val_loss_per_step.csv", delimiter=",", skiprows=1)
+    assert np.allclose(written[:, 1], weighted, rtol=1.0e-10)
