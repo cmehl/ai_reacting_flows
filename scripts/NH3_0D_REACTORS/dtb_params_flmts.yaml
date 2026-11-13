@@ -19,8 +19,8 @@ zerod_params:
   - 2000.0
   n_samples: 200
   max_sim_time: 1.0e-2
-  T_eq_tolerance: 1.0     # [K] end of each reactor when T is within this of equilibrium (default: 0.5 % criterion)
-  dT_tolerance: 1.0e-3    # [K] and when T changes by less than this over time_step (default: T_eq_tolerance)
+  T_eq_tolerance: 2.0     # [K] end of each reactor when T is within this of equilibrium and no longer changing (default: 0.5 % criterion)
+  dT_tolerance: 1.0e-3    # [K] and when T changes by less than this over one time_step (default: T_eq_tolerance)
   solve_mode: "dt_cfd"
   skip_initial_state: true   # Initial mixture of each reactor not stored (its step is an outlier): use cvode_initial_steps: 1 in the tests
 oned_prem_params:
@@ -43,11 +43,9 @@ oned_diff_params:
   T_fuel: 300.0           # [K] fuel inlet (T0_bounds: air inlet)
 augment_dataset: False
 scatter_plot_variables: [Temperature, H2O]   # [x, y] of the scatter plot of the database
-# For multi dt generation
+# For rollout database generation (generate_multi_dt.py)
 T_threshold: 600.0
-time_step_type: random
-time_step_range:
-- 1.0e-07
-- 1.0e-06
-nb_dt: 5
-new_file_name: solutions_5dt.h5
+time_step_type: rollout
+rollout_dt: 1.0e-06
+rollout_steps: 3
+new_file_name: solutions_rollout.h5
