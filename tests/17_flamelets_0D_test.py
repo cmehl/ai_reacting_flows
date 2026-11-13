@@ -7,6 +7,8 @@ Check: the reactors are computed without error and the stored states have a prog
 variable in [0, 1]. With T_eq_tolerance [K], each reactor ends when its temperature is within
 T_eq_tolerance of the HP equilibrium temperature of its initial mixture, and rich NH3 reactors, which
 cross the equilibrium temperature on the ignition front, end after their temperature overshoot.
+With dT_tolerance [K], they end only when their temperature changes by less than dT_tolerance over time_step, after
+they have cooled down through the equilibrium temperature.
 With skip_initial_state, the initial mixture of each reactor is not stored, the other states are unchanged.
 
 Independent of the other tests.
@@ -75,6 +77,18 @@ def test_flamelets_0D_rich_overshoot(tmp_path):
     for _, sim in dtb.df.groupby("Simulation number"):
         T = sim["Temperature"].to_numpy()
         assert np.argmax(T) < len(T) - 1
+    n_states = dtb.df.groupby("Simulation number").size()
+
+    # With T_eq_tolerance alone the reactors end while cooling down through T_eq (about 0.2 K per step); with
+    # dT_tolerance they end later, at rest
+    dT_tolerance = 0.01
+    dtb = DatabaseFlamelets(params_nh3, dc.DummyComm())
+    dtb.compute_0d_reactors(dict(zerod_rich, max_sim_time=5.0e-3, T_eq_tolerance=2.0, dT_tolerance=dT_tolerance))
+
+    for number, sim in dtb.df.groupby("Simulation number"):
+        T = sim["Temperature"].to_numpy()
+        assert abs(T[-1] - T[-2]) <= dT_tolerance
+        assert len(T) > 2 * n_states[number]
 
 
 def test_flamelets_0D_skip_initial_state(tmp_path):

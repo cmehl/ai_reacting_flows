@@ -20,6 +20,7 @@ zerod_params:
   n_samples: 200
   max_sim_time: 1.0e-2
   T_eq_tolerance: 1.0     # [K] end of each reactor when T is within this of equilibrium (default: 0.5 % criterion)
+  dT_tolerance: 1.0e-3    # [K] and when T changes by less than this over time_step (default: T_eq_tolerance)
   solve_mode: "dt_cfd"
   skip_initial_state: true   # Initial mixture of each reactor not stored (its step is an outlier): use cvode_initial_steps: 1 in the tests
 oned_prem_params:

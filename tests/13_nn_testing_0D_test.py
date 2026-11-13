@@ -13,6 +13,7 @@ Check:
 - the cluster of each step is recorded (-1 for CVODE steps of the hybrid mode, with the criterion on the
   sum of mass fractions or on the element mass fractions), and the ANN can be
   continued after equilibrium (drifts of T and of the sum of Y_k).
+- with dT_tolerance, the 0D case stops later, when the CVODE temperature changes by less than dT_tolerance per step.
 - with cvode_initial_steps, the first steps are done by CVODE (cluster -1, same states as the reference) and the
   ANN does the other ones.
 
@@ -97,6 +98,16 @@ def test_nn_testing_0D(tmp_path):
     assert abs(T_ref[-1] - result["T_eq"]) <= 1.0 and abs(T_ref[-2] - result["T_eq"]) > 1.0
     assert result["states_ann"].shape == result["states_ref"].shape
     assert len(T_ref) < 1.0 / dt
+
+    # Stop only when the CVODE temperature changes by less than dT_tolerance over a step: later
+    dT_tolerance = 1.0e-3
+    result = test.run_0D_ignition_case(phi=0.6, T0=1200.0, pressure=pressure, dt=dt, max_simulation_time=1.0, T_eq_tolerance=1.0,
+                                       dT_tolerance=dT_tolerance)
+    T_ref_rest = result["states_ref"][:, 0]
+
+    assert result["equilibrium_reached"]
+    assert len(T_ref_rest) > len(T_ref)
+    assert abs(T_ref_rest[-1] - T_ref_rest[-2]) <= dT_tolerance and abs(T_ref_rest[-2] - T_ref_rest[-3]) > dT_tolerance
 
     # Stability after equilibrium: ANN continued, drifts of T and sum(Y_k)
     test.hybrid_ann_cvode = 0
