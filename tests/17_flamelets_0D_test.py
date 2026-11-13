@@ -10,6 +10,8 @@ cross the equilibrium temperature on the ignition front, end after their tempera
 With dT_tolerance [K], they end only when their temperature changes by less than dT_tolerance over time_step, after
 they have cooled down through the equilibrium temperature.
 With skip_initial_state, the initial mixture of each reactor is not stored, the other states are unchanged.
+With augment_data, the perturbed states have mass fractions of elements in the range of the flamelet states, and
+a temperature and a mass fraction of N2 within 1/8 of their range in the flamelet states from their flamelet state.
 
 Independent of the other tests.
 """
@@ -17,6 +19,7 @@ import os
 import numpy as np
 import cantera as ct
 from ai_reacting_flows.flmts_reactors_data_gen.database_flmts import DatabaseFlamelets
+from ai_reacting_flows.tools.utilities import get_elements_matrix
 
 import DummyComm as dc
 
@@ -110,3 +113,36 @@ def test_flamelets_0D_skip_initial_state(tmp_path):
         sim_skip = df_skip[df_skip["Simulation number"] == number]
         assert np.array_equal(sim_skip.to_numpy(), sim.iloc[1:].to_numpy())
         assert sim_skip["Temperature"].iloc[0] != dtb.df_ODE_0D["T0"].iloc[int(number)]
+
+
+def test_flamelets_0D_augmentation_elements(tmp_path):
+    os.chdir(tmp_path)
+    os.mkdir("FLAMELETS_DTB_TEST")
+
+    dtb = DatabaseFlamelets(params, dc.DummyComm())
+    dtb.compute_0d_reactors(dict(zerod_params, solve_mode="dt_cfd"))
+    dtb.augment_data()
+
+    # Mass fractions of elements (C, H, O, N) of the flamelet states and of the perturbed states
+    gas = ct.Solution(mech_file)
+    elements_matrix = get_elements_matrix(gas)
+    Z_el_flamelet = dtb.df_flamelet[gas.species_names].to_numpy(dtype=float) @ elements_matrix.T
+    Z_el_augmented = dtb.df_augmented[gas.species_names].to_numpy(dtype=float) @ elements_matrix.T
+
+    # Some perturbed states are kept, others are rejected, and those kept are in the range of the flamelet states
+    # (1 % margin)
+    assert 0 < len(dtb.df_augmented) < len(dtb.df_flamelet)
+    assert np.all(Z_el_augmented >= 0.99 * Z_el_flamelet.min(axis=0))
+    assert np.all(Z_el_augmented <= 1.01 * Z_el_flamelet.max(axis=0))
+
+    # Temperature [K] changed by at most 1/8 of the range of temperature of the flamelet states
+    T_flamelet = dtb.df_flamelet["Temperature"].to_numpy(dtype=float)
+    dT = dtb.df_augmented["Temperature"].to_numpy(dtype=float) - T_flamelet[dtb.df_augmented.index]
+    assert np.all(np.abs(dT) <= (T_flamelet.max() - T_flamelet.min()) / 8.0)
+    assert np.abs(dT).max() > 0.0
+
+    # Same for the mass fraction of N2 [-], and the mass fractions sum to 1
+    Y_N2_flamelet = dtb.df_flamelet["N2"].to_numpy(dtype=float)
+    dY_N2 = dtb.df_augmented["N2"].to_numpy(dtype=float) - Y_N2_flamelet[dtb.df_augmented.index]
+    assert np.all(np.abs(dY_N2) <= (Y_N2_flamelet.max() - Y_N2_flamelet.min()) / 8.0)
+    assert np.allclose(dtb.df_augmented[gas.species_names].to_numpy(dtype=float).sum(axis=1), 1.0)
