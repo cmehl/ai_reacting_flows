@@ -517,6 +517,127 @@ class LearningDatabase(object):
         print(f"    >> {100*self.X.shape[0]/n} % of the database is retained")
 
 
+    def _undersample_bins(self, jpdf_var_1, jpdf_var_2, g, n_samples, n_bins, seed, keep=None):
+        """Draws n_samples points without replacement, with the probability of point i in bin b of the
+        (jpdf_var_1, jpdf_var_2) histogram (n_bins x n_bins):
+
+            p_i ∝ mean_b(g) / N_b
+
+        with g (n_points) a factor of each point and N_b the number of points of bin b. The expected share of a bin in
+        the sample is thus proportional to its mean of g (same number of points in each bin if g is constant).
+        Points of the boolean mask keep (n_points) are always drawn. Used by undersample_HRR_bins and
+        undersample_Omega_bins.
+        """
+
+        if self.clusterized_dataset and self.dt_var and self.clusterize_on in ("dt", "all"):
+            raise NotImplementedError(
+                "Bins undersampling does not currently support resampling after "
+                "clustering on 'dt' or 'all' with dt_var=True. Cluster on 'phys' before resampling, or "
+                "re-cluster after the undersampling."
+            )
+
+        self.X_old = self.X.copy()
+        self.Y_old = self.Y.copy()
+
+        if jpdf_var_1=="PC1" and jpdf_var_2=="PC2":
+            if not self.is_pca_computed:
+                self.compute_pca()
+
+        n = self.X.shape[0]
+        rng = np.random.default_rng(seed)
+
+        # Bin of each point (index 0 to n_bins-1, maximum included in the last bin)
+        x = self.X[jpdf_var_1].values
+        y = self.X[jpdf_var_2].values
+        _, x_e, y_e = np.histogram2d(x, y, bins=n_bins)
+        ix = np.digitize(x, x_e[1:-1])
+        iy = np.digitize(y, y_e[1:-1])
+
+        # Number of points and sum of g in each bin
+        counts = np.zeros((n_bins, n_bins))
+        g_sum = np.zeros((n_bins, n_bins))
+        np.add.at(counts, (ix, iy), 1.0)
+        np.add.at(g_sum, (ix, iy), g)
+
+        # Probability of each point: mean of g of its bin / number of points of its bin
+        p = g_sum[ix, iy] / counts[ix, iy]**2
+
+        # Points with p=0 (g zero on their whole bin) get a small probability, so that we are able to reach the
+        # original dataset for high values of n_samples
+        p[p==0.0] = p[p>0.0].min()/1000.0
+        p = p/p.sum()
+
+        # Points always drawn
+        if keep is not None:
+            p[keep] = 1.0
+            p = p/p.sum()
+
+        choice = rng.choice(n, replace=False, size=n_samples, p=p)
+
+        # Performing the point selection in database
+        self.X = self.X.iloc[choice].reset_index(drop=True)
+
+        if self.dt_var:
+            self.Y = self.Y[choice, :]
+            self.dt_array = self.dt_array[choice]
+        else:
+            self.Y = self.Y.iloc[choice].reset_index(drop=True)
+
+        if self.rollout:
+            self.Y_rollout = self.Y_rollout[choice]
+
+        self.is_resampled = True
+
+        # We recompute PCA because database has changed
+        if jpdf_var_1=="PC1" and jpdf_var_2=="PC2":
+            self.compute_pca()
+
+        print(f"\n Number of points in undersampled dataset: {self.X.shape[0]} \n")
+        print(f"    >> {100*self.X.shape[0]/n} % of the database is retained")
+
+
+    def undersample_HRR_bins(self, jpdf_var_1, jpdf_var_2, hrr_func, keep_low_c, n_samples, n_bins=100, seed=1991):
+        """Same as undersample_HRR, without interpolation: each point takes the value of its own bin of the
+        (jpdf_var_1, jpdf_var_2) histogram (see _undersample_bins), with the factor g = hrr_func(HRR_norm), HRR_norm =
+        |HRR| normalized to [0, 1] over the database. If keep_low_c, points with Prog_var < 0.2 and T > 1000 K are
+        always drawn (needed for ignition).
+
+        In undersample_HRR, the linear interpolation between bin centers gives a zero probability to the points of the
+        outer half-bins (fresh and burnt gases, at the minimum and maximum temperature) and mixes the values of
+        neighbouring bins (empty, or sparse with large values) on thin manifolds.
+        """
+
+        print("--- HRR UNDERSAMPLING (BINS) ---")
+
+        # HRR factor of each point
+        a = np.abs(self.X["HRR"].values)
+        a = (a-a.min())/(a.max()-a.min())
+        g = hrr_func(a)
+
+        # Imposing small progress variable values to stay in dataset (needed for ignition)
+        keep = None
+        if keep_low_c:
+            keep = (self.X["Prog_var"].values<0.2) & (self.X["Temperature"].values>1000.0)
+
+        self._undersample_bins(jpdf_var_1, jpdf_var_2, g, n_samples, n_bins, seed, keep)
+
+
+    def undersample_Omega_bins(self, jpdf_var_1, jpdf_var_2, omega_func, n_samples, n_bins=100, seed=1991):
+        """Same as undersample_HRR_bins with Omega [-] instead of the HRR: factor g = omega_func(Omega) of each point
+        (see _undersample_bins), Omega the norm of the increments of the species scaled by their standard deviations
+        over the database (see undersample_Omega). Omega is not normalized (already in units of sigma_k, of order 1):
+        e.g. omega_func = lambda x: 1 + x. No keep_low_c: Omega is not small in the induction phase of ignition (build-up
+        of the radicals). Not for multi-dt databases.
+        """
+
+        print("--- OMEGA UNDERSAMPLING (BINS) ---")
+
+        Omega = self._Omega()
+        print(f"Omega quantiles 1%/50%/99%: {np.quantile(Omega, 0.01):.3e}/{np.median(Omega):.3e}/{np.quantile(Omega, 0.99):.3e}")
+
+        self._undersample_bins(jpdf_var_1, jpdf_var_2, omega_func(Omega), n_samples, n_bins, seed)
+
+
     def undersample_1D(self, var, seed=1991, min_count=1, plot_distrib=False):
 
         print("--- 1D BINS UNDERSAMPLING ---")
