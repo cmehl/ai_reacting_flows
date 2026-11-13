@@ -130,5 +130,5 @@ def test_stochastic_reactors_other_models(tmp_path):
     states = run_stochastic_reactors(tmp_path, "EMST_SIMPLIFIED")
     assert states[-1]["Mix_frac"].var() < states[0]["Mix_frac"].var()
 
-    with pytest.raises(ValueError, match="Input error"):
+    with pytest.raises(ValueError, match="mixing_model must be one of"):
         run_stochastic_reactors(tmp_path, "EMST")
