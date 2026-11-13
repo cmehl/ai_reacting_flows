@@ -13,6 +13,8 @@ Check:
 - the cluster of each step is recorded (-1 for CVODE steps of the hybrid mode, with the criterion on the
   sum of mass fractions or on the element mass fractions), and the ANN can be
   continued after equilibrium (drifts of T and of the sum of Y_k).
+- with cvode_initial_steps, the first steps are done by CVODE (cluster -1, same states as the reference) and the
+  ANN does the other ones.
 
 Independent of the other tests.
 """
@@ -101,3 +103,10 @@ def test_nn_testing_0D(tmp_path):
     result = test.run_0D_ignition_case(phi=0.6, T0=1200.0, pressure=pressure, dt=dt, max_simulation_time=4 * dt, stability_factor=2.0)
     assert result["T_drift"] >= 0.0 and result["sumYk_drift"] >= 0.0
     assert len(result["clusters"]) == 4 and np.all(result["clusters"] >= 0)
+
+    # First step done by CVODE (database without the initial mixtures), the other ones by the ANN
+    result = test.run_0D_ignition_case(phi=0.6, T0=1200.0, pressure=pressure, dt=dt, max_simulation_time=4 * dt, cvode_initial_steps=1)
+    assert result["clusters"][0] == -1 and np.all(result["clusters"][1:] >= 0)
+    assert np.allclose(result["states_ann"][:2], result["states_ref"][:2], rtol=1.0e-10, atol=0.0)   # Same up to round-off
+    assert not np.allclose(result["states_ann"][2], result["states_ref"][2], rtol=1.0e-10, atol=0.0)
+    assert result["cvode_calls"] == 1 and result["ann_calls"] == 3

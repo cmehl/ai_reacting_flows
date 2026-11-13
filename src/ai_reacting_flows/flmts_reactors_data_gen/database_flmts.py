@@ -90,6 +90,7 @@ class DatabaseFlamelets(object):
         solve_mode = zerod_params["solve_mode"]
         cvode_stride = zerod_params.get("cvode_stride", 1)   # dt_cvode: one CVODE step out of cvode_stride is stored
         T_eq_tolerance = zerod_params.get("T_eq_tolerance", None)   # [K] end when |T - T_eq| <= T_eq_tolerance, None: 0.5 % criterion
+        skip_initial_state = zerod_params.get("skip_initial_state", False)   # Initial mixture of each reactor not stored (see below)
          
         self.n_samples_0D = n_samples
         self.sim_numbers_0D = np.arange(n_samples)
@@ -266,6 +267,12 @@ class DatabaseFlamelets(object):
             arr[1:, -3] = np.asarray(hrr_vect)
             arr[1:, -2] = 0
             arr[1:, -1] = i
+
+            # Initial mixture not stored: its radicals are at zero, so its step is an outlier of the database (increments
+            # of ln Y_k of tens of standard deviations). The networks then start from the state after one step
+            # (cvode_initial_steps of the 0D tests)
+            if skip_initial_state:
+                arr = arr[1:]
 
             # Save in pandas dataframe
             cols = ['Temperature'] + ['Pressure'] + gas.species_names + ['enthalpy'] + ['Progress_variable'] + ['Heat_release_rate'] + ['reactor_type'] + ['Simulation number']
