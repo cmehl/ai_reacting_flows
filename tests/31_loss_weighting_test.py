@@ -1,6 +1,6 @@
 """
 Test 31: increment weights of the training loss (learning.loss_weighting_p, loss_weighting_eps, loss_weighting_q,
-loss_weighting_min_count).
+loss_weighting_min_count, loss_weighting_per_species).
 
 Check:
 - increment_norm and increment_weights: p = q = 0 gives weights 1; weights (Omega + eps)^(-p), one per point,
@@ -11,7 +11,10 @@ Check:
 - the weighted loss is the mean of w (y_pred - y)^2, and the usual loss with weights 1; training runs and logs the
   weights and the unweighted validation loss;
 - error_per_decade, and its log and plots after training, for outputs that are increments only;
-- errors for outputs that are not increments of ln Y, and for another loss than MSE.
+- per species: the weights of species k are those of |omega_k| / sigma_k, mean 1 per species; on the H2 learning
+  database, (n, n_species) weights from the Cantera mass fractions, weighted MSE, and training logs;
+- errors for outputs that are not increments of ln Y, for another loss than MSE, and for per-species weights without
+  loss_weighting_p or loss_weighting_q.
 
 Independent of the other tests.
 """
@@ -25,7 +28,7 @@ import torch
 import torch.nn as nn
 import cantera as ct
 
-from ai_reacting_flows.tools.loss_weighting import increment_norm, increment_weights, error_per_decade, effective_fraction
+from ai_reacting_flows.tools.loss_weighting import increment_norm, increment_weights, species_increment_weights, error_per_decade, effective_fraction
 from ai_reacting_flows.ann_model_generation.NN_manager import NN_manager
 from h2_learning_database import write_h2_learning_database, mech_file, threshold
 
@@ -128,6 +131,57 @@ def test_loss_weighting_training(tmp_path):
     assert "LOSS_WEIGHTS cluster=0" in log and "val_loss_unweighted=" in log
 
 
+def test_species_increment_weights():
+    rng = np.random.default_rng(0)
+    omega = rng.normal(size=(500, 3)) * 10.0**rng.uniform(-4.0, 0.0, size=(500, 3))
+    sigma = omega.std(axis=0)
+
+    w, refs = species_increment_weights(omega, sigma, p, eps, q=0.5, min_count=5)
+    assert w.shape == omega.shape and len(refs) == 3
+
+    # Each species: weights of |omega_k| / sigma_k, mean 1
+    for k in range(3):
+        w_k, _ = increment_weights(np.abs(omega[:, k]) / sigma[k], p, eps, q=0.5, min_count=5)
+        assert np.allclose(w[:, k], w_k)
+    assert np.allclose(w.mean(axis=0), 1.0)
+
+    # Validation points with the references of training
+    w_val, _ = species_increment_weights(omega[:7], sigma, p, eps, q=0.5, min_count=5, refs=refs)
+    assert np.allclose(w_val, w[:7])
+
+
+def test_species_loss_weighting_training(tmp_path):
+    os.chdir(tmp_path)
+    T_in, Y_in, Y_out = write_h2_learning_database(tmp_path)
+    set_learning(tmp_path, loss_weighting_p=p, loss_weighting_eps=eps, loss_weighting_per_species=True)
+
+    manager = NN_manager()
+    _, _, Y_train, _ = manager.read_training_data(0)
+    _, _, Ym, Yv = manager.get_scalers_stats(0)
+    W, refs, _ = manager._loss_weights(Y_train, Ym, np.sqrt(Yv))
+
+    # Weights from the increments of ln Y of the Cantera mass fractions (N2 removed)
+    i_N2 = ct.Solution(mech_file).species_index("N2")
+    ln_in = np.log(np.maximum(np.delete(Y_in, i_N2, axis=1), threshold))
+    ln_out = np.log(np.maximum(np.delete(Y_out, i_N2, axis=1), threshold))
+    omega = ln_out - ln_in
+    W_ref, _ = species_increment_weights(omega, omega.std(axis=0), p, eps)
+    assert W.shape == omega.shape and len(refs) == omega.shape[1]
+    assert np.allclose(W, W_ref, rtol=1.0e-6)
+
+    # Weighted MSE with one weight per point and per species
+    y_pred, y = torch.randn(5, 3), torch.randn(5, 3)
+    w = torch.rand(5, 3)
+    assert torch.isclose(manager._loss(nn.MSELoss(), y_pred, y, w), torch.mean(w * (y_pred - y)**2))
+
+    # Training with the weights, and logs (shares of the loss per decade of Omega)
+    manager.train_all_clusters()
+    log = open(glob.glob(str(tmp_path / "nn_training_*.log"))[0]).read()
+    assert "LOSS_WEIGHTS cluster=0" in log and "median(|omega_k|)/sigma_k" in log and "val_loss_unweighted=" in log
+    shares = [float(line.split("loss_share=")[1]) for line in log.splitlines() if "best_epoch" in line and "loss_share=" in line]
+    assert np.isclose(sum(shares), 1.0, atol=1.0e-2)
+
+
 def test_error_per_decade():
     Omega = np.array([2.0e-3, 5.0e-3, 2.0e-1, 0.0])
     err = np.array([1.0e-2, 3.0e-2, 4.0e-2, 1.0e-2])
@@ -194,4 +248,11 @@ def test_loss_weighting_errors(tmp_path):
     params["data_processing"]["output_omegas"] = False
     yaml.dump(params, open(dtb_yaml, "w"), default_flow_style=False)
     with pytest.raises(ValueError, match="output_omegas"):
+        NN_manager()
+
+    # Per-species weights without weights
+    params["data_processing"]["output_omegas"] = True
+    yaml.dump(params, open(dtb_yaml, "w"), default_flow_style=False)
+    set_learning(tmp_path, loss_weighting_p=0.0, loss_weighting_per_species=True)
+    with pytest.raises(ValueError, match="loss_weighting_per_species"):
         NN_manager()

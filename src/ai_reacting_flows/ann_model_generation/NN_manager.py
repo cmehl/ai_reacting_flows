@@ -17,7 +17,7 @@ import torch.optim as optim
 import ai_reacting_flows.tools.utilities as utils
 import ai_reacting_flows.tools.transforms as transforms
 from ai_reacting_flows.tools.element_projection import project_elements
-from ai_reacting_flows.tools.loss_weighting import increment_norm, increment_weights, error_per_decade, effective_fraction
+from ai_reacting_flows.tools.loss_weighting import increment_norm, increment_weights, species_increment_weights, error_per_decade, effective_fraction
 from ai_reacting_flows.ann_model_generation.NN_models import MLPModel, PerSpeciesMLP, DeepONet, DeepONet_shift
 from ai_reacting_flows.databases_processing.processing_parameters import read_processing_parameters, MECHANISM_FILE
 
@@ -106,6 +106,7 @@ class NN_manager():
         self.loss_weighting_eps = learning_data.get("loss_weighting_eps", None)           # Floor of the norm of the scaled increments [-] (units of sigma_k)
         self.loss_weighting_q = learning_data.get("loss_weighting_q", 0.0)                # Exponent of the density weights (0: none)
         self.loss_weighting_min_count = learning_data.get("loss_weighting_min_count", 100) # Floor of the numbers of points per bin of Omega
+        self.loss_weighting_per_species = learning_data.get("loss_weighting_per_species", False)  # One weight per point and per species
         self.loss_weighting = self.loss_weighting_p > 0.0 or self.loss_weighting_q > 0.0
 
         # Increment weights (tools/loss_weighting.py): only for increments of ln Y, with the MSE loss
@@ -116,6 +117,9 @@ class NN_manager():
                 raise ValueError("Loss weighting (loss_weighting_p or loss_weighting_q > 0) needs the MSE loss")
             if self.loss_weighting_eps is None:
                 raise ValueError("loss_weighting_eps must be given with loss_weighting_p or loss_weighting_q > 0")
+
+        if self.loss_weighting_per_species and not self.loss_weighting:
+            raise ValueError("loss_weighting_per_species needs loss_weighting_p or loss_weighting_q > 0")
 
 
         # Log high-level dataset and processing configuration.
@@ -134,6 +138,7 @@ class NN_manager():
             f"loss_weighting_eps={self.loss_weighting_eps}, "
             f"loss_weighting_q={self.loss_weighting_q}, "
             f"loss_weighting_min_count={self.loss_weighting_min_count}, "
+            f"loss_weighting_per_species={self.loss_weighting_per_species}, "
             f"clustering_type={self.clustering_type}, "
             f"nb_clusters={self.nb_clusters}, "
         )
@@ -356,18 +361,26 @@ class NN_manager():
 
 
     def _loss_weights(self, Y, Yscaler_mean, Yscaler_std, ref=None):
-        """Increment weights (n, 1) of the points of scaled outputs Y (numpy array), the reference of the training
-        points (bins of Omega and normalization) and the norms Omega (n) of their scaled increments (see
+        """Increment weights of the points of scaled outputs Y (numpy array): (n, 1), or (n, n_species) with
+        loss_weighting_per_species. Also returns the reference of the training points (bins and normalization; one
+        per species with loss_weighting_per_species) and the norms Omega (n) of their scaled increments (see
         tools/loss_weighting.py). ref: reference of the training points, None to compute it."""
 
         # Increments of ln Y_k, scaled by their standard deviations (mean not removed)
         omega = transforms.unscale(Y, Yscaler_mean, Yscaler_std)
         Omega = increment_norm(omega, Yscaler_std)
 
-        w, ref = increment_weights(Omega, self.loss_weighting_p, self.loss_weighting_eps,
-                                   self.loss_weighting_q, self.loss_weighting_min_count, ref)
+        # One weight per point and per species, from the increment of each species
+        if self.loss_weighting_per_species:
+            w, ref = species_increment_weights(omega, Yscaler_std, self.loss_weighting_p, self.loss_weighting_eps,
+                                               self.loss_weighting_q, self.loss_weighting_min_count, ref)
+            return w, ref, Omega
 
-        return w[:, None], ref, Omega
+        # One weight per point, from the norm of the increments of all its species
+        else:
+            w, ref = increment_weights(Omega, self.loss_weighting_p, self.loss_weighting_eps,
+                                       self.loss_weighting_q, self.loss_weighting_min_count, ref)
+            return w[:, None], ref, Omega
 
 
     def _rollout_loss(self, model, loss_fn, X, Y_rollout, Y_N2, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std, raw_weight=0.0, weights=None):
@@ -445,17 +458,22 @@ class NN_manager():
     def _log_error_vs_Omega(self, i_cluster, model, X_val, Y_val, Yscaler_mean, Yscaler_std, W_val, tag):
         """Log and plot the errors of the validation points per decade of Omega (see tools/loss_weighting.py), for
         outputs that are increments. Error of the network output, in units of the standard deviations of the outputs.
-        W_val: loss weights (n, 1) of the validation points, None for the usual loss. tag: epoch of the model, in the
+        W_val: loss weights (n, 1) or (n, n_species) of the validation points, None for the usual loss. tag: epoch of the model, in the
         log lines and the names of the plots (e.g. epoch00100, or best_epoch00480 for the model kept after training)."""
 
         model.eval()
         with torch.no_grad():
-            err = torch.linalg.norm(model(X_val) - Y_val, dim=1).cpu().numpy()
+            r = model(X_val) - Y_val
         model.train()
+        err = torch.linalg.norm(r, dim=1).cpu().numpy()
 
         std = Yscaler_std.cpu().numpy()
         omega = transforms.unscale(Y_val.cpu().numpy(), Yscaler_mean.cpu().numpy(), std)
-        w = None if W_val is None else W_val[:, 0].cpu().numpy()
+
+        # Weight of each point in the shares of the loss: w err^2 = sum_k w_k r_k^2 (one weight per species or per point)
+        w = None
+        if W_val is not None:
+            w = torch.sum(W_val * r**2, dim=1).cpu().numpy() / np.maximum(err**2, np.finfo(float).tiny)
 
         Omega = increment_norm(omega, std)
         rows = error_per_decade(Omega, err, w)
@@ -531,8 +549,18 @@ class NN_manager():
 
             msg = (f"LOSS_WEIGHTS cluster={i_cluster}, min={W_train.min():.3e}, max={W_train.max():.3e}, "
                    f"effective_fraction={effective_fraction(W_train):.3f}, "
-                   f"bins of log10(Omega)={len(ref['counts'])} (min/max points: {ref['counts'][ref['counts'] > 0].min()}/{ref['counts'].max()}), "
                    f"Omega quantiles 1%/50%/99%={np.quantile(Omega, 0.01):.3e}/{np.median(Omega):.3e}/{np.quantile(Omega, 0.99):.3e}")
+
+            # Per species: median of |omega_k| / sigma_k (to compare eps with the median floor of other methods), largest weight
+            if self.loss_weighting_per_species:
+                median_ratio = np.median(np.abs(transforms.unscale(Y_train, Yscaler_mean, Yscaler_std)) / Yscaler_std, axis=0)
+                msg += ", per species median(|omega_k|)/sigma_k / max weight: " + ", ".join(
+                    f"{spec}={ratio:.2e}/{w_max:.2e}" for spec, ratio, w_max in zip(self.species_ANN, median_ratio, W_train.max(axis=0)))
+
+            # Bins of log10(Omega)
+            else:
+                msg += f", bins of log10(Omega)={len(ref['counts'])} (min/max points: {ref['counts'][ref['counts'] > 0].min()}/{ref['counts'].max()})"
+
             print(f"    >> {msg}")
             self._log(msg)
 
