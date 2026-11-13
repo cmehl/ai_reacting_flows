@@ -12,8 +12,9 @@ Check:
 - with 3 steps, it is the loss on the absolute states of a chain computed separately with NNInference.advance
   (same network inputs, including the temperature update from enthalpy conservation, N2 unchanged);
 - the validation losses per step written after training have this loss as mean, and the usual loss as first step.
-- with loss weights (loss_weighting_p, loss_weighting_q): all the steps of a rollout have the weight of the first step
-  of their initial state, weights 1 give the unweighted loss, and training logs the weights and the unweighted loss.
+- with loss weights (loss_weighting_p, loss_weighting_q), one per point or per point and species
+  (loss_weighting_per_species): all the steps of a rollout have the weights of the first step of their initial state,
+  weights 1 give the unweighted loss, and training logs the weights and the unweighted loss.
 
 Independent of the other tests.
 """
@@ -200,7 +201,8 @@ def test_rollout_processing_training(tmp_path, output_omegas, log_transform_Y, l
     assert np.isclose(step_losses[:, 1].mean(), rollout_loss(rollout_steps), rtol=1.0e-10)
 
 
-def test_rollout_loss_weighting(tmp_path):
+@pytest.mark.parametrize("per_species", [False, True])
+def test_rollout_loss_weighting(tmp_path, per_species):
     os.chdir(tmp_path)
     write_rollout_database(tmp_path / "STOCH_DTB_TEST")
     write_inputs(True, 1, 1)
@@ -208,7 +210,7 @@ def test_rollout_loss_weighting(tmp_path):
 
     params = yaml.safe_load(open("networks_params.yaml"))
     params["learning"].update({"loss_weighting_p": 1.0, "loss_weighting_eps": 1.0e-2, "loss_weighting_q": 0.5,
-                               "loss_weighting_min_count": 5, "val_every": 1})
+                               "loss_weighting_min_count": 5, "loss_weighting_per_species": per_species, "val_every": 1})
     with open("networks_params.yaml", "w") as file:
         yaml.dump(params, file, default_flow_style=False)
 
@@ -232,6 +234,7 @@ def test_rollout_loss_weighting(tmp_path):
     _, ref, _ = manager._loss_weights(Y_train, Ym, Y_std)
     W_val, _, _ = manager._loss_weights(Y_val, Ym, Y_std, ref)
     assert W_val.max() / W_val.min() > 2.0
+    assert W_val.shape == ((len(X_val), Y_val.shape[1]) if per_species else (len(X_val), 1))
 
     def step_losses(weights):
         with torch.no_grad():

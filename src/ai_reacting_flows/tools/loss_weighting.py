@@ -1,6 +1,9 @@
 """
 Weights of the training loss based on the increments of the species (learning.loss_weighting_p, loss_weighting_eps,
-loss_weighting_q, loss_weighting_min_count).
+loss_weighting_q, loss_weighting_min_count, loss_weighting_per_species).
+
+WORK IN PROGRESS: these weights have not yet improved the tests of the networks (0D ignition, burnt gases). The
+options and their defaults may still change.
 
 With output_omegas and log_transform_Y: 1, the target of species k at point i is the increment
 omega_ik = ln Y_k(t+dt) - ln Y_k(t) [-], scaled by the standard deviation sigma_k of the cluster. If all species of a
@@ -19,6 +22,10 @@ error, p = 2 the same loss (relative error above eps, absolute error below); N_b
 of training points in the bin of log10(max(Omega_i, eps)) of point i, q = 1 gives each bin the same share of points,
 as an undersampling on Omega (LearningDatabase.undersample_Omega) without discarding points. eps [-] is in units of
 sigma_k; min_count bounds the weights of rare bins. Weights are normalized to a mean of 1 on the training points.
+
+With loss_weighting_per_species, one weight per point and per species (species_increment_weights): the same formula
+with |omega_ik| / sigma_k instead of Omega_i, bins and normalization (mean 1) per species. It prices the relative error
+of each species on its own increment, without the assumption of the same relative error for all species of a point.
 See docs/theory.md (Loss weighting).
 """
 
@@ -68,6 +75,29 @@ def increment_weights(Omega, p, eps, q=0.0, min_count=1, ref=None):
         ref["mean"] = np.mean(w)
 
     return w / ref["mean"], ref
+
+
+def species_increment_weights(omega, sigma, p, eps, q=0.0, min_count=1, refs=None):
+    """Loss weights (n_points, n_species), one per point and per species, and the references of the training points
+    (list, one per species, as increment_weights).
+
+    Weights of species k: increment_weights of |omega_k| / sigma_k, so (|omega_ik| / sigma_k + eps)^(-p) times the
+    density factor of the bins of species k, normalized to a mean of 1 on the training points of species k.
+
+    omega: increments of ln Y_k [-] (n_points, n_species), sigma: their standard deviations [-] (n_species)
+    p [-], eps [-] (units of sigma_k), q [-], min_count: as increment_weights
+    refs: references of the training points, None to compute them (training points)
+    """
+
+    n_species = omega.shape[1]
+    if refs is None:
+        refs = [None] * n_species
+
+    w = np.empty_like(omega)
+    for k in range(n_species):
+        w[:, k], refs[k] = increment_weights(np.abs(omega[:, k]) / sigma[k], p, eps, q, min_count, refs[k])
+
+    return w, refs
 
 
 def Omega_decades(Omega):
