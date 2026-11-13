@@ -90,6 +90,8 @@ class DatabaseFlamelets(object):
         solve_mode = zerod_params["solve_mode"]
         cvode_stride = zerod_params.get("cvode_stride", 1)   # dt_cvode: one CVODE step out of cvode_stride is stored
         T_eq_tolerance = zerod_params.get("T_eq_tolerance", None)   # [K] end when |T - T_eq| <= T_eq_tolerance, None: 0.5 % criterion
+        dT_tolerance = zerod_params.get("dT_tolerance", T_eq_tolerance)   # [K] with T_eq_tolerance: and |change of T over time_step| <= dT_tolerance
+        skip_initial_state = zerod_params.get("skip_initial_state", False)   # Initial mixture of each reactor not stored (see below)
          
         self.n_samples_0D = n_samples
         self.sim_numbers_0D = np.arange(n_samples)
@@ -236,10 +238,12 @@ class DatabaseFlamelets(object):
 
                 else:
                     # Temperature within T_eq_tolerance [K] of the equilibrium temperature, and changing by less than
-                    # T_eq_tolerance over time_step (as NNTesting): a rich mixture crosses T_eq on the ignition front,
-                    # before its overshoot. Change per time_step, as CVODE steps (dt_cvode) are not time_step
+                    # dT_tolerance [K] over time_step (as NNTesting): a rich mixture crosses T_eq on the ignition front,
+                    # before its overshoot, then again when it cools down to an undershoot of a few K, and only comes
+                    # to rest much later (dT_tolerance of about 1e-3 K). Change per time_step, as CVODE steps
+                    # (dt_cvode) are not time_step
                     dT_per_time_step = abs(r.T - T_previous) * self.time_step / (time - time_previous)
-                    equil_bool = abs(r.T - gas_equil.T) <= T_eq_tolerance and dT_per_time_step <= T_eq_tolerance
+                    equil_bool = abs(r.T - gas_equil.T) <= T_eq_tolerance and dT_per_time_step <= dT_tolerance
             
             # ============================== Construction of the database =========
             # Get the total number of rows for the current simulation
@@ -266,6 +270,12 @@ class DatabaseFlamelets(object):
             arr[1:, -3] = np.asarray(hrr_vect)
             arr[1:, -2] = 0
             arr[1:, -1] = i
+
+            # Initial mixture not stored: its radicals are at zero, so its step is an outlier of the database (increments
+            # of ln Y_k of tens of standard deviations). The networks then start from the state after one step
+            # (cvode_initial_steps of the 0D tests)
+            if skip_initial_state:
+                arr = arr[1:]
 
             # Save in pandas dataframe
             cols = ['Temperature'] + ['Pressure'] + gas.species_names + ['enthalpy'] + ['Progress_variable'] + ['Heat_release_rate'] + ['reactor_type'] + ['Simulation number']

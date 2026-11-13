@@ -177,7 +177,7 @@ class NNTesting():
 #   0D TEST CASES
 #-----------------------------------------------------------------------
 
-    def _run_0D_case(self, T0, pressure, dt, max_simulation_time, T_eq_tolerance, stability_factor, gas_init_compo, reactor_type="ignition"):
+    def _run_0D_case(self, T0, pressure, dt, max_simulation_time, T_eq_tolerance, stability_factor, gas_init_compo, reactor_type="ignition", cvode_initial_steps=0, dT_tolerance=None):
         """Internal helper to run one 0D constant-pressure reactor case.
 
         Parameters
@@ -204,6 +204,13 @@ class NNTesting():
         reactor_type : str
             Label used in the returned dictionary keys for ignition-delay
             quantities (e.g. "ignition" or "pyrolysis").
+        cvode_initial_steps : int
+            Number of first steps done by CVODE instead of the ANN (cluster -1, not timed): 1 for a database without
+            the initial mixtures (skip_initial_state of the 0D reactors), whose first step is not learned.
+        dT_tolerance : float or None
+            Tolerance [K] on the change of the CVODE temperature over a step, in the equilibrium criterion. None:
+            T_eq_tolerance. With T_eq_tolerance of a few K, a stoichiometric or rich mixture is stopped while it
+            cools down through T_eq; about 1e-3 K stops it once at rest, as dT_tolerance of the 0D reactors database.
 
         Returns
         -------
@@ -239,6 +246,10 @@ class NNTesting():
         # Matrix with number of each atom in species (order of rows: C, H, O, N)
         atomic_array = utils.get_atomic_array(self.gas)
 
+        # Default tolerance on the change of temperature over a step: the one on the distance to equilibrium
+        if dT_tolerance is None:
+            dT_tolerance = T_eq_tolerance
+
         #-------------------- CVODE COMPUTATION---------------------------
         # Until equilibrium (or max_simulation_time if not reached)
         equilibrium_reached = False
@@ -258,9 +269,9 @@ class NNTesting():
             if reactor_type=="ignition" and T_cvode > T0+200.0 and tau_ign_CVODE==0.0:
                 tau_ign_CVODE = simtime
 
-            # Equilibrium: T within T_eq_tolerance of T_eq, and no longer changing by more than T_eq_tolerance per step
-            # (a rich mixture crosses T_eq on the ignition front, before its overshoot)
-            equilibrium_reached = abs(T_cvode - T_eq) <= T_eq_tolerance and abs(T_cvode - T_previous) <= T_eq_tolerance
+            # Equilibrium: T within T_eq_tolerance of T_eq, and no longer changing by more than dT_tolerance per step
+            # (a rich mixture crosses T_eq on the ignition front, before its overshoot, and again when it cools down)
+            equilibrium_reached = abs(T_cvode - T_eq) <= T_eq_tolerance and abs(T_cvode - T_previous) <= dT_tolerance
 
         # Number of time steps, the same for the ANN
         nb_ite = len(states.T) - 1
@@ -308,41 +319,49 @@ class NNTesting():
             T_old = state[0]
             Y_old = state[1:]
 
-            # Attribute cluster for current state before ANN advancement.
-            start = perf_counter()
-            self.attribute_cluster(state, dt, progvar)
-            time_ann += perf_counter() - start
-
-            # Log a compact line for each ANN advancement (index, T_old,
-            # dt, cluster, and whether dt is part of the clustering vector).
-            self._log(
-                "0D_STEP "
-                f"i={i}, "
-                f"T_old={float(T_old):.6e}, "
-                f"dt={float(dt):.6e}, "
-                f"cluster={self.cluster}, "
-            )
-
-            start = perf_counter()
-            T_new, Y_new = self.advance_state_NN(T_old, Y_old, pressure, dt)
-
-            # If hybrid, we check conservation and use CVODE if not satisfied
-            if self.hybrid_ann_cvode:
-                if self.ia_success is False:
-                    # CVODE advance
-                    T_new, Y_new = self.advance_state_CVODE(T_old, Y_old, pressure, dt)
-                    cvode_calls += 1
-                else:
-                    ann_calls +=1
-            else:
-                ann_calls += 1
-            time_ann += perf_counter() - start
-
-            # Cluster of the step (-1 if done by CVODE)
-            if self.hybrid_ann_cvode and self.ia_success is False:
+            # First steps done by CVODE (not timed): the ANN starts from the state after them
+            if i < cvode_initial_steps:
+                T_new, Y_new = self.advance_state_CVODE(T_old, Y_old, pressure, dt)
+                cvode_calls += 1
                 clusters.append(-1)
+
+            # Step done by the ANN
             else:
-                clusters.append(self.cluster)
+                # Attribute cluster for current state before ANN advancement.
+                start = perf_counter()
+                self.attribute_cluster(state, dt, progvar)
+                time_ann += perf_counter() - start
+
+                # Log a compact line for each ANN advancement (index, T_old,
+                # dt, cluster, and whether dt is part of the clustering vector).
+                self._log(
+                    "0D_STEP "
+                    f"i={i}, "
+                    f"T_old={float(T_old):.6e}, "
+                    f"dt={float(dt):.6e}, "
+                    f"cluster={self.cluster}, "
+                )
+
+                start = perf_counter()
+                T_new, Y_new = self.advance_state_NN(T_old, Y_old, pressure, dt)
+
+                # If hybrid, we check conservation and use CVODE if not satisfied
+                if self.hybrid_ann_cvode:
+                    if self.ia_success is False:
+                        # CVODE advance
+                        T_new, Y_new = self.advance_state_CVODE(T_old, Y_old, pressure, dt)
+                        cvode_calls += 1
+                    else:
+                        ann_calls +=1
+                else:
+                    ann_calls += 1
+                time_ann += perf_counter() - start
+
+                # Cluster of the step (-1 if done by CVODE)
+                if self.hybrid_ann_cvode and self.ia_success is False:
+                    clusters.append(-1)
+                else:
+                    clusters.append(self.cluster)
 
             # Vector with all variable (T and Yks)
             state = np.append(T_new, Y_new)
@@ -419,7 +438,7 @@ class NNTesting():
             "Omega_norm_ann": Omega_norm_ann,
         }
 
-    def run_0D_ignition_case(self, phi, T0, pressure, dt, max_simulation_time, T_eq_tolerance=1.0, stability_factor=0.0):
+    def run_0D_ignition_case(self, phi, T0, pressure, dt, max_simulation_time, T_eq_tolerance=1.0, stability_factor=0.0, cvode_initial_steps=0, dT_tolerance=None):
         """Run one 0D ignition case (fuel+air, parametrized by phi).
 
         This is the core simulation routine for premixed ignition, without
@@ -442,6 +461,10 @@ class NNTesting():
             Equilibrium criterion [K] ending the simulation (see _run_0D_case).
         stability_factor : float
             ANN continued for stability_factor times the number of steps after equilibrium (see _run_0D_case).
+        cvode_initial_steps : int
+            Number of first steps done by CVODE instead of the ANN (see _run_0D_case).
+        dT_tolerance : float or None
+            Tolerance [K] on the change of temperature over a step in the equilibrium criterion (see _run_0D_case).
 
         Returns
         -------
@@ -457,10 +480,11 @@ class NNTesting():
         )
         compo = f"{self.fuel}:{phi}, O2:{fuel_ox_ratio}, N2:{fuel_ox_ratio * 0.79 / 0.21}"
 
-        return self._run_0D_case(T0, pressure, dt, max_simulation_time, T_eq_tolerance, stability_factor, compo, reactor_type="ignition")
+        return self._run_0D_case(T0, pressure, dt, max_simulation_time, T_eq_tolerance, stability_factor, compo, reactor_type="ignition",
+                                 cvode_initial_steps=cvode_initial_steps, dT_tolerance=dT_tolerance)
 
 
-    def run_0D_pyrolysis_case(self, T0, pressure, dt, max_simulation_time, T_eq_tolerance=1.0, stability_factor=0.0, diluent=None, X_diluent=0.0):
+    def run_0D_pyrolysis_case(self, T0, pressure, dt, max_simulation_time, T_eq_tolerance=1.0, stability_factor=0.0, diluent=None, X_diluent=0.0, cvode_initial_steps=0, dT_tolerance=None):
         """Run one 0D pyrolysis case (pure fuel or fuel+diluent).
 
         This uses the same CVODE/ANN integration as the ignition case but
@@ -481,6 +505,10 @@ class NNTesting():
             Equilibrium criterion [K] ending the simulation (see _run_0D_case).
         stability_factor : float
             ANN continued for stability_factor times the number of steps after equilibrium (see _run_0D_case).
+        cvode_initial_steps : int
+            Number of first steps done by CVODE instead of the ANN (see _run_0D_case).
+        dT_tolerance : float or None
+            Tolerance [K] on the change of temperature over a step in the equilibrium criterion (see _run_0D_case).
         diluent : str or None, optional
             Optional inert species name (e.g. "N2", "Ar"). If None, a pure
             fuel case is used.
@@ -501,7 +529,8 @@ class NNTesting():
             X_fuel = max(0.0, 1.0 - X_diluent)
             compo = f"{self.fuel}:{X_fuel:3.2f}, {diluent}:{X_diluent:3.2f}"
 
-        return self._run_0D_case(T0, pressure, dt, max_simulation_time, T_eq_tolerance, stability_factor, compo, reactor_type="pyrolysis")
+        return self._run_0D_case(T0, pressure, dt, max_simulation_time, T_eq_tolerance, stability_factor, compo, reactor_type="pyrolysis",
+                                 cvode_initial_steps=cvode_initial_steps, dT_tolerance=dT_tolerance)
 
     # OD IGNITION (wrapper with plotting)
     def test_0D_ignition(self, phi, T0, pressure, dt, max_simulation_time, T_eq_tolerance=1.0, stability_factor=0.0):
