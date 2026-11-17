@@ -15,7 +15,7 @@ Check:
   continued after equilibrium (drifts of T and of the sum of Y_k).
 - with dT_tolerance, the 0D case stops later, when the CVODE temperature changes by less than dT_tolerance per step.
 - with cvode_initial_steps, the first steps are done by CVODE (cluster -1, same states as the reference) and the
-  ANN does the other ones.
+  ANN does the other ones; the ANN warm-up on the initial mixture does not apply the element correction.
 
 Independent of the other tests.
 """
@@ -121,3 +121,16 @@ def test_nn_testing_0D(tmp_path):
     assert np.allclose(result["states_ann"][:2], result["states_ref"][:2], rtol=1.0e-10, atol=0.0)   # Same up to round-off
     assert not np.allclose(result["states_ann"][2], result["states_ref"][2], rtol=1.0e-10, atol=0.0)
     assert result["cvode_calls"] == 1 and result["ann_calls"] == 3
+
+    # The ANN warm-up (on the initial mixture, outside such a database) does not apply the element correction:
+    # only the 3 ANN steps do
+    corrections = []
+    enforce_elements = test.inference.enforce_elements_balance_wan_all
+    def spy_elements(Y_old, Y_new):
+        corrections.append(1)
+        return enforce_elements(Y_old, Y_new)
+    test.inference.enforce_elements_balance_wan_all = spy_elements
+    test.yk_renormalization = 3
+
+    test.run_0D_ignition_case(phi=0.6, T0=1200.0, pressure=pressure, dt=dt, max_simulation_time=4 * dt, cvode_initial_steps=1)
+    assert len(corrections) == 3

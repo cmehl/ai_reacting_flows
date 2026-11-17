@@ -310,9 +310,11 @@ class NNTesting():
         clusters = []    # Cluster of the network of each step, -1 for a CVODE step (hybrid)
         state = np.append(T_ann, Y_k_ann)
 
-        # ANN warm-up, not timed: the first calls initialize the networks (CUDA) and the k-means
+        # ANN warm-up, not timed: the first calls initialize the networks (CUDA) and the k-means.
+        # Without element correction (0): with cvode_initial_steps the initial mixture is outside the database, and
+        # the correction can fail on the prediction (singular system), which is not used
         self.attribute_cluster(state, dt, progvar)
-        self.advance_state_NN(state[0], state[1:], pressure, dt)
+        self.inference.advance(np.array([state[0]]), np.reshape(state[1:], (1, -1)), pressure, dt, np.array([self.cluster]), 0)
 
         for i in range(nb_ite):
             # Old state
