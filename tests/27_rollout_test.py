@@ -15,6 +15,8 @@ Check:
 - with loss weights (loss_weighting_p, loss_weighting_q), one per point or per point and species
   (loss_weighting_per_species): all the steps of a rollout have the weights of the first step of their initial state,
   weights 1 give the unweighted loss, and training logs the weights and the unweighted loss.
+- with rollout_start_epoch, training is on the first step only before this epoch and on all the steps after, while
+  the validation loss is always on all the steps.
 
 Independent of the other tests.
 """
@@ -260,3 +262,36 @@ def test_rollout_loss_weighting(tmp_path, per_species):
     # Validation losses per step written after training: weighted
     written = np.loadtxt("MODELS/MODEL_TEST/training/cluster_0/rollout_val_loss_per_step.csv", delimiter=",", skiprows=1)
     assert np.allclose(written[:, 1], weighted, rtol=1.0e-10)
+
+
+def test_rollout_start_epoch(tmp_path):
+    os.chdir(tmp_path)
+    write_rollout_database(tmp_path / "STOCH_DTB_TEST")
+    write_inputs(True, 1, 1)
+    LearningDatabase().process_database()
+
+    params = yaml.safe_load(open("networks_params.yaml"))
+    params["learning"].update({"epochs_list": [3], "rollout_start_epoch": 2, "val_every": 1})
+    with open("networks_params.yaml", "w") as file:
+        yaml.dump(params, file, default_flow_style=False)
+
+    # Number of steps of each call of the rollout loss, in training (gradient) and in validation
+    manager = NN_manager()
+    steps_train, steps_val = [], []
+    rollout_loss = manager._rollout_loss
+    def spy(model, loss_fn, X, Y_rollout, *args, **kwargs):
+        if torch.is_grad_enabled():
+            steps_train.append(Y_rollout.shape[1])
+        else:
+            steps_val.append(Y_rollout.shape[1])
+        return rollout_loss(model, loss_fn, X, Y_rollout, *args, **kwargs)
+    manager._rollout_loss = spy
+    manager.train_all_clusters()
+
+    # Batches of 16 points: the same number in each epoch
+    n_batches = len(steps_train) // 3
+    assert steps_train == 2 * n_batches * [1] + n_batches * [rollout_steps]
+    assert steps_val == 3 * [rollout_steps]
+
+    log = open(glob.glob(str(tmp_path / "nn_training_*.log"))[0]).read()
+    assert "ROLLOUT_START cluster=0 epoch=2" in log
