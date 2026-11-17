@@ -81,26 +81,44 @@ def print_errors(errors):
 
 class NNTesting():
 
-    def __init__(self, testing_parameters):
+    def __init__(self, testing_parameters, comm=None):
         """testing_parameters: content of nn_testing.yaml (see README). Only models_folder, spec_to_plot,
         yk_renormalization, hybrid_ann_cvode and hybrid_ann_cvode_tol are needed to run single cases
-        (device optional: cuda if available, else cpu; torch_threads optional: torch default)."""
+        (device optional: cuda if available, else cpu; torch_threads optional: torch default, 1 with several
+        MPI ranks).
+        comm: MPI communicator sharing the cases of each series between the ranks (run_series), None for a single
+        process."""
 
         self.testing_parameters = testing_parameters
 
         self.run_folder = os.getcwd()
 
+        # MPI ranks (one process without communicator)
+        self.comm = comm
+        self.rank = 0
+        self.nb_ranks = 1
+        if comm is not None:
+            self.rank = comm.Get_rank()
+            self.nb_ranks = comm.Get_size()
+
         # Outputs (plots, summaries, log) in TESTING_<models_folder>/ of the run folder, with a copy of the parameters
         self.output_folder = os.path.join(self.run_folder, f"TESTING_{testing_parameters['models_folder']}")
         os.makedirs(self.output_folder, exist_ok=True)
-        with open(os.path.join(self.output_folder, "nn_testing.yaml"), "w") as file:
-            yaml.dump(testing_parameters, file, default_flow_style=False, sort_keys=False)
+
+        if self.rank == 0:
+            with open(os.path.join(self.output_folder, "nn_testing.yaml"), "w") as file:
+                yaml.dump(testing_parameters, file, default_flow_style=False, sort_keys=False)
 
         # Simple text log file in the output folder to trace parameters actually
         # used by this testing helper. Use a per-run timestamped filename so
         # logs do not accumulate across different executions.
+        # With MPI, the time stamp of rank 0, and one file per rank (the steps of the cases of a rank stay together)
         ts_run = datetime.now().strftime("%Y%m%d_%H%M%S")
+        if comm is not None:
+            ts_run = comm.bcast(ts_run, root=0)
         self.log_path = os.path.join(self.output_folder, f"nn_testing_{ts_run}.log")
+        if self.rank > 0:
+            self.log_path = os.path.join(self.output_folder, f"nn_testing_{ts_run}_rank{self.rank}.log")
 
         def _log(msg: str):
             """Append a timestamped message to the nn_testing.log file."""
@@ -119,6 +137,11 @@ class NNTesting():
         # Number of CPU threads of torch (1 as one MPI rank per core in a CFD code), torch default if not given
         if testing_parameters.get("torch_threads") is not None:
             torch.set_num_threads(testing_parameters["torch_threads"])
+
+        # Not given, with several MPI ranks: 1, so that the threads of the ranks do not compete for the cores
+        else:
+            if self.nb_ranks > 1:
+                torch.set_num_threads(1)
 
         # Chemistry of the model, used by the reference (CVODE) computations
         self.fuel = self.inference.fuel
@@ -817,7 +840,9 @@ class NNTesting():
 
     def run_testing(self):
         """Run the series of test cases of the testing parameters (nn_testing.yaml) with run: true,
-        then the evaluation on the validation set if selected. Returns the summaries of the series."""
+        then the evaluation on the validation set if selected. Returns the summaries of the series.
+        With MPI, the cases of each series are shared between the ranks (run_series), and the validation set and the
+        speed-up benchmark are done by rank 0 only."""
 
         summaries = {}
         for case_type in CASE_TYPES:
@@ -825,15 +850,17 @@ class NNTesting():
             if series["run"]:
                 summaries[case_type] = self.run_series(case_type, series)
 
-        validation = self.testing_parameters["validation_set"]
-        if validation["run"]:
-            self.evaluate_on_validation_set(max_points_scatter=validation["max_points_scatter"])
-            self.hybrid_criteria_on_validation_set(os.path.join(self.output_folder, "plots_validation"),
-                                                   validation["max_points_scatter"])
+        # Validation set and benchmark: rank 0 only
+        if self.rank == 0:
+            validation = self.testing_parameters["validation_set"]
+            if validation["run"]:
+                self.evaluate_on_validation_set(max_points_scatter=validation["max_points_scatter"])
+                self.hybrid_criteria_on_validation_set(os.path.join(self.output_folder, "plots_validation"),
+                                                    validation["max_points_scatter"])
 
-        benchmark = self.testing_parameters["speedup_benchmark"]
-        if benchmark["run"]:
-            self.benchmark_speedup(benchmark["batch_sizes"], benchmark["dt"], benchmark["pressure"], benchmark["nb_states_cvode"])
+            benchmark = self.testing_parameters["speedup_benchmark"]
+            if benchmark["run"]:
+                self.benchmark_speedup(benchmark["batch_sizes"], benchmark["dt"], benchmark["pressure"], benchmark["nb_states_cvode"])
 
         return summaries
 
@@ -902,6 +929,10 @@ class NNTesting():
         simulation_errors_<case_type>_by_variable.png) and the mean speed-up. The errors per cluster and
         dt (mean over the steps or grid points advanced by the network of each cluster) are written in
         simulation_errors_<case_type>_by_cluster.csv.
+
+        With MPI (comm of NNTesting), rank r runs the cases r, r + nb_ranks, r + 2 nb_ranks, ... of the series (with
+        their plots); rank 0 gathers the results, in the order of the series, and writes the summary, returned on all
+        ranks.
         """
 
         x_window = series.get("x_window")
@@ -913,12 +944,15 @@ class NNTesting():
 
         cases = series_cases(series, conditions)
 
-        print(f"\n>> Series {case_type}: {len(cases)} cases")
+        if self.rank == 0:
+            print(f"\n>> Series {case_type}: {len(cases)} cases on {self.nb_ranks} MPI ranks")
 
+        # Results of the cases of this rank, each with the index of its case in the series
         entries = []
         failed = []         # Cases that failed: parameters and error message
         point_errors = []   # Errors of each step (0D) or grid point (1D), for the errors per cluster
-        for case in cases:
+        for i_case in range(self.rank, len(cases), self.nb_ranks):
+            case = cases[i_case]
 
             print(f"\n>> {case_type}: {case}")
 
@@ -932,7 +966,7 @@ class NNTesting():
                 message = f"{type(error).__name__}: {' '.join(lines)}"
                 print(f">> CASE FAILED: {message}")
                 self._log(f"CASE_FAILED {case_type} {case}: {message}")
-                failed.append({"params": case, "error": message})
+                failed.append((i_case, {"params": case, "error": message}))
                 plt.close("all")
                 continue
 
@@ -942,14 +976,39 @@ class NNTesting():
                 self.plot_case(case_type, case, result, x_window)
                 plt.close("all")
 
-            entries.append({"params": case, "errors": errors})
+            entries.append((i_case, {"params": case, "errors": errors}))
 
             # Errors of each point, with the cluster of its network and the time step
             x_ann, x_ref, clusters = self._error_points(case_type, result, x_window)
             points = pd.DataFrame(metrics.normalized_errors(x_ann, x_ref, self.std_train), columns=self._error_names())
             points.insert(0, "cluster", clusters)
             points.insert(0, "dt", case["dt"])
-            point_errors.append(points)
+            point_errors.append((i_case, points))
+
+        # Results of all ranks on rank 0 (MPI)
+        if self.comm is not None:
+            gathered = self.comm.gather((entries, failed, point_errors), root=0)
+            if self.rank == 0:
+                entries = [item for results in gathered for item in results[0]]
+                failed = [item for results in gathered for item in results[1]]
+                point_errors = [item for results in gathered for item in results[2]]
+
+        # Summary written by rank 0, returned on all ranks
+        summary = None
+        if self.rank == 0:
+            in_order = lambda items: [item for _, item in sorted(items, key=lambda indexed: indexed[0])]
+            summary = self._series_summary(case_type, cases, in_order(entries), in_order(failed), in_order(point_errors))
+        if self.comm is not None:
+            summary = self.comm.bcast(summary, root=0)
+
+        return summary
+
+
+    def _series_summary(self, case_type, cases, entries, failed, point_errors):
+        """Summary of a series (see run_series) from the results of its cases, in the order of the series: entries
+        (parameters and errors of the cases that ran), failed (parameters and error message of the failed cases),
+        point_errors (errors of each step or grid point, one table per case). Writes the summary and the tables of
+        errors in TESTING_<model>/ and returns the summary."""
 
         # Number of failed cases
         msg = f"SERIES_FAILURES {case_type}: {len(failed)} failed cases of {len(cases)}"

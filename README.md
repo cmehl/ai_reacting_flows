@@ -52,7 +52,7 @@ Each case is a folder `scripts/<CASE>/` containing YAML inputs and short launche
 mpirun -n X python generate_stoch_dtb.py   # 1. database generation      (dtb_params.yaml)
 python dtb_processing.py                   # 2. learning database        (dtb_processing.yaml)
 python ann_model_learning.py               # 3. training                 (networks_params.yaml)
-python ann_model_testing.py                # 4. testing on simple cases  (nn_testing.yaml)
+mpirun -n X python ann_model_testing.py    # 4. testing on simple cases  (nn_testing.yaml)
 ```
 
 ## 1. Database generation
@@ -189,7 +189,7 @@ The class `NNTesting` compares the ANN to CVODE on:
 + 1-D counterflow diffusion flame reaction rates
 + the validation dataset (scatter plots)
 
-The script `ann_model_testing.py` reads `nn_testing.yaml` and runs the selected series of cases (`NNTesting.run_testing`): for each case type, all combinations of the parameters given as lists (e.g. several `phi` and `T0`). Outputs are written in `TESTING_<models_folder>/`:
+The script `ann_model_testing.py` reads `nn_testing.yaml` and runs the selected series of cases (`NNTesting.run_testing`): for each case type, all combinations of the parameters given as lists (e.g. several `phi` and `T0`). The cases are independent: with `mpirun -n X`, the cases of each series are shared between the X ranks, and rank 0 writes the summaries, then runs the validation set and the speed-up benchmark ([MPI](docs/mpi.md#testing)). Each rank then uses 1 torch thread if `torch_threads` is not given, and writes its own log file (`nn_testing_<time stamp>_rank<r>.log`, rank 0 without suffix). The CPU times and speed-ups of the cases are measured with the other ranks running: with more ranks than free cores, they are not representative. Outputs are written in `TESTING_<models_folder>/`:
 
 ```
 TESTING_<models_folder>/
@@ -364,7 +364,7 @@ For `DeepONet`, these three keys are dicts with `branch` and `trunk` entries (pl
 | `hybrid_ann_cvode` | Hybrid ANN/CVODE model of Mehl & Aubagnac-Karkar (2023): CVODE is used instead of the ANN when the conservation error of its prediction exceeds `hybrid_ann_cvode_tol`. `0`: never. `1`: error on the sum of mass fractions $\|\sum_k Y_k - 1\|$. `2`: largest relative error on the element mass fractions (see [theory](docs/theory.md#hybrid-anncvode-model-hybrid_ann_cvode)) |
 | `hybrid_ann_cvode_tol` | Tolerance on the conservation error [-] (in the paper, about `2.0e-04` for `1` and `2.0e-03` for `2`) |
 | `device` | Optional, device of the networks: `cpu` (as in a first CFD use) or `cuda`; absent or `null`: `cuda` if available, else `cpu` |
-| `torch_threads` | Optional, number of CPU threads of torch: 1 as one MPI rank per core in a CFD code (small batches are also faster); absent or `null`: torch default (one per core) |
+| `torch_threads` | Optional, number of CPU threads of torch: 1 as one MPI rank per core in a CFD code (small batches are also faster); absent or `null`: torch default (one per core), 1 with several MPI ranks |
 | `0D_ignition` | Series of 0-D ignitions of fuel/air: `phi`, `T0` [K], `pressure` [Pa], `dt` [s], `T_eq_tolerance` [K] (CVODE and ANN stop when the CVODE temperature is this close to equilibrium and changes by less than this over a step), `max_simulation_time` [s] (end time if equilibrium is not reached), `stability_factor` [-] (ANN continued after equilibrium for this times the number of steps, 0 to skip), `cvode_initial_steps` (optional, default 0: number of first steps done by CVODE instead of the ANN, 1 for a database generated with `skip_initial_state`), `dT_tolerance` [K] (optional, default `T_eq_tolerance`: tolerance on the change of the CVODE temperature over a step in the equilibrium criterion, as `dT_tolerance` of the 0D reactors database) |
 | `0D_pyrolysis` | Series of 0-D pyrolysis: `T0` [K], `pressure` [Pa], `dt` [s], `T_eq_tolerance` [K], `max_simulation_time` [s], `stability_factor` [-], `cvode_initial_steps`, `dT_tolerance` [K], `diluent` (species or `null`), `X_diluent` [-] |
 | `1D_premixed` | Series of 1-D premixed flames: `phi`, `T0` [K], `pressure` [Pa], `dt` [s], `T_threshold` [K] (ANN not applied below), `x_window` |

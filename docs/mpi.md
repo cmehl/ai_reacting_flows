@@ -3,13 +3,14 @@ MPI parallelism
 
 How the work is shared between MPI ranks in ARF, and how the ranks exchange data. The [README](../README.md) describes how to launch the runs (`mpirun -n X python ...`).
 
-MPI is used in the three database generation steps:
+MPI is used in the three database generation steps and in testing:
 
 + [Stochastic reactors](#stochastic-reactors) (`particles_cloud.py`): chemistry and derived variables of the particles
 + [Canonical flames](#canonical-flames) (`database_flmts.py`): simulations of 0-D reactors and 1-D flames
 + [Multi-dt generation](#multi-dt-generation) (`generate_var_dt_dtb.py`): re-integration of the database states with several $dt$
++ [Testing](#testing) (`NN_testing.py`): test cases of each series
 
-Training and testing do not use MPI.
+Training does not use MPI.
 
 **Two kinds of mpi4py calls.** Lowercase methods (`comm.scatter`, `comm.gather`, `comm.allgather`, `comm.bcast`) send any Python object: it is *pickled* (serialized into bytes) by the sender and rebuilt by the receiver, which is costly for many objects. Capitalized methods (`comm.Bcast`, `comm.Allgatherv`, ...) send NumPy arrays: memory is copied directly, without pickling. The stochastic reactors use the capitalized ones, as they exchange particle states at every iteration.
 
@@ -142,7 +143,19 @@ These exchanges happen once per step of the generation, not at each time step: p
 + **Time steps**: each rank draws its own random $dt$ (seed `1234 + rank`), and integrates its states over each of them. With `set` and `rollout`, all ranks use the same list of $dt$.
 + **Writing**: gathering all results on rank 0 is not possible for large databases (mpi4py messages are limited to 2 GB). Each rank therefore writes its own group `ITERATION_<rank>` in the h5 file, in turn: rank 0 creates the file, and each rank waits for a message (token) from the previous rank before writing, then sends it to the next one (`comm.recv`, `comm.send`). The file has one group per rank.
 
+# Testing
+
+`NN_testing.py` (`NNTesting(testing_parameters, comm)`, `comm=None` for a single process, as in the notebooks and most tests):
+
++ **Cases** (`run_series`): the cases of a series are dealt to the ranks in turn (rank $r$ runs the cases $r$, $r$ + size, ...), with their plots. Each rank keeps the index of its cases in the series. The results (parameters and errors of each case, failed cases, errors of each step or grid point, pickled) are gathered on rank 0 (`comm.gather`), which puts them back in the order of the series and writes the summary and the tables of errors (`_series_summary`). The summary is then sent to all ranks (`comm.bcast`), so `run_testing` returns the same summaries on all ranks.
++ **Validation set and speed-up benchmark**: rank 0 only, after the series.
++ **Outputs**: rank 0 writes the copy of `nn_testing.yaml`; the time stamp of the log files is that of rank 0 (`comm.bcast`), and each rank writes its own log file (`_rank<r>` suffix for $r > 0$), so that the steps of a case stay together.
++ **Threads**: without `torch_threads`, each rank uses 1 torch thread, so that the ranks do not compete for the cores.
+
+The cases are not balanced: an ignition case near equilibrium for a long time takes more steps than a fast one. Dealing the cases in turn spreads the conditions of a sweep over the ranks.
+
 # Tests
 
 + `DummyComm.py` replaces MPI in the tests run on a single process (methods of a communicator with one rank).
 + Test 19 runs the stochastic reactors (`CURL_MODIFIED`, with particles activated later) on 1 rank, then on 2 ranks with `mpiexec`, and compares the two `solutions.h5`. The tolerance (relative $10^{-5}$) covers the differences due to the Cantera gas object of each rank, whose history differs. The heat release rate is compared with an absolute tolerance ($10^{-5}$ times its largest value): for nearly unreacted particles, it is a sum of terms that cancel, without relative accuracy. It also runs the multi-dt generation on 2 ranks. Skipped without `mpiexec`.
++ Test 41 runs a series of 3 ignition cases on 1 process and on 2 ranks with `mpiexec`, and checks that the summary has the cases in the order of the series with the same errors (CPU times excepted), and one log file per rank. Skipped without `mpiexec`.
