@@ -99,6 +99,7 @@ class NN_manager():
         self.batch_size = learning_data.get("batch_size", 2048)
         self.epochs_list = learning_data["epochs_list"]
         self.val_every = learning_data.get("val_every", 10)
+        self.rollout_start_epoch = learning_data.get("rollout_start_epoch", 0)   # Rollout training: one step before this epoch
         self.omega_diagnostics_epochs = learning_data.get("omega_diagnostics_epochs", [])   # Epochs of the plots per decade of Omega (also after training)
         self.project_elements = learning_data.get("project_elements", False)              # Element projection in the loss
         self.raw_state_loss_weight = learning_data.get("raw_state_loss_weight", 1.0)      # Weight of the prediction before projection
@@ -118,6 +119,9 @@ class NN_manager():
             if self.loss_weighting_eps is None:
                 raise ValueError("loss_weighting_eps must be given with loss_weighting_p or loss_weighting_q > 0")
 
+        if self.rollout_start_epoch > 0 and not self.rollout:
+            raise ValueError("rollout_start_epoch needs a learning database processed with rollout: true")
+
         if self.loss_weighting_per_species and not self.loss_weighting:
             raise ValueError("loss_weighting_per_species needs loss_weighting_p or loss_weighting_q > 0")
 
@@ -127,6 +131,7 @@ class NN_manager():
             "INIT "
             f"dt_var={self.dt_var}, "
              f"rollout={self.rollout}, "
+            f"rollout_start_epoch={self.rollout_start_epoch}, "
             f"project_elements={self.project_elements}, "
              f"remove_N2={self.remove_N2}, "
              f"log_transform_X={self.log_transform_X}, "
@@ -640,6 +645,17 @@ class NN_manager():
             if self.rollout:
                 Y_rollout_train, Y_N2_train = Y_rollout_train[perm], Y_N2_train[perm]
 
+            # Rollout training: one step before rollout_start_epoch, all the steps of the rollout after
+            # (the validation loss stays on all the steps)
+            if self.rollout:
+                if epoch < self.rollout_start_epoch:
+                    n_steps = 1
+                else:
+                    n_steps = Y_rollout_train.shape[1]
+
+                if epoch == self.rollout_start_epoch and epoch > 0:
+                    self._log(f"ROLLOUT_START cluster={i_cluster} epoch={epoch} n_steps={n_steps}")
+
             # Training parameters
             epoch_loss = 0.0
             n_batches = 0
@@ -650,7 +666,7 @@ class NN_manager():
 
                 # Network applied on its own predictions
                 if self.rollout:
-                    loss = self._rollout_loss(model, loss_fn, Xbatch, Y_rollout_train[i:i+self.batch_size], Y_N2_train[i:i+self.batch_size],
+                    loss = self._rollout_loss(model, loss_fn, Xbatch, Y_rollout_train[i:i+self.batch_size, :n_steps], Y_N2_train[i:i+self.batch_size],
                                               Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std, self.raw_state_loss_weight, wbatch)
 
                 # One step
