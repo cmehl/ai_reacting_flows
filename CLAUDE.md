@@ -18,7 +18,7 @@ The workflow has four steps, each driven by a YAML file read from the **current 
 | 1c. Optional merging of databases (before 1b) | `databases_processing.merge_databases.merge_databases()` | `dtb_merging.yaml` (`input_databases`, `results_folder_suffix`, `dtb_file`, `pv_species`) | `MERGED_DTB_<suffix>/` with merged h5 file, read like `stoch` with `database_type: merged` |
 | 2. Learning database processing | `databases_processing.database_processing.LearningDatabase` (threshold, HRR or Omega undersampling (1D, or in 2D bins with a factor per bin), clustering, train/val split) | `dtb_processing.yaml` | `<DTB>/<database_name>/training_data.h5`, `kmeans_model.pkl`, copies of mechanism and yaml |
 | 3. Training (PyTorch, one network per cluster) | `ann_model_generation.NN_manager.NN_manager().train_all_clusters()` | `networks_params.yaml` | `MODELS/MODEL_<suffix>/` + `nn_training_<timestamp>.log` |
-| 4. Testing (series of 0D ignition/pyrolysis, 1D premixed/diffusion, validation scatter) | `ann_model_generation.NN_testing.NNTesting(params).run_testing()` | `nn_testing.yaml` (read by `ann_model_testing.py`) | `TESTING_<models_folder>/` (plots, `summary_<case type>.yaml`) |
+| 4. Testing (series of 0D ignition/pyrolysis, 1D premixed/diffusion, validation scatter; MPI over the cases) | `ann_model_generation.NN_testing.NNTesting(params, comm).run_testing()` | `nn_testing.yaml` (read by `ann_model_testing.py`) | `TESTING_<models_folder>/` (plots, `summary_<case type>.yaml`) |
 
 Steps read results of previous steps through folder-name conventions (`STOCH_DTB_<results_folder_suffix>`,
 `database_path`, `MODEL_<model_name_suffix>`), so all steps of a case are run from the same folder.
@@ -58,7 +58,7 @@ Each step copies its input YAML into its output folder to document the run.
   conservation, rollout training, element projection in training, loss weighting, simulation error, speed-up benchmark). README.md keeps the workflow, files and inputs, and links to it:
   update both when a model changes.
 - `docs/mpi.md`: MPI parallelism of the three generation steps (exchanges of particle states of the stochastic reactors,
-  canonical flames, multi-dt): update it when the distribution or the exchanged attributes change.
+  canonical flames, multi-dt) and of testing (cases of each series): update it when the distribution or the exchanged attributes change.
 - `articles/PoF_2023/`: scripts reproducing Mehl & Aubagnac-Karkar, PoF 35, 067115 (2023).
 - `notebooks/`: jupytext `.py` (percent format) notebooks; `jupytext --to notebook notebooks/*.py`.
 - `data/chemical_mechanisms/`: Cantera mechanisms (use `.yaml`; `.cti` are legacy). Referenced by relative path
