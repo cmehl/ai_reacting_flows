@@ -100,6 +100,7 @@ class NN_manager():
         self.epochs_list = learning_data["epochs_list"]
         self.val_every = learning_data.get("val_every", 10)
         self.rollout_start_epoch = learning_data.get("rollout_start_epoch", 0)   # Rollout training: one step before this epoch
+        self.precision = learning_data.get("precision", "float64")   # Floating-point type of training (networks saved in float64)
         self.omega_diagnostics_epochs = learning_data.get("omega_diagnostics_epochs", [])   # Epochs of the plots per decade of Omega (also after training)
         self.project_elements = learning_data.get("project_elements", False)              # Element projection in the loss
         self.raw_state_loss_weight = learning_data.get("raw_state_loss_weight", 1.0)      # Weight of the prediction before projection
@@ -119,6 +120,10 @@ class NN_manager():
             if self.loss_weighting_eps is None:
                 raise ValueError("loss_weighting_eps must be given with loss_weighting_p or loss_weighting_q > 0")
 
+        if self.precision not in ["float32", "float64"]:
+            raise ValueError(f"precision must be float32 or float64, got {self.precision}")
+        self.dtype = getattr(torch, self.precision)
+
         if self.rollout_start_epoch > 0 and not self.rollout:
             raise ValueError("rollout_start_epoch needs a learning database processed with rollout: true")
 
@@ -132,6 +137,7 @@ class NN_manager():
             f"dt_var={self.dt_var}, "
              f"rollout={self.rollout}, "
             f"rollout_start_epoch={self.rollout_start_epoch}, "
+            f"precision={self.precision}, "
             f"project_elements={self.project_elements}, "
              f"remove_N2={self.remove_N2}, "
              f"log_transform_X={self.log_transform_X}, "
@@ -187,8 +193,8 @@ class NN_manager():
 
         # Thermodynamics of the temperature update of rollout training, as tensors
         if self.rollout:
-            self.W_k = torch.tensor(gas.molecular_weights, device=self.device)
-            self.nasa7 = [torch.tensor(a, device=self.device) for a in utils.get_nasa7_coefficients(gas)]
+            self.W_k = torch.tensor(gas.molecular_weights, dtype=self.dtype, device=self.device)
+            self.nasa7 = [torch.tensor(a, dtype=self.dtype, device=self.device) for a in utils.get_nasa7_coefficients(gas)]
             self.cols_ANN = [gas.species_index(spec) for spec in self.species_ANN]
             self.col_N2 = gas.species_index("N2") if self.remove_N2 else None
 
@@ -201,8 +207,8 @@ class NN_manager():
             # N not considered without N chemistry, as for the conservation diagnostics (order C, H, O, N)
             elements = [0, 1, 2] if self.remove_N2 else [0, 1, 2, 3]
 
-            self.a_Ai = torch.tensor(a_Ai[elements], dtype=torch.float64, device=self.device)
-            self.c_Ai = torch.tensor((atomic_array[elements] > 0).astype(float), dtype=torch.float64, device=self.device)
+            self.a_Ai = torch.tensor(a_Ai[elements], dtype=self.dtype, device=self.device)
+            self.c_Ai = torch.tensor((atomic_array[elements] > 0).astype(float), dtype=self.dtype, device=self.device)
 
         # Training stats
         if self.new_model_folder:
@@ -569,18 +575,18 @@ class NN_manager():
             print(f"    >> {msg}")
             self._log(msg)
 
-            W_train = torch.tensor(W_train, dtype=torch.float64, device=self.device)
-            W_val = torch.tensor(W_val, dtype=torch.float64, device=self.device)
+            W_train = torch.tensor(W_train, dtype=self.dtype, device=self.device)
+            W_val = torch.tensor(W_val, dtype=self.dtype, device=self.device)
 
-        X_train = torch.tensor(X_train, dtype=torch.float64)
-        Y_train = torch.tensor(Y_train, dtype=torch.float64)
-        X_val = torch.tensor(X_val, dtype=torch.float64)
-        Y_val = torch.tensor(Y_val, dtype=torch.float64)
-        A_element = torch.tensor(self.A_element, dtype=torch.float64)
-        Xscaler_mean = torch.from_numpy(Xscaler_mean).to(torch.float64)
-        Xscaler_std = torch.from_numpy(Xscaler_std).to(torch.float64)
-        Yscaler_mean = torch.from_numpy(Yscaler_mean).to(torch.float64)
-        Yscaler_std = torch.from_numpy(Yscaler_std).to(torch.float64)
+        X_train = torch.tensor(X_train, dtype=self.dtype)
+        Y_train = torch.tensor(Y_train, dtype=self.dtype)
+        X_val = torch.tensor(X_val, dtype=self.dtype)
+        Y_val = torch.tensor(Y_val, dtype=self.dtype)
+        A_element = torch.tensor(self.A_element, dtype=self.dtype)
+        Xscaler_mean = torch.from_numpy(Xscaler_mean).to(self.dtype)
+        Xscaler_std = torch.from_numpy(Xscaler_std).to(self.dtype)
+        Yscaler_mean = torch.from_numpy(Yscaler_mean).to(self.dtype)
+        Yscaler_std = torch.from_numpy(Yscaler_std).to(self.dtype)
 
         X_train = X_train.to(self.device)
         Y_train = Y_train.to(self.device)
@@ -589,7 +595,7 @@ class NN_manager():
 
         # Rollout targets, and N2 for the temperature update
         if self.rollout:
-            Y_rollout_train, Y_rollout_val, Y_N2_train, Y_N2_val = [torch.tensor(data, dtype=torch.float64, device=self.device)
+            Y_rollout_train, Y_rollout_val, Y_N2_train, Y_N2_val = [torch.tensor(data, dtype=self.dtype, device=self.device)
                                                                     for data in self.read_rollout_data(i_cluster)]
 
         A_element = A_element.to(self.device)    # Array to store the loss and validation loss
@@ -822,6 +828,9 @@ class NN_manager():
             # Create model
             model = self.create_model(i_cluster, X_val.shape[1], Y_val.shape[1])
 
+            # Training in the precision of the learning parameters (float32 or float64)
+            model = model.to(self.dtype)
+
             # Optimizer and loss function
             opt_name = str(self.optimizer_name).lower()
             if opt_name == "adam":
@@ -865,7 +874,9 @@ class NN_manager():
             # Plot training monitoring data (loss, conservation,etc...)
             self.plot_losses_conservation(i_cluster, epochs, epochs_small, loss_list, val_loss_list, stats_sum_yk, stats_A_elements)
 
-            # Save model (torch format and custom h5 format)
+            # Save model (torch format and custom h5 format), in float64 whatever the training precision: inference and
+            # NNICE unchanged (float32 weights are exact in float64)
+            model = model.to(torch.float64)
             torch.save(model, os.path.join(self.directory, f"cluster{i_cluster}_model.pth"))
             self.save_pt_model_to_h5(model, os.path.join(self.directory, f"cluster{i_cluster}_model.h5"))
 
