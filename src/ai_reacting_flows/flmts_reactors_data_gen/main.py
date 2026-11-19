@@ -59,6 +59,15 @@ def generate_flmts_database(comm : 'MPI.Comm'):
         if rank==0:
             PRINT("")
 
+    # 0D reactors of pure fuel (pyrolysis)
+    if data_gen_parameters.get("include_zerod_pyro", False):
+        if rank==0:
+            PRINT(" >>> Computing 0D pyrolysis reactors")
+        zerod_pyro_params = data_gen_parameters["zerod_pyro_params"]
+        dtb_flmts.compute_0d_reactors(zerod_pyro_params, pyrolysis=True)
+        if rank==0:
+            PRINT("")
+
     # 1D premixed flames
     if data_gen_parameters["include_oned_prem"]:
         if rank==0:
