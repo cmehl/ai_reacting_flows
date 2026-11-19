@@ -5,7 +5,8 @@ Check:
 - flamelets database (dtb_params_flmts.yaml): the fuel inlet of the diffusion flames is at oned_diff_params.T_fuel
   (lowest temperature of the flame, the air inlet being hotter), and the scatter plot of the database shows
   scatter_plot_variables;
-- training (networks_params.yaml): ReduceLROnPlateau is built with learning.plateau_factor and plateau_patience.
+- training (networks_params.yaml): ReduceLROnPlateau is built with learning.plateau_factor and plateau_patience;
+  optimizer adamw is built with learning.weight_decay.
 
 Independent of the other tests.
 """
@@ -82,3 +83,28 @@ def test_plateau_scheduler_settings(tmp_path, monkeypatch):
     NN_manager().train_all_clusters()
 
     assert built["factor"] == 0.3 and built["patience"] == 4
+
+
+def test_adamw_settings(tmp_path, monkeypatch):
+    os.chdir(tmp_path)
+    write_h2_learning_database(tmp_path)
+
+    with open("networks_params.yaml") as file:
+        params = yaml.safe_load(file)
+    params["learning"].update({"optimizer": "adamw", "weight_decay": 1.0e-4})
+    with open("networks_params.yaml", "w") as file:
+        yaml.dump(params, file, default_flow_style=False)
+
+    # Arguments of the optimizer built by train_all_clusters
+    built = {}
+    optimizer_class = torch.optim.AdamW
+
+    def optimizer(parameters, **kwargs):
+        built.update(kwargs)
+        return optimizer_class(parameters, **kwargs)
+
+    monkeypatch.setattr(torch.optim, "AdamW", optimizer)
+
+    NN_manager().train_all_clusters()
+
+    assert built["weight_decay"] == 1.0e-4
