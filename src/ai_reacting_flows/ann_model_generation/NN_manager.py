@@ -101,6 +101,7 @@ class NN_manager():
         self.epochs_list = learning_data["epochs_list"]
         self.val_every = learning_data.get("val_every", 10)
         self.rollout_start_epoch = learning_data.get("rollout_start_epoch", 0)   # Rollout training: one step before this epoch
+        self.rollout_target = learning_data.get("rollout_target", "state")       # Rollout training: target of each step, state or increment
         self.precision = learning_data.get("precision", "float64")   # Floating-point type of training (networks saved in float64)
         self.omega_diagnostics_epochs = learning_data.get("omega_diagnostics_epochs", [])   # Epochs of the plots per decade of Omega (also after training)
         self.project_elements = learning_data.get("project_elements", False)              # Element projection in the loss
@@ -128,6 +129,15 @@ class NN_manager():
         if self.rollout_start_epoch > 0 and not self.rollout:
             raise ValueError("rollout_start_epoch needs a learning database processed with rollout: true")
 
+        if self.rollout_target not in ["state", "increment"]:
+            raise ValueError(f"rollout_target must be state or increment, got {self.rollout_target}")
+
+        if self.rollout_target == "increment":
+            if not self.rollout:
+                raise ValueError("rollout_target: increment needs a learning database processed with rollout: true")
+            if not self.output_omegas:
+                raise ValueError("rollout_target: increment needs output_omegas: true")
+
         if self.loss_weighting_per_species and not self.loss_weighting:
             raise ValueError("loss_weighting_per_species needs loss_weighting_p or loss_weighting_q > 0")
 
@@ -138,6 +148,7 @@ class NN_manager():
             f"dt_var={self.dt_var}, "
              f"rollout={self.rollout}, "
             f"rollout_start_epoch={self.rollout_start_epoch}, "
+            f"rollout_target={self.rollout_target}, "
             f"precision={self.precision}, "
             f"project_elements={self.project_elements}, "
              f"remove_N2={self.remove_N2}, "
@@ -406,7 +417,8 @@ class NN_manager():
         times, each time on its own prediction, with temperatures from enthalpy conservation. Loss on the error of
         the predicted state, in units of the standard deviation of the outputs (see docs/theory.md). All steps use
         the network of the cluster of the initial state. With project_elements, the chain carries the projected state,
-        and each step has the loss of _one_step_loss.
+        and each step has the loss of _one_step_loss. With rollout_target: increment, the loss of each step is on
+        the increment instead, compared to the true increment of the reference trajectory.
 
         X: scaled inputs at t (n, n_in), Y_rollout: transformed (not scaled) mass fractions at t+k*dt
         (n, n_steps, n_species_ANN), Y_N2: mass fractions of N2 [-] (n), not used if N2 is predicted.
@@ -430,11 +442,20 @@ class NN_manager():
 
                 # Differences in transformed space
                 if self.log_transform_Y > 0:
-                    target = Y_rollout[:, k] - x_species_t
+                    Y_before = x_species_t
 
                 # Differences of mass fractions
                 else:
-                    target = Y_rollout[:, k] - Y_in
+                    Y_before = Y_in
+
+                # Increment target (Liu et al., AECS 25, 100445, 2026, https://doi.org/10.1016/j.jaecs.2025.100445):
+                # after the first step, true increment from the TRUE state at t+(k-1)*dt. The loss is then on the
+                # error added at each step, not on the accumulated error
+                if self.rollout_target == "increment":
+                    if k > 0:
+                        Y_before = Y_rollout[:, k - 1]
+
+                target = Y_rollout[:, k] - Y_before
 
             # Outputs are the state at t+k*dt
             else:
