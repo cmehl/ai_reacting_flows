@@ -127,7 +127,7 @@ Pickling cost even on one rank (mpi4py serializes the objects anyway): a particl
 
 `database_flmts.py` (class `DatabaseFlamelets`):
 
-+ **Simulations** (0-D reactors, 1-D premixed and diffusion flames): the training simulations are dealt to the ranks in turn (`rows[self.rank::self.size]`). Each rank runs its simulations; the results (pandas DataFrames, pickled) are gathered on rank 0 (`comm.gather`), which concatenates them, sorts them by simulation number and plots them. The full DataFrame is then sent back to all ranks (`comm.bcast`).
++ **Simulations** (0-D ignition and pyrolysis reactors, 1-D premixed and diffusion flames): the training simulations are dealt to the ranks in turn (`rows[self.rank::self.size]`). Each rank runs its simulations; the results (pandas DataFrames, pickled) are gathered on rank 0 (`comm.gather`), which concatenates them, sorts them by simulation number and plots them. The full DataFrame is then sent back to all ranks (`comm.bcast`).
 + **Design of experiments**: rank 0 writes the conditions (`sim_train_*.csv`, `sim_test_*.csv`) and the plots; the other ranks wait at `comm.Barrier()`.
 + **Shuffle of the database**: the permutation is drawn by rank 0 and sent to all ranks (`comm.bcast`), so that all ranks apply the same one.
 + **Integration over $dt$** (`_advance_dt_cfd`): the states are dealt to the ranks in turn; each rank integrates its states, and the results and their indices are gathered on all ranks (`comm.allgather`), then put back in the order of the states.

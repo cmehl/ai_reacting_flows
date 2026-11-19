@@ -30,6 +30,7 @@ SERIES_OPTIONS = ["run", "plots", "x_window", "conditions_file"]
 # corresponding parameters of the cases (the air temperature T0 of the diffusion flames is T_ox)
 CONDITIONS_COLUMNS = {
     "0D_ignition": {"Phi": "phi", "T0": "T0"},
+    "0D_pyrolysis": {"T0": "T0"},
     "1D_premixed": {"Phi": "phi", "T0": "T0"},
     "1D_diffusion": {"Strain": "strain", "T0": "T_ox"},
 }
@@ -63,8 +64,8 @@ def series_cases(series, conditions=None):
 
 
 def read_conditions_file(path, case_type):
-    """Conditions of the test simulations of a flamelets database (sim_test_0D.csv, sim_test_1D_prem.csv
-    or sim_test_1D_diff.csv written by database_flmts.py) as parameters of case_type, one dict per
+    """Conditions of the test simulations of a flamelets database (sim_test_0D.csv, sim_test_0D_pyro.csv,
+    sim_test_1D_prem.csv or sim_test_1D_diff.csv written by database_flmts.py) as parameters of case_type, one dict per
     simulation (see CONDITIONS_COLUMNS)."""
 
     table = pd.read_csv(path)

@@ -12,6 +12,9 @@ they have cooled down through the equilibrium temperature.
 With skip_initial_state, the initial mixture of each reactor is not stored, the other states are unchanged.
 With augment_data, the perturbed states have mass fractions of elements in the range of the flamelet states, and
 a temperature and a mass fraction of N2 within 1/8 of their range in the flamelet states from their flamelet state.
+With pyrolysis, the reactors start from the pure fuel, have reactor type 3, and their test conditions
+(sim_test_0D_pyro.csv) are read as conditions of the 0D_pyrolysis tests; augmentation works with ignition and
+pyrolysis reactors together.
 
 Independent of the other tests.
 """
@@ -20,6 +23,7 @@ import numpy as np
 import cantera as ct
 from ai_reacting_flows.flmts_reactors_data_gen.database_flmts import DatabaseFlamelets
 from ai_reacting_flows.tools.utilities import get_elements_matrix
+from ai_reacting_flows.ann_model_generation.NN_testing import read_conditions_file
 
 import DummyComm as dc
 
@@ -146,3 +150,39 @@ def test_flamelets_0D_augmentation_elements(tmp_path):
     dY_N2 = dtb.df_augmented["N2"].to_numpy(dtype=float) - Y_N2_flamelet[dtb.df_augmented.index]
     assert np.all(np.abs(dY_N2) <= (Y_N2_flamelet.max() - Y_N2_flamelet.min()) / 8.0)
     assert np.allclose(dtb.df_augmented[gas.species_names].to_numpy(dtype=float).sum(axis=1), 1.0)
+
+
+def test_flamelets_0D_pyrolysis(tmp_path):
+    os.chdir(tmp_path)
+    os.mkdir("FLAMELETS_DTB_TEST")
+
+    # NH3 pyrolysis, as the 0D_pyrolysis tests of NNTesting
+    mech_nh3 = os.path.join(os.path.dirname(mech_file), "mech_nh3_noArHe.yaml")
+    params_nh3 = dict(params, mech_file=mech_nh3, fuel=["NH3"], include_zerod_pyro=True)
+    zerod_pyro_params = {"T0_bounds": [1800.0, 2000.0], "n_samples": 5, "max_sim_time": 2.0e-5, "solve_mode": "dt_cfd"}
+
+    dtb = DatabaseFlamelets(params_nh3, dc.DummyComm())
+    dtb.compute_0d_reactors(zerod_pyro_params, pyrolysis=True)
+
+    # Reactor type 3, first state of each reactor: pure NH3 at a T0 in the bounds
+    assert np.all(dtb.df["reactor_type"] == 3)
+    for _, sim in dtb.df.groupby("Simulation number"):
+        assert sim["NH3"].iloc[0] == 1.0
+        assert 1800.0 <= sim["Temperature"].iloc[0] <= 2000.0
+
+    # Test conditions: one T0 per test reactor, as parameters of the 0D_pyrolysis tests
+    conditions = read_conditions_file("FLAMELETS_DTB_TEST/sim_test_0D_pyro.csv", "0D_pyrolysis")
+    assert len(conditions) == 1
+    assert list(conditions[0].keys()) == ["T0"]
+    assert os.path.isfile("FLAMELETS_DTB_TEST/0D_pyro_trajectories.png")
+
+    # Augmentation with ignition (type 0) and pyrolysis (type 3) reactors: a perturbed state keeps its reactor type
+    dtb = DatabaseFlamelets(params_nh3, dc.DummyComm())
+    dtb.compute_0d_reactors({"phi_bounds": [0.8, 1.0], "T0_bounds": [1800.0, 2000.0], "n_samples": 5,
+                             "max_sim_time": 2.0e-5, "solve_mode": "dt_cfd"})
+    dtb.compute_0d_reactors(zerod_pyro_params, pyrolysis=True)
+    dtb.augment_data()
+
+    assert set(dtb.df_augmented["reactor_type"]) == {0, 3}
+    assert np.array_equal(dtb.df_augmented["reactor_type"].to_numpy(),
+                          dtb.df_flamelet["reactor_type"].to_numpy()[dtb.df_augmented.index])

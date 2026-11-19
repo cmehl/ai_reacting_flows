@@ -46,6 +46,7 @@ class DatabaseFlamelets(object):
         self.time_step = data_gen_parameters["time_step"]
 
         self.include_zerod = data_gen_parameters["include_zerod"]
+        self.include_zerod_pyro = data_gen_parameters.get("include_zerod_pyro", False)
         self.include_oned_prem = data_gen_parameters["include_oned_prem"]
         self.include_oned_diff = data_gen_parameters["include_oned_diff"]
 
@@ -80,10 +81,21 @@ class DatabaseFlamelets(object):
         self.pv_ind = [gas.species_index(spec) for spec in self.pv_species]
 
 
-    def compute_0d_reactors(self, zerod_params):
+    def compute_0d_reactors(self, zerod_params, pyrolysis=False):
+        """0D constant-pressure reactors: ignition of fuel/air mixtures (reactor type 0), or pyrolysis of pure fuel
+        (pyrolysis=True, reactor type 3, as the 0D_pyrolysis tests of NNTesting). Initial conditions sampled by Latin
+        hypercube in phi_bounds [-] and T0_bounds [K] (T0_bounds only for pyrolysis), 20 % of them set aside for testing
+        (sim_test_0D.csv or sim_test_0D_pyro.csv)."""
+
+        # Name of the reactors in the output files, and their type in the database
+        if pyrolysis:
+            name = "0D_pyro"
+            reactor_type = 3
+        else:
+            name = "0D"
+            reactor_type = 0
 
         # 0D reactors parameters
-        phi_bounds = zerod_params["phi_bounds"]
         T0_bounds = zerod_params["T0_bounds"]
         n_samples = zerod_params["n_samples"]
         max_sim_time = zerod_params["max_sim_time"]
@@ -93,39 +105,58 @@ class DatabaseFlamelets(object):
         dT_tolerance = zerod_params.get("dT_tolerance", T_eq_tolerance)   # [K] with T_eq_tolerance: and |change of T over time_step| <= dT_tolerance
         skip_initial_state = zerod_params.get("skip_initial_state", False)   # Initial mixture of each reactor not stored (see below)
          
-        self.n_samples_0D = n_samples
-        self.sim_numbers_0D = np.arange(n_samples)
+        sim_numbers = np.arange(n_samples)
 
          # DOE 0D REACTORS
          # Initially lhs gives numbers between 0 and 1
         seed = 42
-        sampler = qmc.LatinHypercube(d=2, seed=seed) 
-        samples = sampler.random(n=self.n_samples_0D)
-        self.df_ODE_0D = pd.DataFrame(data=samples, columns=['Phi', 'T0'])
-        
-        self.df_ODE_0D["sim_number"] = self.sim_numbers_0D 
-        
-        # Rescale 
-        self.df_ODE_0D['Phi'] = phi_bounds[0] + (phi_bounds[1] - phi_bounds[0]) * self.df_ODE_0D['Phi']
-        self.df_ODE_0D['T0'] = T0_bounds[0] + (T0_bounds[1] - T0_bounds[0]) * self.df_ODE_0D['T0']
+        if pyrolysis:
+            # Pure fuel: only the initial temperature is sampled
+            sampler = qmc.LatinHypercube(d=1, seed=seed)
+            samples = sampler.random(n=n_samples)
+            df_ODE = pd.DataFrame(data=samples, columns=['T0'])
+        else:
+            # Fuel/air: equivalence ratio and initial temperature
+            phi_bounds = zerod_params["phi_bounds"]
+            sampler = qmc.LatinHypercube(d=2, seed=seed)
+            samples = sampler.random(n=n_samples)
+            df_ODE = pd.DataFrame(data=samples, columns=['Phi', 'T0'])
+            df_ODE['Phi'] = phi_bounds[0] + (phi_bounds[1] - phi_bounds[0]) * df_ODE['Phi']
+
+        df_ODE["sim_number"] = sim_numbers
+
+        # Rescale
+        df_ODE['T0'] = T0_bounds[0] + (T0_bounds[1] - T0_bounds[0]) * df_ODE['T0']
+
+        if pyrolysis:
+            self.df_ODE_0D_pyro = df_ODE
+        else:
+            self.df_ODE_0D = df_ODE
 
         # Setting aside test reactors conditions (20%) - validation dataset is selected on a point basis in database_processing
-        self.id_sim_train_0D, self.id_sim_test_0D = train_test_split(self.sim_numbers_0D, test_size=0.2, random_state=24)
+        id_sim_train, id_sim_test = train_test_split(sim_numbers, test_size=0.2, random_state=24)
         #
-        self.df_ODE_train_0D = self.df_ODE_0D[self.df_ODE_0D["sim_number"].isin(self.id_sim_train_0D)]
-        self.df_ODE_test_0D = self.df_ODE_0D[self.df_ODE_0D["sim_number"].isin(self.id_sim_test_0D)]
+        df_ODE_train = df_ODE[df_ODE["sim_number"].isin(id_sim_train)]
+        df_ODE_test = df_ODE[df_ODE["sim_number"].isin(id_sim_test)]
         #
         if self.rank==0:
-            self.df_ODE_train_0D.to_csv(os.path.join(self.folder,"sim_train_0D.csv"), index=False)
-            self.df_ODE_test_0D.to_csv(os.path.join(self.folder,"sim_test_0D.csv"), index=False)
+            df_ODE_train.to_csv(os.path.join(self.folder,f"sim_train_{name}.csv"), index=False)
+            df_ODE_test.to_csv(os.path.join(self.folder,f"sim_test_{name}.csv"), index=False)
+
+            # y-axis of the plot of the sampled conditions: phi for ignition; pyrolysis only samples T0,
+            # so its reactors are spread along y by their simulation number (no physical meaning)
+            if pyrolysis:
+                y_var, y_label = "sim_number", "Simulation number"
+            else:
+                y_var, y_label = "Phi", "Phi [-]"
 
             fig, ax = plt.subplots()
-            ax.scatter(self.df_ODE_train_0D['T0'], self.df_ODE_train_0D['Phi'], color="k", label="Train")
-            ax.scatter(self.df_ODE_test_0D['T0'], self.df_ODE_test_0D['Phi'], color="r", label="Test")
+            ax.scatter(df_ODE_train['T0'], df_ODE_train[y_var], color="k", label="Train")
+            ax.scatter(df_ODE_test['T0'], df_ODE_test[y_var], color="r", label="Test")
             fig.legend(ncol=3)
             ax.set_xlabel("T0 [K]")
-            ax.set_ylabel("Phi [-]")
-            fig.savefig(os.path.join(self.folder,"doe_0D_reactors.png"))
+            ax.set_ylabel(y_label)
+            fig.savefig(os.path.join(self.folder,f"doe_{name}_reactors.png"))
 
 
         # Make sure every rank waits until rank 0 has written the DOE files/plot
@@ -142,7 +173,7 @@ class DatabaseFlamelets(object):
         data = []
 
         # Split the training rows across MPI ranks (simple round-robin split)
-        rows = list(self.df_ODE_train_0D.iterrows())
+        rows = list(df_ODE_train.iterrows())
         rows_local = rows[self.rank::self.size]
 
         data_local = []
@@ -150,16 +181,21 @@ class DatabaseFlamelets(object):
 
         for i, row in rows_local:
 
-            phi_ini = row['Phi']
             temperature_ini = row['T0']
 
-            print(f"[rank {self.rank}] T0={temperature_ini}; phi={phi_ini}")
-
             # Initial gas state
-            fuel_ox_ratio = gas.n_atoms(species=self.fuel, element='C') \
-                            + 0.25 * gas.n_atoms(species=self.fuel, element='H') \
-                            - 0.5 * gas.n_atoms(species=self.fuel, element='O')
-            compo_ini = f'{self.fuel}:{phi_ini}, O2:{fuel_ox_ratio}, N2:{fuel_ox_ratio * 0.79 / 0.21}'
+            if pyrolysis:
+                # Pure fuel
+                print(f"[rank {self.rank}] T0={temperature_ini}; pyrolysis")
+                compo_ini = f'{self.fuel}:1.0'
+            else:
+                # Fuel/air mixture at the equivalence ratio phi
+                phi_ini = row['Phi']
+                print(f"[rank {self.rank}] T0={temperature_ini}; phi={phi_ini}")
+                fuel_ox_ratio = gas.n_atoms(species=self.fuel, element='C') \
+                                + 0.25 * gas.n_atoms(species=self.fuel, element='H') \
+                                - 0.5 * gas.n_atoms(species=self.fuel, element='O')
+                compo_ini = f'{self.fuel}:{phi_ini}, O2:{fuel_ox_ratio}, N2:{fuel_ox_ratio * 0.79 / 0.21}'
             gas.TPX = temperature_ini, self.p, compo_ini
 
             nb_spec = len(gas.X)   # Number of species
@@ -259,7 +295,7 @@ class DatabaseFlamelets(object):
             arr[0,-5] = h0
             arr[0,-4] = 0.0
             arr[0,-3] = 0.0
-            arr[0,-2] = 0
+            arr[0,-2] = reactor_type
             arr[0,-1] = i
             #  solution for each time step (each couple of S(t) and S(t+dt) for the dtCVODE case)
             arr[1:, 0] = states.T
@@ -268,7 +304,7 @@ class DatabaseFlamelets(object):
             arr[1:, -5] = states.enthalpy_mass
             arr[1:, -4] = np.asarray(progvar_vect)
             arr[1:, -3] = np.asarray(hrr_vect)
-            arr[1:, -2] = 0
+            arr[1:, -2] = reactor_type
             arr[1:, -1] = i
 
             # Initial mixture not stored: its radicals are at zero, so its step is an outlier of the database (increments
@@ -318,7 +354,7 @@ class DatabaseFlamelets(object):
                 ax2.plot(t_arr, progvar_arr.squeeze())
                 ax3.plot(t_arr, hrr_arr.squeeze())
             fig.tight_layout()
-            fig.savefig(os.path.join(self.folder, "0D_trajectories.png"))
+            fig.savefig(os.path.join(self.folder, f"{name}_trajectories.png"))
     
         # Broadcast the merged dataframe back to every rank so self.df stays
         # consistent across ranks for subsequent steps in the pipeline
@@ -785,6 +821,10 @@ class DatabaseFlamelets(object):
             max_values_1D_diff = self.df[self.df["reactor_type"]==2].max()    # We should probably do it by simulation type !!
             min_values_1D_diff = self.df[self.df["reactor_type"]==2].min()
 
+        if self.include_zerod_pyro:
+            max_values_0D_pyro = self.df[self.df["reactor_type"]==3].max()
+            min_values_0D_pyro = self.df[self.df["reactor_type"]==3].min()
+
         # Range of temperature [K] of the flamelet states, by reactor type
         T_idx = 0
         bounds = {}
@@ -794,6 +834,8 @@ class DatabaseFlamelets(object):
             bounds[1] = (max_values_1D_prem.iloc[T_idx], min_values_1D_prem.iloc[T_idx])
         if self.include_oned_diff:
             bounds[2] = (max_values_1D_diff.iloc[T_idx], min_values_1D_diff.iloc[T_idx])
+        if self.include_zerod_pyro:
+            bounds[3] = (max_values_0D_pyro.iloc[T_idx], min_values_0D_pyro.iloc[T_idx])
 
         # Mass fractions of elements (C, H, O, N) of the flamelet states
         elements_matrix = get_elements_matrix(gas)
@@ -1070,6 +1112,8 @@ class DatabaseFlamelets(object):
                 ax.scatter(self.df_augmented[x_var][self.df_augmented["reactor_type"]==1], self.df_augmented[y_var][self.df_augmented["reactor_type"]==1], color="green", alpha=0.2,  s=3)
             if self.include_oned_diff:
                 ax.scatter(self.df_augmented[x_var][self.df_augmented["reactor_type"]==2], self.df_augmented[y_var][self.df_augmented["reactor_type"]==2], color="purple", alpha=0.2,  s=3)
+            if self.include_zerod_pyro:
+                ax.scatter(self.df_augmented[x_var][self.df_augmented["reactor_type"]==3], self.df_augmented[y_var][self.df_augmented["reactor_type"]==3], color="orange", alpha=0.2,  s=3)
             flamelet_data = self.df_flamelet
         else:
             flamelet_data = self.df
@@ -1080,6 +1124,8 @@ class DatabaseFlamelets(object):
             ax.scatter(flamelet_data[x_var][flamelet_data["reactor_type"]==1], flamelet_data[y_var][flamelet_data["reactor_type"]==1], color="green", s=3, label="1D premixed")
         if self.include_oned_diff:
             ax.scatter(flamelet_data[x_var][flamelet_data["reactor_type"]==2], flamelet_data[y_var][flamelet_data["reactor_type"]==2], color="purple", s=3, label="1D diffusion")
+        if self.include_zerod_pyro:
+            ax.scatter(flamelet_data[x_var][flamelet_data["reactor_type"]==3], flamelet_data[y_var][flamelet_data["reactor_type"]==3], color="orange", s=3, label="0D pyrolysis")
 
         ax.set_xlabel(x_var, fontsize=14)
         ax.set_ylabel(y_var, fontsize=14)

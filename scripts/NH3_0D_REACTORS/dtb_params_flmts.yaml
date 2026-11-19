@@ -8,6 +8,7 @@ dtb_file: solutions.h5
 pressure: 101325.0
 time_step:  1.0e-6
 include_zerod: True
+include_zerod_pyro: False   # 0D reactors of pure fuel (pyrolysis), parameters in zerod_pyro_params
 include_oned_prem: False
 include_oned_diff: False
 zerod_params:
@@ -23,6 +24,16 @@ zerod_params:
   dT_tolerance: 1.0e-3    # [K] and when T changes by less than this over one time_step (default: T_eq_tolerance)
   solve_mode: "dt_cfd"
   skip_initial_state: true   # Initial mixture of each reactor not stored (its step is an outlier): use cvode_initial_steps: 1 in the tests
+zerod_pyro_params:       # As zerod_params, without phi_bounds (pure fuel)
+  T0_bounds:
+  - 1800.0
+  - 2000.0
+  n_samples: 20
+  max_sim_time: 1.0e-2
+  T_eq_tolerance: 2.0
+  dT_tolerance: 1.0e-3
+  solve_mode: "dt_cfd"
+  skip_initial_state: true
 oned_prem_params:
   phi_bounds:
     - 0.6
