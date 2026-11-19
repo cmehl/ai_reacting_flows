@@ -17,6 +17,9 @@ Check:
   weights 1 give the unweighted loss, and training logs the weights and the unweighted loss.
 - with rollout_start_epoch, training is on the first step only before this epoch and on all the steps after, while
   the validation loss is always on all the steps.
+- with rollout_target: increment (Liu et al. 2026), the loss of step k is on the increment predicted from the state of
+  the chain, compared to the true increment Y(t+k*dt) - Y(t+(k-1)*dt); the first step is the usual loss. It needs
+  output_omegas: true.
 
 Independent of the other tests.
 """
@@ -295,3 +298,85 @@ def test_rollout_start_epoch(tmp_path):
 
     log = open(glob.glob(str(tmp_path / "nn_training_*.log"))[0]).read()
     assert "ROLLOUT_START cluster=0 epoch=2" in log
+
+
+def test_rollout_increment_target(tmp_path):
+    os.chdir(tmp_path)
+    species = write_rollout_database(tmp_path / "STOCH_DTB_TEST")
+    write_inputs(True, 1, 1)
+    LearningDatabase().process_database()
+
+    params = yaml.safe_load(open("networks_params.yaml"))
+    params["learning"]["rollout_target"] = "increment"
+    with open("networks_params.yaml", "w") as file:
+        yaml.dump(params, file, default_flow_style=False)
+    manager = NN_manager()
+    manager.train_all_clusters()
+
+    device = manager.device
+    model = torch.load("MODELS/MODEL_TEST/cluster0_model.pth", map_location=device, weights_only=False)
+
+    def tensor(a):
+        return torch.tensor(a, dtype=torch.float64, device=device)
+
+    _, X_val, _, Y_val = manager.read_training_data(0)
+    _, Y_rollout_val, _, Y_N2_val = manager.read_rollout_data(0)
+    X_mean, X_var, Y_mean, Y_var = manager.get_scalers_stats(0)
+    X_std, Y_std = np.sqrt(X_var), np.sqrt(Y_var)
+
+    with torch.no_grad():
+        step_losses = manager._rollout_step_losses(model, torch.nn.MSELoss(), tensor(X_val), tensor(Y_rollout_val), tensor(Y_N2_val),
+                                                   tensor(X_mean), tensor(X_std), tensor(Y_mean), tensor(Y_std)).cpu().numpy()
+        usual_loss = torch.nn.MSELoss()(model(tensor(X_val)), tensor(Y_val)).item()
+    assert np.isclose(step_losses[0], usual_loss, rtol=1.0e-10)
+
+    # Chain computed with the inference: network inputs of each step, compared to the true increments
+    inference = NNInference("MODELS/MODEL_TEST", str(tmp_path), device="cpu")
+    species_ANN = [spec for spec in species if spec != "N2"]
+    i_N2 = species.index("N2")
+    cols_ANN = [species.index(spec) for spec in species_ANN]
+
+    x_t = transforms.unscale(X_val, X_mean, X_std)
+    T = x_t[:, 0]
+    Y = np.empty((len(T), len(species)))
+    Y[:, cols_ANN] = transforms.inverse_species(x_t[:, 1:], species_ANN, 1, 0.1, [])
+    Y[:, i_N2] = Y_N2_val
+
+    clusters = np.zeros(len(T), dtype=int)
+    for k in range(1, rollout_steps):
+        T, Y, _, _ = inference.advance(T, Y, pressure, dt, clusters, 0)
+
+        x_k = np.column_stack([T, transforms.transform_species(Y[:, cols_ANN], species_ANN, 1, threshold, 0.1, [])])
+        with torch.no_grad():
+            y_k = transforms.unscale(model(tensor(transforms.scale(x_k, X_mean, X_std))).cpu().numpy(), Y_mean, Y_std)
+
+        expected = np.mean(((y_k - (Y_rollout_val[:, k] - Y_rollout_val[:, k - 1])) / Y_std)**2)
+        assert np.isclose(step_losses[k], expected, rtol=1.0e-6)
+
+    # Not the state loss
+    params["learning"]["rollout_target"] = "state"
+    params["new_model_folder"] = False
+    with open("networks_params.yaml", "w") as file:
+        yaml.dump(params, file, default_flow_style=False)
+    manager_state = NN_manager()
+    with torch.no_grad():
+        state_losses = manager_state._rollout_step_losses(model, torch.nn.MSELoss(), tensor(X_val), tensor(Y_rollout_val), tensor(Y_N2_val),
+                                                          tensor(X_mean), tensor(X_std), tensor(Y_mean), tensor(Y_std)).cpu().numpy()
+    assert np.isclose(state_losses[0], step_losses[0], rtol=1.0e-10)
+    assert not np.isclose(state_losses[-1], step_losses[-1], rtol=1.0e-3)
+
+
+
+def test_rollout_increment_target_needs_output_omegas(tmp_path):
+    os.chdir(tmp_path)
+    write_rollout_database(tmp_path / "STOCH_DTB_TEST")
+    write_inputs(False, 1, 1)
+    LearningDatabase().process_database()
+
+    params = yaml.safe_load(open("networks_params.yaml"))
+    params["learning"]["rollout_target"] = "increment"
+    with open("networks_params.yaml", "w") as file:
+        yaml.dump(params, file, default_flow_style=False)
+
+    with pytest.raises(ValueError, match="output_omegas"):
+        NN_manager()

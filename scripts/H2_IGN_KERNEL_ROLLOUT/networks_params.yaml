@@ -39,5 +39,6 @@ learning:
   - 500
   - 500
   decay_rate: 0.9991
+  rollout_target: state        # state: loss on the state error of each step; increment: on the error of each increment (Liu et al. 2026), needs output_omegas: true
   project_elements: false      # Element projection in the loss; if true, use yk_renormalization: 3 in simulations
   raw_state_loss_weight: 1.0   # Weight of the loss on the prediction before projection, only used with project_elements
