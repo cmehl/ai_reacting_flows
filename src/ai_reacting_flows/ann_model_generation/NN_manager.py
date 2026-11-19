@@ -90,6 +90,7 @@ class NN_manager():
 
         learning_data = networks_parameters["learning"] # DA: same learning for all clusters ?  (CM: we could change in the future)
         self.optimizer_name = learning_data.get("optimizer", "adam")
+        self.weight_decay = learning_data.get("weight_decay", 0.01)   # AdamW: decoupled weight decay [-] (PyTorch default 0.01)
         self.loss_name = learning_data.get("loss", "MSE")
         self.initial_learning_rate = learning_data.get("initial_learning_rate", 0.001)
         self.scheduler_option = learning_data.get("scheduler_option", "ExpLR")
@@ -636,6 +637,7 @@ class NN_manager():
             f"n_epochs={n_epochs}, "
             f"batch_size={self.batch_size}, "
             f"optimizer={self.optimizer_name}, "
+            f"weight_decay={self.weight_decay}, "
             f"loss={self.loss_name}, "
             f"initial_lr={self.initial_learning_rate}, "
             f"scheduler_option={self.scheduler_option}"
@@ -835,6 +837,8 @@ class NN_manager():
             opt_name = str(self.optimizer_name).lower()
             if opt_name == "adam":
                 optimizer = optim.Adam(model.parameters(), lr=self.initial_learning_rate)
+            elif opt_name == "adamw":
+                optimizer = optim.AdamW(model.parameters(), lr=self.initial_learning_rate, weight_decay=self.weight_decay)
             elif opt_name == "sgd":
                 optimizer = optim.SGD(model.parameters(), lr=self.initial_learning_rate)
             else:
