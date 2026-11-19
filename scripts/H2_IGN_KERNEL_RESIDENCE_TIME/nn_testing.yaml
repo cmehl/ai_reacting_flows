@@ -37,6 +37,7 @@ torch_threads: 1                       # CPU threads of torch, 1 as one MPI rank
   stability_factor: 2.0                # ANN continued for this times the steps after equilibrium (drifts), 0 to skip
   diluent: null                        # Diluent species (e.g. N2), null for pure fuel
   X_diluent: [0.0]                     # Diluent mole fraction [-]
+  conditions_file: null                # sim_test_0D_pyro.csv of a flamelets database: its T0 replaces T0
 
 # 1D freely propagating premixed flame: a priori ANN vs CVODE reaction rates
 1D_premixed:
