@@ -9,6 +9,7 @@ spec_to_plot: [N2, H2, O2, H2O, H2O2]  # Species plotted, and 1D errors computed
 yk_renormalization: 1                  # Element conservation: 0 none, 1 one species per element, 2 Wan et al. 2020, 3 same with O on all its species
 hybrid_ann_cvode: 0                    # CVODE instead of ANN if conservation error > tol: 0 never, 1 sum of Y_k, 2 elements
 hybrid_ann_cvode_tol: 5.0e-05          # Tolerance on the conservation error [-] (paper: 2e-4 for 1, 20e-4 for 2)
+skip_inactive: false                   # ANN keeps inactive states unchanged (chemistry negligible over dt, criterion log of OneDCombustion)
 device: cpu                            # Device of the networks: cpu or cuda (null: cuda if available, else cpu)
 torch_threads: 1                       # CPU threads of torch, 1 as one MPI rank per core in CFD (null: torch default)
 

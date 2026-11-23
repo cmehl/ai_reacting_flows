@@ -19,6 +19,7 @@ from scipy.stats import boxcox_normmax, skew, kurtosis
 # from scipy.interpolate import interp1d
 # from scipy.stats.kde import gaussian_kde
 import h5py
+import cantera as ct
 
 # import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -37,6 +38,7 @@ import ai_reacting_flows.tools.transforms as transforms
 from ai_reacting_flows.databases_processing.processing_parameters import write_processing_parameters
 from ai_reacting_flows.databases_processing.read_solutions import read_solutions
 from ai_reacting_flows.tools.loss_weighting import increment_norm, OMEGA_FLOOR
+from ai_reacting_flows.tools.skip_inactive import active_states
 
 sns.set_style("darkgrid")
 
@@ -226,6 +228,47 @@ class LearningDatabase(object):
 
         if self.rollout:
             self.Y_rollout = self.Y_rollout[is_above_temp.values]
+
+
+    def skip_inactive_points(self, dt=None):
+        """
+        Remove the inactive points, whose chemistry over dt [s] is negligible (criterion "log" of the skip_inactive
+        of OneDCombustion, see tools/skip_inactive.py): a CFD code skipping them never calls the ANN on them.
+        dt: time step [s] of a single-dt database (rollout: rollout_dt). Multi-dt database (dt_var): dt not given,
+        a point is removed if inactive at its largest dt (its Y holds all its dt).
+        Must be called before clustering.
+        """
+
+        if self.clusterized_dataset:
+            raise RuntimeError("Skipping inactive points should be performed before clustering")
+
+        # Time step of each point [s]
+        if self.dt_var:
+            dt = self.dt_array.max(axis=1)
+        else:
+            if dt is None:
+                raise ValueError("skip_inactive_points: dt [s] must be given for a single-dt database")
+
+        # Mask of the active points (species of the database in the order of the mechanism)
+        gas = ct.Solution(self.detailed_mechanism)
+        is_active = active_states(gas, self.X["Temperature"].values, self.X[gas.species_names].values,
+                                  self.X["Pressure"].values, dt)
+        print(f"\n Inactive points removed: {np.sum(~is_active)} / {is_active.size} \n")
+
+        if not is_active.any():
+            raise ValueError("No active points remain")
+
+        # Apply mask
+        self.X = self.X[is_active].reset_index(drop=True)
+
+        if self.dt_var:
+            self.Y = self.Y[is_active, :]
+            self.dt_array = self.dt_array[is_active]
+        else:
+            self.Y = self.Y[is_active].reset_index(drop=True)
+
+        if self.rollout:
+            self.Y_rollout = self.Y_rollout[is_active]
 
 
     def clusterize_dataset(self, c_bounds=None):

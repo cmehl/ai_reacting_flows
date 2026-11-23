@@ -18,6 +18,7 @@ import ai_reacting_flows.ann_model_generation.NN_testing_plots as plots
 
 import ai_reacting_flows.tools.utilities as utils
 import ai_reacting_flows.tools.transforms as transforms
+from ai_reacting_flows.tools.skip_inactive import active_states
 
 
 # Types of test cases, sections of nn_testing.yaml
@@ -171,6 +172,9 @@ class NNTesting():
         # Renormalization of Yk to satisfy elements conservation
         self.yk_renormalization = testing_parameters["yk_renormalization"]
 
+        # Inactive states kept unchanged by the ANN, as in a CFD code (see tools/skip_inactive.py); CVODE not skipped
+        self.skip_inactive = testing_parameters.get("skip_inactive", False)
+
         # Standard deviations of T [K] and transformed Y_k of the network species on the training dataset
         # (all clusters), normalization of the simulation error E_sim (see case_errors)
         self.std_train = self._training_std()
@@ -312,6 +316,7 @@ class NNTesting():
         #-------------------- ANN SOLVER ---------------------------
         ann_calls = 0
         cvode_calls = 0
+        skipped_calls = 0   # Steps of inactive states (skip_inactive), kept unchanged
 
         # Initial solution
         Y_k_ann = Y_ini
@@ -351,43 +356,54 @@ class NNTesting():
                 cvode_calls += 1
                 clusters.append(-1)
 
-            # Step done by the ANN
             else:
-                # Attribute cluster for current state before ANN advancement.
+                # Inactive state (skip_inactive): kept unchanged, as in a CFD code (check timed with the ANN steps)
                 start = perf_counter()
-                self.attribute_cluster(state, dt, progvar)
+                inactive = self.skip_inactive and self.is_inactive(T_old, Y_old, pressure, dt)
                 time_ann += perf_counter() - start
 
-                # Log a compact line for each ANN advancement (index, T_old,
-                # dt, cluster, and whether dt is part of the clustering vector).
-                self._log(
-                    "0D_STEP "
-                    f"i={i}, "
-                    f"T_old={float(T_old):.6e}, "
-                    f"dt={float(dt):.6e}, "
-                    f"cluster={self.cluster}, "
-                )
-
-                start = perf_counter()
-                T_new, Y_new = self.advance_state_NN(T_old, Y_old, pressure, dt)
-
-                # If hybrid, we check conservation and use CVODE if not satisfied
-                if self.hybrid_ann_cvode:
-                    if self.ia_success is False:
-                        # CVODE advance
-                        T_new, Y_new = self.advance_state_CVODE(T_old, Y_old, pressure, dt)
-                        cvode_calls += 1
-                    else:
-                        ann_calls +=1
-                else:
-                    ann_calls += 1
-                time_ann += perf_counter() - start
-
-                # Cluster of the step (-1 if done by CVODE)
-                if self.hybrid_ann_cvode and self.ia_success is False:
+                if inactive:
+                    T_new, Y_new = T_old, Y_old
+                    skipped_calls += 1
                     clusters.append(-1)
+
+                # Step done by the ANN
                 else:
-                    clusters.append(self.cluster)
+                    # Attribute cluster for current state before ANN advancement.
+                    start = perf_counter()
+                    self.attribute_cluster(state, dt, progvar)
+                    time_ann += perf_counter() - start
+
+                    # Log a compact line for each ANN advancement (index, T_old,
+                    # dt, cluster, and whether dt is part of the clustering vector).
+                    self._log(
+                        "0D_STEP "
+                        f"i={i}, "
+                        f"T_old={float(T_old):.6e}, "
+                        f"dt={float(dt):.6e}, "
+                        f"cluster={self.cluster}, "
+                    )
+
+                    start = perf_counter()
+                    T_new, Y_new = self.advance_state_NN(T_old, Y_old, pressure, dt)
+
+                    # If hybrid, we check conservation and use CVODE if not satisfied
+                    if self.hybrid_ann_cvode:
+                        if self.ia_success is False:
+                            # CVODE advance
+                            T_new, Y_new = self.advance_state_CVODE(T_old, Y_old, pressure, dt)
+                            cvode_calls += 1
+                        else:
+                            ann_calls +=1
+                    else:
+                        ann_calls += 1
+                    time_ann += perf_counter() - start
+
+                    # Cluster of the step (-1 if done by CVODE)
+                    if self.hybrid_ann_cvode and self.ia_success is False:
+                        clusters.append(-1)
+                    else:
+                        clusters.append(self.cluster)
 
             # Vector with all variable (T and Yks)
             state = np.append(T_new, Y_new)
@@ -422,8 +438,13 @@ class NNTesting():
             T_drift, sumYk_drift = 0.0, 0.0
             states_stability = []
             for _ in range(nb_ite_stability):
-                self.attribute_cluster(state, dt, progvar)
-                T_new, Y_new = self.advance_state_NN(state[0], state[1:], pressure, dt)
+
+                # Inactive state (skip_inactive): kept unchanged
+                if self.skip_inactive and self.is_inactive(state[0], state[1:], pressure, dt):
+                    T_new, Y_new = state[0], state[1:]
+                else:
+                    self.attribute_cluster(state, dt, progvar)
+                    T_new, Y_new = self.advance_state_NN(state[0], state[1:], pressure, dt)
 
                 state = np.append(T_new, Y_new)
                 progvar = self.compute_progvar(state, pressure, Yc_u)
@@ -454,6 +475,7 @@ class NNTesting():
             "progvar": np.array(progvar_vect),
             "ann_calls": ann_calls,
             "cvode_calls": cvode_calls,
+            "skipped_calls": skipped_calls,
             "time_cvode": time_cvode,
             "time_ann": time_ann,
             "clusters": np.array(clusters),
@@ -735,6 +757,7 @@ class NNTesting():
         #-------------------- ANN REACTION RATES ---------------------------
         ann_calls = 0
         cvode_calls = 0
+        skipped_calls = 0   # Inactive points above T_threshold (skip_inactive), frozen
 
         # Initial solution
         Yt_ann = Yt
@@ -768,9 +791,14 @@ class NNTesting():
                 f"cluster={self.cluster}, "
             )
 
-            # advance to t + dt
+            # advance to t + dt: points below T_threshold, and inactive points with skip_inactive, are frozen
             start = perf_counter()
-            if Tt[i_reac] >= T_threshold:
+            frozen = Tt[i_reac] < T_threshold
+            if self.skip_inactive and not frozen:
+                frozen = self.is_inactive(Tt[i_reac], Yt_ann[:,i_reac], pressure, dt)
+                skipped_calls += int(frozen)
+
+            if not frozen:
                 T_new, Y_new = self.advance_state_NN(Tt[i_reac], Yt_ann[:,i_reac], pressure, dt)
 
                 # If hybrid, we check conservation (prediction before element correction) and use CVODE if not satisfied
@@ -814,6 +842,7 @@ class NNTesting():
             "Omega_norm_ann": Omega_norm_ann,
             "ann_calls": ann_calls,
             "cvode_calls": cvode_calls,
+            "skipped_calls": skipped_calls,
             "time_cvode": time_cvode,
             "time_ann": time_ann,
             "clusters": clusters,
@@ -1267,6 +1296,12 @@ class NNTesting():
 
 
     # CVODE solver   
+    def is_inactive(self, T, Y, pressure, dt):
+        """True if the chemistry of the state T [K], Y [-] (all species) at pressure [Pa] is negligible over dt [s]
+        (see tools/skip_inactive.py)."""
+
+        return not active_states(self.gas, np.array([T]), np.reshape(Y, (1, -1)), pressure, dt)[0]
+
     def advance_state_CVODE(self, T_old, Y_old, pressure, dt):
         # Gas object modification
         self.gas.TPY= T_old, pressure, Y_old
