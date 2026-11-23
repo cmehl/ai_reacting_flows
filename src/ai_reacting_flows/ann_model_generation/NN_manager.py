@@ -685,8 +685,8 @@ class NN_manager():
                 if epoch == self.rollout_start_epoch and epoch > 0:
                     self._log(f"ROLLOUT_START cluster={i_cluster} epoch={epoch} n_steps={n_steps}")
 
-            # Training parameters
-            epoch_loss = 0.0
+            # Training parameters (loss summed on the device: no CPU-GPU synchronization at each batch)
+            epoch_loss = torch.zeros((), dtype=self.dtype, device=self.device)
             n_batches = 0
             for i in range(0, len(X_train), self.batch_size):
 
@@ -708,13 +708,13 @@ class NN_manager():
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
-                epoch_loss += loss.item()
+                epoch_loss += loss.detach()
                 n_batches += 1
                 # print("Targets stats:", Y_train.min().item(), Y_train.max().item())
                 # print("Preds stats:", y_pred.min().item(), y_pred.max().item())
                 # input("Press Enter to continue.")
 
-            loss_list[epoch] = epoch_loss / max(1, n_batches)
+            loss_list[epoch] = epoch_loss.item() / max(1, n_batches)
 
             # Track learning rate evolution
             before_lr = optimizer.param_groups[0]["lr"]
@@ -854,12 +854,12 @@ class NN_manager():
             # Training in the precision of the learning parameters (float32 or float64)
             model = model.to(self.dtype)
 
-            # Optimizer and loss function
+            # Optimizer and loss function (fused Adam: update of all the parameters in one kernel, less launch overhead)
             opt_name = str(self.optimizer_name).lower()
             if opt_name == "adam":
-                optimizer = optim.Adam(model.parameters(), lr=self.initial_learning_rate)
+                optimizer = optim.Adam(model.parameters(), lr=self.initial_learning_rate, fused=True)
             elif opt_name == "adamw":
-                optimizer = optim.AdamW(model.parameters(), lr=self.initial_learning_rate, weight_decay=self.weight_decay)
+                optimizer = optim.AdamW(model.parameters(), lr=self.initial_learning_rate, weight_decay=self.weight_decay, fused=True)
             elif opt_name == "sgd":
                 optimizer = optim.SGD(model.parameters(), lr=self.initial_learning_rate)
             else:
