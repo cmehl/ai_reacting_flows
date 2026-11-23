@@ -46,7 +46,7 @@ Each step copies its input YAML into its output folder to document the run.
 - `tools/`: `utilities.py` (phi <-> Y_k, element/atomic matrices from Cantera, adiabatic flame, 0D reactor, `PRINT`),
   `transforms.py` (log/Box-Cox transforms, scaling, network output to Y_k, k-means features: shared by
   `LearningDatabase`, `NN_manager` and `NNTesting`), `element_projection.py` (element correction `yk_renormalization: 3`,
-  numpy and torch: shared by `NNInference` and `NN_manager`), `loss_weighting.py` (increment weights of the training loss, one per point or per point and species; work in progress), `pca_tools.py`.
+  numpy and torch: shared by `NNInference` and `NN_manager`), `skip_inactive.py` (inactive states, criterion `log` of OneDCombustion: shared by `LearningDatabase` and `NNTesting`), `loss_weighting.py` (increment weights of the training loss, one per point or per point and species; work in progress), `pca_tools.py`.
 
 ## Other folders
 
@@ -55,7 +55,7 @@ Each step copies its input YAML into its output folder to document the run.
   `ann_model_learning.py`, `ann_model_testing.py`). Launch from inside the case folder, e.g.
   `mpirun -n X python generate_stoch_dtb.py`. Results are written there (git-ignored).
 - `docs/theory.md`: models and algorithms with their equations (EMST_POPE mixing, renewal of the particles, temperature update, element
-  conservation, rollout training, element projection in training, loss weighting, simulation error, speed-up benchmark). README.md keeps the workflow, files and inputs, and links to it:
+  conservation, inactive states, rollout training, element projection in training, loss weighting, simulation error, speed-up benchmark). README.md keeps the workflow, files and inputs, and links to it:
   update both when a model changes.
 - `docs/mpi.md`: MPI parallelism of the three generation steps (exchanges of particle states of the stochastic reactors,
   canonical flames, multi-dt) and of testing (cases of each series): update it when the distribution or the exchanged attributes change.

@@ -8,6 +8,7 @@ Models and algorithms used in ARF, with their equations. The [README](../README.
 + [Renewal of the particles (`residence_time`)](#renewal-of-the-particles-residence_time)
 + [Element conservation of the ANN mass fractions (`yk_renormalization`)](#element-conservation-of-the-ann-mass-fractions-yk_renormalization)
 + [Hybrid ANN/CVODE model (`hybrid_ann_cvode`)](#hybrid-anncvode-model-hybrid_ann_cvode)
++ [Inactive states (`skip_inactive`)](#inactive-states-skip_inactive)
 + [Rollout training](#rollout-training)
 + [Element projection in training](#element-projection-in-training)
 + [Loss weighting](#loss-weighting)
@@ -135,6 +136,22 @@ In the paper (H2 ignition in 2-D turbulence), both criteria correlate with the e
 $$E = \frac{1}{N_S + 1} \left( \sum_{k=1}^{N_S} \frac{|f(Y_k^{NN}) - f(Y_k^{ref})|}{\sigma_k} + \frac{|T^{NN} - T^{ref}|}{\sigma_T} \right)$$
 
 with $f$ the transform of the network inputs and $\sigma$ the standard deviations of the training inputs. The database targets contain only the species: $T^{ref}$ and $T^{NN}$ at $t+dt$ both follow from the enthalpy conservation from the state at $t$ (`NNInference.temperature_after`). $e_\Sigma$ and $e_e$ of the prediction (before element correction) are plotted against $E$ in `plots_validation/hybrid_e_sum.png` and `hybrid_e_elements.png`, colored by the temperature at $t$. The plot of the selected criterion shows `hybrid_ann_cvode_tol` and the fraction of states above it, i.e. the fraction $\alpha$ of CVODE calls expected on states like those of the database. A criterion is useful if large $E$ go with large proxies.
+
+# Inactive states (`skip_inactive`)
+
+Criterion `log` of the `skip_inactive` of OneDCombustion (`tools/skip_inactive.py`). A CFD code does not integrate the chemistry of a state whose change over $dt$ is negligible (fresh gas, burnt gas at equilibrium), so the ANN never sees these states: they can be removed from the learning database (`LearningDatabase.skip_inactive_points`) and are kept unchanged by the ANN in the tests (`skip_inactive` of `nn_testing.yaml`; the CVODE reference is not skipped).
+
+The change over $dt$ is estimated by an explicit Euler step with the net production rates $\dot w_k$ [kmol/m³/s] of the state at $t$:
+
+$$\Delta Y_k = \frac{|\dot w_k W_k| \, dt}{\rho}, \qquad \Delta T = \frac{|\sum_k h_k \dot w_k| \, dt}{\rho c_p}$$
+
+A state is active if $\Delta T > 10^{-4}$ K or
+
+$$\max_k \frac{\Delta Y_k}{\max(Y_k, Y_{floor})} > 10^{-3}, \qquad Y_{floor} = 10^{-20}$$
+
+This is the relative change $|d \ln Y_k| = dt / \tau_k$, with $\tau_k = \rho Y_k / |\dot w_k W_k|$ the chemical time of species $k$: a state is integrated as soon as one species evolves on a time shorter than $1000\,dt$, however small its mass fraction. It sees the induction period of autoignition, where the radicals grow exponentially from near zero, which an absolute test on $\Delta Y_k$ freezes. It does not see slow chemistry such as NO in burnt gas ($\tau_k \gg 1000\,dt$).
+
+In a multi-dt database, a point is removed if it is inactive at its largest $dt$ (its outputs at all $dt$ are stored together).
 
 # Rollout training
 
