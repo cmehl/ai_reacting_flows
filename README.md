@@ -328,7 +328,7 @@ Cases are sampled in the given bounds with Latin hypercube sampling.
 | `networks_types` | One per cluster: `MLP`, `PerSpeciesMLP` (one MLP per species, each predicting the output of its species from the whole input state, all with the definition of the cluster), `DeepONet` or `DeepONetShift` |
 | `networks_def` | One per cluster: key of its definition in `clusters` |
 | `clusters` | Network definitions (see below) |
-| `learning.optimizer` | `adam` (default), `adamw` or `sgd` |
+| `learning.optimizer` | `adam` (default), `adamw` or `sgd` (Adam and AdamW are fused: one kernel for the update of all the parameters) |
 | `learning.weight_decay` | `adamw` only: decoupled weight decay, each step the weights are multiplied by `1 - lr × weight_decay` (Loshchilov & Hutter, ICLR 2019, https://arxiv.org/abs/1711.05101). Default 0.01 (PyTorch default); `0` gives Adam |
 | `learning.loss` | `MSE` (default), `L1` or `Huber` |
 | `learning.initial_learning_rate` | Default 0.001 |
