@@ -289,6 +289,18 @@ $$\mathcal{L} = \frac{1}{n} \sum_{k=1}^{n} \big\langle w_i\, r_{i,k}^2 \big\rang
 
 with $r_{i,k}$ the scaled error of the state predicted after $k$ steps. The weights are computed once from the database: weights from the increments of the following steps of the loss, which are taken from the predicted states, would change with the network during training. The error of step $k$ is accumulated over $k$ steps, so the weights no longer price the relative error of one increment: they give more weight to the drift of the chains that start from small increments (burnt gases). `val_loss_unweighted` is the unweighted rollout loss, and the losses of `rollout_val_loss_per_step.csv` are weighted, as the validation loss.
 
+# Uncertainty weighting
+
+> **Work in progress, for tests only.** The option is kept to test the method: it is not validated and should not be used for production models. Open points: a single case tested (H2, one 0D ignition), selection of the best model on a validation loss whose weights change during training, interaction with rollout training and `project_elements` not tested. On `H2_IGN_KERNEL_UNCERTAINTY` (5 trainings, one 0D ignition test, `yk_renormalization: 3`), the median simulation error is 0.016 (0.007 to 0.020) against 0.027 (0.010 to 0.042) without the option, with 3 times less scatter between trainings, but the difference is not significant (rank test p ≈ 0.4).
+
+The scaling of the outputs sets the weights of the species in the MSE loss: with residuals $r_{ik}$ scaled by the standard deviation $\sigma_k$ of output $k$, the weight of species $k$ is $1/\sigma_k^2$ in physical units, and in a lean H2/air database O2 takes most of the loss. With `uncertainty_weighting: true` (Kendall et al., CVPR 2018, [arXiv:1705.07115](https://arxiv.org/abs/1705.07115)), each output $k$ has a learnable log-variance $s_k$, trained with the network (Adam, same learning rate, $s_k = 0$ at the start):
+
+$$\mathcal{L} = \frac{1}{n\,K}\sum_{i,k} e^{-s_k}\, r_{ik}^2 + \frac{1}{K}\sum_k s_k$$
+
+For fixed network parameters, the minimum in $s_k$ is $e^{s_k} = \langle r_k^2 \rangle$, the MSE of output $k$: each output gets a weight inversely proportional to its own error, and the loss becomes, up to a constant, $\frac{1}{K}\sum_k \ln \langle r_k^2\rangle$, the mean of the logarithms of the MSEs of the outputs. It does not depend on the scaling $\sigma_k$ any more: a relative decrease of the error of any output lowers the loss by the same amount. The loss can be negative.
+
+The validation loss (selection of the best model, `ReduceLROnPlateau`) is $\mathcal{L}$ with the current $s_k$; `val_loss_unweighted` is the usual MSE. The weights $e^{-s_k}$, normalized to a mean of 1, are logged every `val_every` epochs (`UNCERTAINTY_WEIGHTS`). In the H2 case they favour the species with small errors (H2O, H2, O2) and lower the radicals by factors of 5 to 100.
+
 # Simulation error
 
 The simulation error of a 0-D case $i$ run with time step $dt$ is the normalized error of Mehl & Aubagnac (variable time step ANN, eq. 6), following Chen et al. (Energy & Fuels 37, 2023):
