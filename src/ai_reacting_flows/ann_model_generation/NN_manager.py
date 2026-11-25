@@ -112,6 +112,14 @@ class NN_manager():
         self.loss_weighting_min_count = learning_data.get("loss_weighting_min_count", 100) # Floor of the numbers of points per bin of Omega
         self.loss_weighting_per_species = learning_data.get("loss_weighting_per_species", False)  # One weight per point and per species
         self.loss_weighting = self.loss_weighting_p > 0.0 or self.loss_weighting_q > 0.0
+        self.uncertainty_weighting = learning_data.get("uncertainty_weighting", False)     # Learnable weights of the species (Kendall et al. 2018), work in progress, for tests only
+
+        # Uncertainty weighting: MSE loss, not with the increment weights
+        if self.uncertainty_weighting:
+            if str(self.loss_name).lower() != "mse":
+                raise ValueError("uncertainty_weighting needs the MSE loss")
+            if self.loss_weighting:
+                raise ValueError("uncertainty_weighting cannot be used with loss_weighting_p or loss_weighting_q > 0")
 
         # Increment weights (tools/loss_weighting.py): only for increments of ln Y, with the MSE loss
         if self.loss_weighting:
@@ -693,6 +701,10 @@ class NN_manager():
                 Xbatch = X_train[i:i+self.batch_size]
                 wbatch = None if W_train is None else W_train[i:i+self.batch_size]
 
+                # Uncertainty weighting: weights exp(-s_k) of the species, the same for all points
+                if self.uncertainty_weighting:
+                    wbatch = torch.exp(-self.log_var)[None, :]
+
                 # Network applied on its own predictions
                 if self.rollout:
                     loss = self._rollout_loss(model, loss_fn, Xbatch, Y_rollout_train[i:i+self.batch_size, :n_steps], Y_N2_train[i:i+self.batch_size],
@@ -704,6 +716,10 @@ class NN_manager():
                     ybatch = Y_train[i:i+self.batch_size]
                     loss = self._one_step_loss(loss_fn, Xbatch, y_pred, ybatch, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std,
                                                self.raw_state_loss_weight, wbatch)
+
+                # Uncertainty weighting: + mean of s_k, at the optimum exp(s_k) is the MSE of species k
+                if self.uncertainty_weighting:
+                    loss = loss + self.log_var.mean()
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -723,6 +739,11 @@ class NN_manager():
             # For ReduceLROnPlateau we want to drive the scheduler from the validation loss.
             val_loss = None
             if epoch % val_every == 0:
+
+                # Uncertainty weighting: validation loss with the current weights (selection of the best model)
+                if self.uncertainty_weighting:
+                    W_val = torch.exp(-self.log_var.detach())[None, :]
+
                 model.eval()  # evaluation mode
                 with torch.no_grad():
 
@@ -734,6 +755,8 @@ class NN_manager():
                     else:
                         val_loss = self._one_step_loss(loss_fn, X_val, y_val_pred, Y_val, Xscaler_mean, Xscaler_std, Yscaler_mean, Yscaler_std,
                                                        weights=W_val)
+                    if self.uncertainty_weighting:
+                        val_loss = val_loss + self.log_var.detach().mean()
 
                     # Unweighted validation loss, to compare models trained with different weights
                     val_loss_unweighted = None
@@ -803,6 +826,12 @@ class NN_manager():
             if epoch % val_every == 0 and val_loss is not None:
                 print(f"    >> Validation loss: {val_loss.item()}")
 
+            # Uncertainty weighting: weights of the species, normalized to a mean of 1
+            if self.uncertainty_weighting and epoch % val_every == 0:
+                w = torch.exp(-self.log_var.detach()).cpu().numpy()
+                self._log(f"UNCERTAINTY_WEIGHTS cluster={i_cluster} epoch={epoch} " + ", ".join(
+                    f"{spec}={wk:.3e}" for spec, wk in zip(self.species_ANN, w / w.mean())))
+
             # Errors and loss per decade of Omega at the selected epochs
             if self.output_omegas and epoch in self.omega_diagnostics_epochs:
                 self._log_error_vs_Omega(i_cluster, model, X_val, Y_val, Yscaler_mean, Yscaler_std, W_val, f"epoch{epoch:05d}")
@@ -854,14 +883,20 @@ class NN_manager():
             # Training in the precision of the learning parameters (float32 or float64)
             model = model.to(self.dtype)
 
+            # Uncertainty weighting: log-variances s_k of the outputs, learned with the network (start at weights 1)
+            params = list(model.parameters())
+            if self.uncertainty_weighting:
+                self.log_var = torch.zeros(Y_val.shape[1], dtype=self.dtype, device=self.device, requires_grad=True)
+                params.append(self.log_var)
+
             # Optimizer and loss function (fused Adam: update of all the parameters in one kernel, less launch overhead)
             opt_name = str(self.optimizer_name).lower()
             if opt_name == "adam":
-                optimizer = optim.Adam(model.parameters(), lr=self.initial_learning_rate, fused=True)
+                optimizer = optim.Adam(params, lr=self.initial_learning_rate, fused=True)
             elif opt_name == "adamw":
-                optimizer = optim.AdamW(model.parameters(), lr=self.initial_learning_rate, weight_decay=self.weight_decay, fused=True)
+                optimizer = optim.AdamW(params, lr=self.initial_learning_rate, weight_decay=self.weight_decay, fused=True)
             elif opt_name == "sgd":
-                optimizer = optim.SGD(model.parameters(), lr=self.initial_learning_rate)
+                optimizer = optim.SGD(params, lr=self.initial_learning_rate)
             else:
                 raise ValueError(f"Unsupported optimizer '{opt_name}'")
 

@@ -128,6 +128,8 @@ dmypy.json
 # ai_reacting_flow related
 /ai_reacting_flows/stochastic_reactors_data_gen/EMST/*.o
 /scripts/STOCH_DTB_*
+/scripts/*/STOCH_DTB_*
+/scripts/*/SEED_STUDY/
 /scripts/inlets*
 /scripts/*.pkl
 /scripts/MODEL_*
