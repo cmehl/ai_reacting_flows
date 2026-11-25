@@ -130,7 +130,7 @@ Visualization:
 | Method | Description |
 |--------|-------------|
 | `density_scatter(var_x, var_y)` | Scatter plot colored by point density |
-| `compare_resampled_pdfs(var)` | PDF of `var` before and after undersampling |
+| `compare_resampled_pdfs(var)` | PDF of `var` before and after the last undersampling or `skip_inactive_points` (`comparison_distribution.png` in the `<type>_DTB_<suffix>` folder, overwritten at each call) |
 | `plot_pdf_var(var)` | PDF of `var` |
 | `scatter_Omega_progvar(max_points=50000)` | Scatter plot of $\log_{10}\Omega$ (norm of the scaled increments, see `undersample_Omega`) versus `Prog_var`, colored by temperature, in `Omega_vs_progvar.png` (`_resampled` after an undersampling), in the database folder. Not for multi-dt databases |
 | `pdf_Omega(n_bins=100)` | PDFs of $\Omega$ (logarithmic density axis) and of $\log_{10}\Omega$ on all points of the current database, in `Omega_pdf.png` and `log10_Omega_pdf.png` (`_resampled` after an undersampling), in the database folder. Not for multi-dt databases |

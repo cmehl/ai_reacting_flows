@@ -138,6 +138,7 @@ class LearningDatabase(object):
 
         # self.is_reduced = False
         self.is_resampled = False
+        self.X_old = None   # Points before the last undersampling or removal of inactive points (compare_resampled_pdfs)
 
         self.is_pca_computed = False
 
@@ -259,6 +260,9 @@ class LearningDatabase(object):
 
         if not is_active.any():
             raise ValueError("No active points remain")
+
+        # Points before removal (compare_resampled_pdfs)
+        self.X_old = self.X.copy()
 
         # Scatter plot of the kept and removed points
         if scatter_vars is not None:
@@ -1606,8 +1610,8 @@ class LearningDatabase(object):
             if not self.is_pca_computed:
                 self.compute_pca()
 
-        if self.is_resampled is False:
-            sys.exit("Data has not been resampled, this function is not accessible")
+        if self.X_old is None:
+            sys.exit("Data has not been resampled nor inactive points removed, this function is not accessible")
             
         # Histograms, bin width adapted to the variable (Freedman-Diaconis rule), from the data before
         # re-sampling: the same bin width for both
@@ -1616,10 +1620,10 @@ class LearningDatabase(object):
         fig, ax1 = plt.subplots()
 
         sns.histplot(data=self.X_old, x=var, ax=ax1, color="black", stat="density",
-                     binwidth=binwidth, kde=False, label="Before re-sampling")
+                     binwidth=binwidth, kde=False, label="Before")
 
         sns.histplot(data=self.X, x=var, ax=ax1, color="blue", stat="density",
-                     binwidth=binwidth, kde=False, alpha=0.4, label="After re-sampling")
+                     binwidth=binwidth, kde=False, alpha=0.4, label="After")
         
         ax1.set_box_aspect(1)
         
