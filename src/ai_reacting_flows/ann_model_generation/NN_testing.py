@@ -1231,7 +1231,19 @@ class NNTesting():
     def plot_case(self, case_type, case, result, x_window=None):
         """Plots of one case in TESTING_<model>/<case_type>_<parameters>/."""
 
-        folder = os.path.join(self.output_folder, case_type + "_" + "_".join(f"{key}#{value}" for key, value in case.items()))
+        # Folder named after the parameters of the case, floats with 4 significant digits (except the pressure).
+        # Numerical parameters are not in the name: they are in nn_testing.yaml and summary_<case_type>.yaml
+        numerical_parameters = ["max_simulation_time", "T_eq_tolerance", "dT_tolerance", "stability_factor", "cvode_initial_steps"]
+        names = []
+        for key, value in case.items():
+            if key in numerical_parameters:
+                continue
+
+            if isinstance(value, float) and key != "pressure":
+                names.append(f"{key}#{value:.4g}")
+            else:
+                names.append(f"{key}#{value}")
+        folder = os.path.join(self.output_folder, case_type + "_" + "_".join(names))
 
         # 0D reactors: time evolutions
         if case_type.startswith("0D"):

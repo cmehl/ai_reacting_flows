@@ -196,7 +196,7 @@ The script `ann_model_testing.py` reads `nn_testing.yaml` and runs the selected 
 ```
 TESTING_<models_folder>/
 ├── nn_testing.yaml                       copy of the inputs
-├── <case type>_<parameters>/             plots of each case (if plots: true)
+├── <case type>_<parameters>/             plots of each case (if plots: true), floats with 4 significant digits except the pressure, without the numerical parameters (max_simulation_time, tolerances, stability_factor, cvode_initial_steps)
 ├── summary_<case type>.yaml              errors of each case, mean and std over the series, failed cases
 ├── simulation_errors_<case type>.csv     one row per case: parameters and errors
 ├── simulation_errors_<case type>_by_dt.csv   E(dt), std and number of simulations per dt, mean E_<variable> and speed-up
