@@ -159,6 +159,7 @@ def test_nn_testing_outputs(tmp_path):
     assert by_dt["nb_simulations"][0] == 2
     assert np.isclose(by_dt["E_mean"][0], table["E_sim"].mean())
     assert os.path.isfile(os.path.join(output, "simulation_errors_0D_ignition_by_dt.png"))
+    assert os.path.isfile(os.path.join(output, "simulation_errors_0D_ignition_T_phi.png"))
 
     # Contributions of the variables (E_sim is their mean) and speed-up
     variables = ["E_T"] + [f"E_{spec}" for spec in test.inference.spec_list_ANN]
@@ -200,6 +201,7 @@ def test_nn_testing_outputs(tmp_path):
     by_dt = pd.read_csv(os.path.join(output, "simulation_errors_1D_diffusion_by_dt.csv"))
     assert by_dt["nb_simulations"][0] == 1 and np.isclose(by_dt["E_mean"][0], errors["E_sim"])
     assert os.path.isfile(os.path.join(output, "simulation_errors_1D_diffusion_by_dt.png"))
+    assert not os.path.isfile(os.path.join(output, "simulation_errors_1D_diffusion_T_phi.png"))
     assert errors["speedup"] > 0.0 and "E_H2" in errors
 
     # Errors per cluster: points of the fuel side below T_threshold are not advanced by a network (cluster -1)

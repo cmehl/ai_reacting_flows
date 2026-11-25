@@ -1080,6 +1080,10 @@ class NNTesting():
             plots.plot_errors_per_variable(by_dt, variables, case_type, self.output_folder)
             summary["E_sim_by_dt"] = {float(dt): {key: float(value) for key, value in row.items()} for dt, row in by_dt.iterrows()}
 
+            # Error of each case in the (T0, phi) plane, with the failed cases (series with phi: 0D ignition, 1D premixed)
+            if "phi" in table and "T0" in table:
+                plots.plot_errors_T_phi(table, failed, case_type, self.output_folder)
+
         # Errors per cluster and dt: mean over the steps (0D) or grid points (1D) advanced by the network of the cluster
         # (cluster -1: no chemistry, 1D points below T_threshold or inactive states; -2: steps done by CVODE)
         points = pd.concat(point_errors)

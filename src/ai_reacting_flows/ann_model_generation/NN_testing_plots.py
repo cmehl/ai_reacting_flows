@@ -7,6 +7,7 @@ import shutil
 
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.colors import LogNorm
 
 from ai_reacting_flows.tools.loss_weighting import OMEGA_FLOOR
 
@@ -369,4 +370,40 @@ def plot_errors_per_variable(by_dt, variables, case_type, folder):
     fig.tight_layout()
 
     fig.savefig(os.path.join(folder, f"simulation_errors_{case_type}_by_variable.png"), dpi=400)
+    plt.close(fig)
+
+
+def plot_errors_T_phi(table, failed, case_type, folder):
+    """Simulation error E_sim [-] of each case of a series in the (T0 [K], phi [-]) plane, one panel per dt [s],
+    in folder/simulation_errors_<case_type>_T_phi.png. Color on a log scale; failed cases as black crosses.
+
+    table: one row per case that ran (columns T0, phi, dt and E_sim); failed: failed cases, each with its "params".
+    """
+
+    dts = np.unique(np.concatenate([table["dt"].to_numpy(), [case["params"]["dt"] for case in failed]]))
+    norm = LogNorm(vmin=table["E_sim"].min(), vmax=table["E_sim"].max())
+
+    fig, axs = plt.subplots(1, len(dts), figsize=(5 * len(dts) + 1, 4), squeeze=False, layout="constrained")
+
+    for ax, dt in zip(axs[0], dts):
+
+        # Cases that ran, colored by their error
+        cases = table[table["dt"] == dt]
+        points = ax.scatter(cases["T0"], cases["phi"], c=cases["E_sim"], norm=norm, cmap="viridis", s=40)
+
+        # Failed cases
+        failed_dt = [case["params"] for case in failed if case["params"]["dt"] == dt]
+        if len(failed_dt) > 0:
+            ax.scatter([case["T0"] for case in failed_dt], [case["phi"] for case in failed_dt],
+                       marker="x", color="k", s=50, label="failed")
+            ax.legend()
+
+        ax.set_xlabel(r'$T_0$ $[K]$', fontsize=FONTSIZE)
+        ax.set_ylabel(r'$\phi$ $[-]$', fontsize=FONTSIZE)
+        ax.set_title(rf'$\Delta t$ = {dt:.1e} s')
+
+    fig.colorbar(points, ax=axs[0].tolist(), label=r'$E_i$ $[-]$')
+    fig.suptitle(case_type)
+
+    fig.savefig(os.path.join(folder, f"simulation_errors_{case_type}_T_phi.png"), dpi=400)
     plt.close(fig)

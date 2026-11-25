@@ -202,6 +202,7 @@ TESTING_<models_folder>/
 ├── simulation_errors_<case type>_by_dt.csv   E(dt), std and number of simulations per dt, mean E_<variable> and speed-up
 ├── simulation_errors_<case type>_by_dt.png   E(dt) with std bars, and box plot of E_i per dt
 ├── simulation_errors_<case type>_by_variable.png   mean E_<variable> of T and each network species, per dt
+├── simulation_errors_<case type>_T_phi.png   E_sim of each case in the (T0, phi) plane per dt, failed cases as crosses (0D ignition, 1D premixed)
 ├── simulation_errors_<case type>_by_cluster.csv   errors per cluster and dt (cluster -1: no chemistry, -2: CVODE)
 ├── speedup_benchmark.csv                 speed-up of the ANN on batches of states
 ├── plots_validation/                     scatter plots of validation errors, and a priori check of the hybrid
