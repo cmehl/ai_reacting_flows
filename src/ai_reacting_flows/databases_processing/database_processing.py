@@ -1144,6 +1144,11 @@ class LearningDatabase(object):
 
         h5file_w.close()
 
+        # Information: standard deviations of the outputs and increments of each cluster (output_std.txt)
+        print("", flush=True)
+        print(">> Standard deviations of the outputs (output_omegas: false, sigma_Y) and increments (true, sigma_dY)", flush=True)
+        self.print_output_std()
+
 
     def _processing_parameters(self):
         """Parameters used to build the training data, written in training_data.h5 (see processing_parameters.py)."""
@@ -1317,6 +1322,67 @@ class LearningDatabase(object):
             print(f">> There are {size_cluster_i} points in cluster{i}")
 
         print(f"\n => There are {size_total} points overall")
+
+
+    def print_output_std(self):
+        """Standard deviations, in each cluster, of the transformed mass fractions at t+dt (outputs with
+        output_omegas: false) and of their increments over the step (output_omegas: true), whatever output_omegas,
+        with the shares of the weights 1/sigma_k^2 of the species in the MSE loss (see docs/theory.md).
+
+        Units of the output transform (ln Y with log_transform_Y: 1, Y [-] with 0). All the points of each cluster,
+        before the train/validation split (the scalers of training_data.h5 use the training points only).
+        Printed and written to output_std.txt in the learning database folder.
+        """
+
+        # Points and clusters: flattened (state, dt) points with multi-dt databases, as in process_database
+        if self.dt_var:
+            X, Y, _ = self._flatten_multi_dt_arrays(self.X, self.Y, self.dt_array)
+            labels = X["cluster"].values
+
+            # Multi-dt clustering on "dt" or "all": one cluster per flattened point
+            if self.clusterized_dataset:
+                if self.clusterize_on == "dt":
+                    labels = self.time_clusters
+                elif self.clusterize_on == "all":
+                    labels = self.all_clusters
+
+        # Constant dt
+        else:
+            X, Y = self.X, self.Y
+            labels = X["cluster"].values
+
+        # Species of the network outputs
+        species = [c for c in Y.columns if c not in ["Temperature", "Prog_var", "HRR", "Pressure"]]
+        if not self.with_N_chemistry:
+            species.remove("N2")
+
+        lines = []
+        for i_cluster in range(self.nb_clusters):
+            in_cluster = labels == i_cluster
+
+            # Transformed mass fractions at t and t+dt (clipped as in process_database), and increments
+            y_t = transforms.transform_species(X.loc[in_cluster, species].values, species, self.log_transform_Y,
+                                               self.threshold, self.lambda_bct, self.log_excluded_species)
+            y_new = transforms.transform_species(Y.loc[in_cluster, species].values, species, self.log_transform_Y,
+                                                 self.threshold, self.lambda_bct, self.log_excluded_species)
+            sigma_Y = y_new.std(axis=0)
+            sigma_dY = (y_new - y_t).std(axis=0)
+
+            # Shares [%] of the weights 1/sigma_k^2 in the loss
+            share_Y = 100.0 / sigma_Y**2 / np.sum(1.0 / sigma_Y**2)
+            share_dY = 100.0 / sigma_dY**2 / np.sum(1.0 / sigma_dY**2)
+
+            lines.append(f"CLUSTER {i_cluster} ({in_cluster.sum()} points)")
+            lines.append(f"{'Species':10s}{'sigma_Y':>12s}{'share_Y %':>12s}{'sigma_dY':>12s}{'share_dY %':>12s}")
+            for spec, sY, wY, sdY, wdY in zip(species, sigma_Y, share_Y, sigma_dY, share_dY):
+                lines.append(f"{spec:10s}{sY:12.3e}{wY:12.2f}{sdY:12.3e}{wdY:12.2f}")
+            lines.append("")
+
+        report = "\n".join(lines)
+        print(report)
+
+        with open(os.path.join(self.dtb_folder, self.database_name, "output_std.txt"), "w", encoding="utf-8") as f:
+            f.write(report)
 
     
     # Distribution plotting function
