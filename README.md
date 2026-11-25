@@ -146,7 +146,7 @@ STOCH_DTB_<suffix>/
     ├── training_data.h5                  training data, one group CLUSTER_<i> per cluster
     ├── kmeans_model.pkl, Xscaler_kmeans.pkl,
     │   kmeans_norm.dat, km_centroids.dat  k-means clustering (c_bounds.pkl for progress variable)
-    ├── dtb_statistics_report_<i>.txt     statistics of each cluster
+    ├── dtb_statistics_report_<i>.txt     statistics of the training inputs of each cluster (scaling, tails)
     ├── distrib_<species>_*.png           train/validation distributions (optional)
     └── dtb_processing.yaml, mech_detailed.yaml
 ```

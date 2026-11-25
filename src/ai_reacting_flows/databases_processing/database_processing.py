@@ -15,7 +15,7 @@ import joblib
 import pandas as pd
 import numpy as np
 from scipy.interpolate import interpn
-from scipy.stats import boxcox_normmax, skew, kurtosis
+from scipy.stats import boxcox_normmax, kurtosis
 # from scipy.interpolate import interp1d
 # from scipy.stats.kde import gaussian_kde
 import h5py
@@ -1237,78 +1237,52 @@ class LearningDatabase(object):
 
 
     def compute_statistical_analysis(self, X_train, Xscaler, i_cluster):
-
-        cols = X_train.columns
+        """Statistics of the training inputs of a cluster, printed and written to dtb_statistics_report_<i>.txt:
+        mean and std of each input in its units (T [K], transformed Y_k: ln Y_k with log_transform_X: 1), the scaling
+        of the network inputs; then, on the standardized inputs z = (x - mean) / std [-]: min, max, excess kurtosis
+        (0 for a normal distribution, large for heavy tails) and numbers of points with |z| > 5 and |z| > 10.
+        X_train: standardized training inputs, Xscaler: their scaler."""
 
         means = Xscaler.mean_
         stds = np.sqrt(Xscaler.var_)
 
-        header = (                                                                                                                                                                                                                                  
-            f"{'Species':15s}"                                                                                                                                                                                                                      
-            f"{'mean':>8s}" 
-            f"{'std':>8s}" 
-            f"{'min':>8s}"                                                                                                                                                                                                                         
-            f"{'max':>8s}"                                                                                                                                                                                                                         
-            f"{'skew':>8s}" 
-            f"{'kurt':>8s}"                                                                                                                                                                                                         
-            f"{'p01':>8s}"                                                                                                                                                                                                                          
-            f"{'p50':>8s}"                                                                                                                                                                                                                          
-            f"{'p99':>8s}"   
-            f"{'f <-5':>9s}"                                                                                                                                                                                                                         
-            f"{'f <-10':>9s}"                                                                                                                                                                                                                        
-            f"{'f <-20':>9s}"                                                                                                                                                                                                                        
-            f"{'n <-5':>9s}"                                                                                                                                                                                                                         
-            f"{'n <-10':>9s}"                                                                                                                                                                                                                        
-            f"{'n <-20':>9s}"                                                                                                                                                                                                                                                                                                                                                                                                                                            
-        ) 
-
+        header = (
+            f"{'Input':15s}"
+            f"{'mean':>10s}"
+            f"{'std':>10s}"
+            f"{'z min':>8s}"
+            f"{'z max':>8s}"
+            f"{'kurt':>8s}"
+            f"{'n |z|>5':>10s}"
+            f"{'n |z|>10':>10s}"
+        )
         separator = "-" * len(header)
 
-        lines = [header, separator]
+        lines = [
+            f"Cluster {i_cluster}: {len(X_train)} training points. mean, std: units of the inputs (T [K], transformed Y_k); "
+            "z min, z max, kurt (excess kurtosis), n: on the standardized inputs z [-]",
+            header,
+            separator,
+        ]
 
-        for name, mu, sigma, z in zip(cols, means, stds, X_train.T.to_numpy()):
+        for name, mu, sigma, z in zip(X_train.columns, means, stds, X_train.T.to_numpy()):
 
-            zmin = z.min()
-            zmax = z.max()
-
-            m = z.mean()
-            s = z.std()
-            if s>0:
-                skewn = skew(z, bias=False)
-                kurt = kurtosis(z, fisher=True, bias=False)   # normal = 0
+            # Excess kurtosis (normal distribution: 0), undefined for a constant input
+            if z.std() > 0:
+                kurt = kurtosis(z, fisher=True, bias=False)
             else:
-                skewn = np.nan
                 kurt = np.nan
 
-            p01, p50, p99 = np.percentile(z, [1, 50, 99])
-
-            frac5 = np.mean(z < -5)
-            frac10 = np.mean(z < -10)
-            frac20 = np.mean(z < -20)
-
-            n5 = np.sum(z < -5)
-            n10 = np.sum(z < -10)
-            n20 = np.sum(z < -20)
-
-            line = (                                                                                                                                                                                                                                  
-                f"{name:15s}"                                                                                                                                                                                                                       
-                f"{mu:8.3f}"                                                                                                                                                                                                                     
-                f"{sigma:8.3f}"
-                f"{zmin:8.2f}"                                                                                                                                                                                                                      
-                f"{zmax:8.2f}"                                                                                                                                                                                                                      
-                f"{skewn:8.2f}"                                                                                                                                                                                                                      
+            line = (
+                f"{name:15s}"
+                f"{mu:10.3f}"
+                f"{sigma:10.3f}"
+                f"{z.min():8.2f}"
+                f"{z.max():8.2f}"
                 f"{kurt:8.2f}"
-                f"{p01:8.2f}"                                                                                                                                                                                                                       
-                f"{p50:8.2f}"                                                                                                                                                                                                                       
-                f"{p99:8.2f}"                                                                                                                                                                                                                       
-                f"{frac5:9.2e}"                                                                                                                                                                                                                     
-                f"{frac10:9.2e}"                                                                                                                                                                                                                    
-                f"{frac20:9.2e}"                                                                                                                                                                                                                                                                                                                                                                                                                                     
-                f"{n5:9.2e}"                                                                                                                                                                                                                     
-                f"{n10:9.2e}"                                                                                                                                                                                                                    
-                f"{n20:9.2e}"
-            ) 
-
+                f"{np.sum(np.abs(z) > 5):10d}"
+                f"{np.sum(np.abs(z) > 10):10d}"
+            )
             lines.append(line)
 
         # Print to console
