@@ -230,12 +230,14 @@ class LearningDatabase(object):
             self.Y_rollout = self.Y_rollout[is_above_temp.values]
 
 
-    def skip_inactive_points(self, dt=None):
+    def skip_inactive_points(self, dt=None, scatter_vars=None):
         """
         Remove the inactive points, whose chemistry over dt [s] is negligible (criterion "log" of the skip_inactive
         of OneDCombustion, see tools/skip_inactive.py): a CFD code skipping them never calls the ANN on them.
         dt: time step [s] of a single-dt database (rollout: rollout_dt). Multi-dt database (dt_var): dt not given,
         a point is removed if inactive at its largest dt (its Y holds all its dt).
+        scatter_vars: optional [var1, var2], scatter plot of the kept and removed points in the (var1, var2) plane
+        (inactive_points_<var1>_<var2>.png in the learning database folder).
         Must be called before clustering.
         """
 
@@ -257,6 +259,23 @@ class LearningDatabase(object):
 
         if not is_active.any():
             raise ValueError("No active points remain")
+
+        # Scatter plot of the kept and removed points
+        if scatter_vars is not None:
+            var1, var2 = scatter_vars
+            if var1=="PC1" and var2=="PC2":
+                if not self.is_pca_computed:
+                    self.compute_pca()
+
+            fig, ax = plt.subplots()
+            ax.scatter(self.X.loc[is_active, var1], self.X.loc[is_active, var2], s=1, color="grey", label=f"Kept ({np.sum(is_active)})", rasterized=True)
+            ax.scatter(self.X.loc[~is_active, var1], self.X.loc[~is_active, var2], s=1, color="r", label=f"Removed ({np.sum(~is_active)})", rasterized=True, zorder=3)   # On top of the kept points
+            ax.set_xlabel(var1, fontsize=16)
+            ax.set_ylabel(var2, fontsize=16)
+            ax.legend(markerscale=5, loc="upper left")
+            fig.tight_layout()
+            fig.savefig(self.dtb_folder + "/" + self.database_name + f"/inactive_points_{var1}_{var2}.png", dpi=300)
+            plt.close(fig)
 
         # Apply mask
         self.X = self.X[is_active].reset_index(drop=True)
