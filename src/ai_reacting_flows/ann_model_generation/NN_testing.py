@@ -233,7 +233,7 @@ class NNTesting():
             Label used in the returned dictionary keys for ignition-delay
             quantities (e.g. "ignition" or "pyrolysis").
         cvode_initial_steps : int
-            Number of first steps done by CVODE instead of the ANN (cluster -1, not timed): 1 for a database without
+            Number of first steps done by CVODE instead of the ANN (cluster -2, not timed): 1 for a database without
             the initial mixtures (skip_initial_state of the 0D reactors), whose first step is not learned.
         dT_tolerance : float or None
             Tolerance [K] on the change of the CVODE temperature over a step, in the equilibrium criterion. None:
@@ -336,7 +336,7 @@ class NNTesting():
         # NEURAL NETWORK COMPUTATION
         time = 0.0
         time_ann = 0.0   # CPU time of the chemistry steps (clustering, network, CVODE if hybrid) [s]
-        clusters = []    # Cluster of the network of each step, -1 for a CVODE step (hybrid)
+        clusters = []    # Cluster of the network of each step: -1 no chemistry (inactive state), -2 CVODE step
         state = np.append(T_ann, Y_k_ann)
 
         # ANN warm-up, not timed: the first calls initialize the networks (CUDA) and the k-means.
@@ -354,7 +354,7 @@ class NNTesting():
             if i < cvode_initial_steps:
                 T_new, Y_new = self.advance_state_CVODE(T_old, Y_old, pressure, dt)
                 cvode_calls += 1
-                clusters.append(-1)
+                clusters.append(-2)
 
             else:
                 # Inactive state (skip_inactive): kept unchanged, as in a CFD code (check timed with the ANN steps)
@@ -399,9 +399,9 @@ class NNTesting():
                         ann_calls += 1
                     time_ann += perf_counter() - start
 
-                    # Cluster of the step (-1 if done by CVODE)
+                    # Cluster of the step (-2 if done by CVODE)
                     if self.hybrid_ann_cvode and self.ia_success is False:
-                        clusters.append(-1)
+                        clusters.append(-2)
                     else:
                         clusters.append(self.cluster)
 
@@ -763,7 +763,7 @@ class NNTesting():
         Yt_ann = Yt
 
         time_ann = 0.0   # CPU time of the chemistry steps (clustering, network, CVODE if hybrid) [s]
-        clusters = np.full(nb_0_reactors, -1)   # Cluster of the network of each point, -1 if not advanced by a network
+        clusters = np.full(nb_0_reactors, -1)   # Cluster of the network of each point: -1 no chemistry (below T_threshold or inactive), -2 CVODE
 
         # ANN warm-up, not timed: the first calls initialize the networks (CUDA) and the k-means
         self.attribute_cluster(np.append(Tt[0], Yt_ann[:, 0]), dt, c[0])
@@ -807,6 +807,7 @@ class NNTesting():
                         # CVODE advance
                         T_new, Y_new = self.advance_state_CVODE(Tt[i_reac], Yt_ann[:,i_reac], pressure, dt)
                         cvode_calls += 1
+                        clusters[i_reac] = -2
                     else:
                         ann_calls +=1
                         clusters[i_reac] = self.cluster
@@ -1080,7 +1081,7 @@ class NNTesting():
             summary["E_sim_by_dt"] = {float(dt): {key: float(value) for key, value in row.items()} for dt, row in by_dt.iterrows()}
 
         # Errors per cluster and dt: mean over the steps (0D) or grid points (1D) advanced by the network of the cluster
-        # (cluster -1: steps done by CVODE in hybrid mode, or 1D points below T_threshold)
+        # (cluster -1: no chemistry, 1D points below T_threshold or inactive states; -2: steps done by CVODE)
         points = pd.concat(point_errors)
         variables = self._error_names()
         points["E_sim"] = points[variables].mean(axis=1)
@@ -1184,7 +1185,7 @@ class NNTesting():
 
     def _error_points(self, case_type, result, x_window=None):
         """Variables of the simulation error (see _error_variables) of the ANN and the reference, (n, 1 + N_S),
-        and cluster of the network of each point (n), -1 if not advanced by a network.
+        and cluster of the network of each point (n): -1 no chemistry, -2 CVODE.
 
         0D: states after each time step (initial state excluded). 1D: states after one step dt from each
         grid point in x_window [m] (all points if None).
@@ -1236,6 +1237,11 @@ class NNTesting():
         if case_type.startswith("0D"):
             plots.plot_0D_case(result, folder, self.spec_to_plot, self.spec_list_ref, self.remove_N2, self.loss_weighting_eps)
 
+            # Cluster of each step, with the ANN temperature before the step (steps until equilibrium)
+            clusters = result["clusters"]
+            plots.plot_clusters(result["time_vect"][:len(clusters)], clusters, result["states_ann"][:len(clusters), 0],
+                                self.inference.nb_clusters, '$t$ $[ms]$', folder + "/clusters.png")
+
         # 1D flames: reaction rates along the flame
         else:
             grid = result["flame"].grid
@@ -1243,6 +1249,10 @@ class NNTesting():
                                          self.spec_to_plot, self.spec_list_ref, folder, x_window)
             plots.plot_log_Omega(grid, result["Omega_norm_ref"], grid, result["Omega_norm_ann"], self.loss_weighting_eps,
                                  '$x$ [m]', folder + "/log10_Omega.png", x_window)
+
+            # Cluster of each grid point, with the temperature of the flame
+            plots.plot_clusters(grid, result["clusters"], result["flame"].T, self.inference.nb_clusters, '$x$ [m]',
+                                folder + "/clusters.png", x_window)
 
 #-----------------------------------------------------------------------
 #   ANN AND CVODE ADVANCEMENT OF ONE STATE

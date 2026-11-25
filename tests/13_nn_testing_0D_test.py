@@ -10,11 +10,11 @@ Check:
   of the current state (states advanced with CVODE through the hybrid mode, so that it ignites).
 - the 0D case stops at the first step where the CVODE temperature is within T_eq_tolerance of the
   equilibrium temperature, with the same number of ANN steps.
-- the cluster of each step is recorded (-1 for CVODE steps of the hybrid mode, with the criterion on the
+- the cluster of each step is recorded (-2 for CVODE steps of the hybrid mode, with the criterion on the
   sum of mass fractions or on the element mass fractions), and the ANN can be
   continued after equilibrium (drifts of T and of the sum of Y_k).
 - with dT_tolerance, the 0D case stops later, when the CVODE temperature changes by less than dT_tolerance per step.
-- with cvode_initial_steps, the first steps are done by CVODE (cluster -1, same states as the reference) and the
+- with cvode_initial_steps, the first steps are done by CVODE (cluster -2, same states as the reference) and the
   ANN does the other ones; the ANN warm-up on the initial mixture does not apply the element correction.
 
 Independent of the other tests.
@@ -82,12 +82,12 @@ def test_nn_testing_0D(tmp_path):
 
     assert progvar.max() > 0.9
     assert clusters[1:] == [0 if c < 0.5 else 1 for c in progvar]   # First call: ANN warm-up
-    assert np.all(result["clusters"] == -1)   # All steps done by CVODE (hybrid with negative tolerance)
+    assert np.all(result["clusters"] == -2)   # All steps done by CVODE (hybrid with negative tolerance)
 
     # Same with the hybrid criterion on the element mass fractions
     test.hybrid_ann_cvode = 2
     result = test.run_0D_ignition_case(phi=0.6, T0=1200.0, pressure=pressure, dt=dt, max_simulation_time=4 * dt)
-    assert np.all(result["clusters"] == -1)
+    assert np.all(result["clusters"] == -2)
     test.hybrid_ann_cvode = 1
 
     # Stop at CVODE equilibrium (max_simulation_time not reached), same number of ANN steps
@@ -117,7 +117,7 @@ def test_nn_testing_0D(tmp_path):
 
     # First step done by CVODE (database without the initial mixtures), the other ones by the ANN
     result = test.run_0D_ignition_case(phi=0.6, T0=1200.0, pressure=pressure, dt=dt, max_simulation_time=4 * dt, cvode_initial_steps=1)
-    assert result["clusters"][0] == -1 and np.all(result["clusters"][1:] >= 0)
+    assert result["clusters"][0] == -2 and np.all(result["clusters"][1:] >= 0)
     assert np.allclose(result["states_ann"][:2], result["states_ref"][:2], rtol=1.0e-10, atol=0.0)   # Same up to round-off
     assert not np.allclose(result["states_ann"][2], result["states_ref"][2], rtol=1.0e-10, atol=0.0)
     assert result["cvode_calls"] == 1 and result["ann_calls"] == 3

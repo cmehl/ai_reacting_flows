@@ -230,6 +230,35 @@ def plot_log_Omega(x_ref, Omega_ref, x_ann, Omega_ann, eps, xlabel, file_name, x
     plt.close(fig)
 
 
+def plot_clusters(x, clusters, T, nb_clusters, xlabel, file_name, x_window=None):
+    """Cluster of the network of each step or point versus x (time [ms] of 0D reactors, position [m] of 1D flames),
+    with the temperature T [K] on a second axis. Cluster -1: no chemistry (1D points below T_threshold, inactive
+    states), -2: chemistry by CVODE (cvode_initial_steps, hybrid fallback). x_window: optional [x_min, x_max]."""
+
+    fig, ax = plt.subplots()
+    ax.plot(x, clusters, ls="none", marker="o", ms=3, color="b")
+
+    # One tick per value: CVODE, no chemistry, then the clusters
+    ax.set_yticks(range(-2, nb_clusters))
+    ax.set_yticklabels(["CVODE", "none"] + [str(i) for i in range(nb_clusters)])
+    ax.set_ylim(-2.5, nb_clusters - 0.5)
+    ax.set_ylabel("Cluster", fontsize=FONTSIZE)
+    ax.set_xlabel(xlabel, fontsize=FONTSIZE)
+
+    # Temperature, for context
+    ax_T = ax.twinx()
+    ax_T.plot(x, T, color="grey", lw=1)
+    ax_T.set_ylabel("$T$ $[K]$", fontsize=FONTSIZE, color="grey")
+    ax_T.grid(False)
+
+    if x_window is not None:
+        ax.set_xlim(x_window)
+    fig.tight_layout()
+
+    fig.savefig(file_name, dpi=500)
+    plt.close(fig)
+
+
 def plot_validation_errors(diff, i_cluster, folder, max_points_scatter=50000):
     """Scatter plot of the validation errors diff (n_points, n_outputs) of cluster i_cluster, in folder.
 
