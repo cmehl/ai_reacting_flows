@@ -996,6 +996,9 @@ class LearningDatabase(object):
 
             # Reset indexes
             X_p = X_p.reset_index(drop=True)
+
+            # Progress variable of the points of the cluster (statistics report)
+            progvar = X_p["Prog_var"].values
             Y_p = Y_p.reset_index(drop=True)
 
             # Removing useless columns
@@ -1150,7 +1153,7 @@ class LearningDatabase(object):
                 grp.create_dataset('Y_N2_val', data = Y_N2_val)
 
             print(f">> Analyze statistics of database for cluster {i_cluster}")
-            self.compute_statistical_analysis(X_train, Xscaler, i_cluster)
+            self.compute_statistical_analysis(X_train, Xscaler, i_cluster, progvar)
 
             # Saving datasets
             # print(">> Saving datasets")
@@ -1236,12 +1239,14 @@ class LearningDatabase(object):
         return X_p_flat, Y_p_flat, dt_p_flat
 
 
-    def compute_statistical_analysis(self, X_train, Xscaler, i_cluster):
+    def compute_statistical_analysis(self, X_train, Xscaler, i_cluster, progvar):
         """Statistics of the training inputs of a cluster, printed and written to dtb_statistics_report_<i>.txt:
         mean and std of each input in its units (T [K], transformed Y_k: ln Y_k with log_transform_X: 1), the scaling
         of the network inputs; then, on the standardized inputs z = (x - mean) / std [-]: min, max, excess kurtosis
         (0 for a normal distribution, large for heavy tails) and numbers of points with |z| > 5 and |z| > 10.
-        X_train: standardized training inputs, Xscaler: their scaler."""
+        Then the progress variable [-] of all the points of the cluster (before the train/validation split): min, mean,
+        max, and share [%] of the points in each tenth of [0, 1] (values outside [0, 1] counted in the end bins).
+        X_train: standardized training inputs, Xscaler: their scaler, progvar: progress variable of the cluster (n)."""
 
         means = Xscaler.mean_
         stds = np.sqrt(Xscaler.var_)
@@ -1284,6 +1289,15 @@ class LearningDatabase(object):
                 f"{np.sum(np.abs(z) > 10):10d}"
             )
             lines.append(line)
+
+        # Progress variable: range and distribution over tenths of [0, 1]
+        share, edges = np.histogram(np.clip(progvar, 0.0, 1.0), bins=10, range=(0.0, 1.0))
+        share = 100.0 * share / len(progvar)
+        lines.append("")
+        lines.append(f"Progress variable [-] ({len(progvar)} points of the cluster): "
+                     f"min {progvar.min():.3f}, mean {progvar.mean():.3f}, max {progvar.max():.3f}")
+        lines.append("Share of the points [%] per bin: " + ", ".join(
+            f"{edges[k]:.1f}-{edges[k + 1]:.1f}: {share[k]:.1f}" for k in range(10)))
 
         # Print to console
         report = "\n".join(lines)
