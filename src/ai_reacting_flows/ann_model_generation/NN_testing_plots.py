@@ -155,6 +155,54 @@ def plot_0D_case(result, folder, spec_to_plot, species_names, remove_N2, eps=Non
     fig3.savefig(folder + "/AtomCons.png", dpi=500)
 
 
+def plot_0D_failed_temperature(failed_0D, nb_clusters, message, folder):
+    """Temperature [K] versus time [ms] of a failed 0D case (NNTesting.failed_0D: temperatures of each step, cluster
+    of each ANN step and time step [ms]), CVODE and ANN until the failure, in folder/Temperature_failed.png, with the
+    error message as title. The cluster of each ANN step (at its start time) is on a second axis, in transparent grey
+    (as plot_clusters: -1 no chemistry, -2 CVODE).
+
+    The y-axis is the CVODE range with a margin of 20 % of it (at least 50 K): the diverging ANN temperatures leave
+    the frame.
+    """
+
+    T_ref = np.array(failed_0D["T_cvode"], dtype=float)
+    T_ann = np.array(failed_0D["T_ann"], dtype=float)
+
+    # Times [ms]: steps of dt from 0 (ANN beyond the CVODE end in the stability steps)
+    time_ref = failed_0D["dt"] * np.arange(len(T_ref))
+    time_ann = failed_0D["dt"] * np.arange(len(T_ann))
+
+    new_folder(folder)
+
+    fig, ax = plt.subplots(1, 1)
+    ax.plot(time_ref, T_ref, ls="--", color="k", lw=2, label="CVODE")
+    ax.plot(time_ann, T_ann, ls="-", color="b", lw=2, marker="x", label="NN")
+    ax.plot(time_ann[-1], T_ann[-1], marker="X", ms=12, color="r", ls="none", label="Last NN state")
+
+    margin = max(0.2 * (T_ref.max() - T_ref.min()), 50.0)
+    ax.set_ylim(T_ref.min() - margin, T_ref.max() + margin)
+
+    ax.set_xlabel('$t$ $[ms]$', fontsize=FONTSIZE)
+    ax.set_ylabel('$T$ $[K]$', fontsize=FONTSIZE)
+    ax.set_title(message[:120], fontsize=8)
+    ax.legend()
+
+    # Cluster of each ANN step, at the start of the step
+    clusters = failed_0D["clusters"]
+    ax_c = ax.twinx()
+    ax_c.plot(time_ann[:len(clusters)], clusters, ls="none", marker="o", ms=3, color="grey", alpha=0.4)
+    ax_c.set_yticks(range(-2, nb_clusters))
+    ax_c.set_yticklabels(["CVODE", "none"] + [str(i) for i in range(nb_clusters)])
+    ax_c.set_ylim(-2.5, nb_clusters - 0.5)
+    ax_c.set_ylabel("Cluster", fontsize=FONTSIZE, color="grey")
+    ax_c.tick_params(axis="y", colors="grey")
+    ax_c.grid(False)
+
+    fig.tight_layout()
+
+    fig.savefig(folder + "/Temperature_failed.png", dpi=500)
+
+
 def plot_1D_reaction_rates(grid, Omega_exact, Omega_ann, spec_to_plot, species_names, folder, x_window=None):
     """Reaction rates [1/s] of spec_to_plot along the 1D flame grid [m], exact (CVODE) and ANN, in folder.
 

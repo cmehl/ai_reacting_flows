@@ -95,6 +95,9 @@ class NNTesting():
 
         self.run_folder = os.getcwd()
 
+        # Trajectory of the current 0D case, for the plot of a failed case (see _run_0D_case, run_series)
+        self.failed_0D = None
+
         # MPI ranks (one process without communicator)
         self.comm = comm
         self.rank = 0
@@ -251,6 +254,11 @@ class NNTesting():
         tau_ign_CVODE = 0.0
         tau_ign_ANN = 0.0
 
+        # Temperatures [K] of each step, CVODE and ANN (stability steps included), cluster of each ANN step, cluster
+        # of the network of the last ANN step (None before the first one) and time step [ms], kept for the plot and
+        # the summary of a failed case (see run_series)
+        self.failed_0D = {"dt": dt * 1.0e3, "T_cvode": [T0], "T_ann": [T0], "clusters": [], "cluster_last": None}
+
         #-------------------- INITIALISATION---------------------------
         # Setting composition
         self.gas.TPX = T0, pressure, gas_init_compo
@@ -293,6 +301,7 @@ class NNTesting():
             time_cvode += perf_counter() - start
 
             states.append(TPY=(T_cvode, pressure, Y_cvode), t=simtime*1.0e3)
+            self.failed_0D["T_cvode"].append(T_cvode)
 
             if reactor_type=="ignition" and T_cvode > T0+200.0 and tau_ign_CVODE==0.0:
                 tau_ign_CVODE = simtime
@@ -373,6 +382,7 @@ class NNTesting():
                     start = perf_counter()
                     self.attribute_cluster(state, dt, progvar)
                     time_ann += perf_counter() - start
+                    self.failed_0D["cluster_last"] = self.cluster
 
                     # Log a compact line for each ANN advancement (index, T_old,
                     # dt, cluster, and whether dt is part of the clustering vector).
@@ -407,6 +417,8 @@ class NNTesting():
 
             # Vector with all variable (T and Yks)
             state = np.append(T_new, Y_new)
+            self.failed_0D["T_ann"].append(state[0])
+            self.failed_0D["clusters"].append(clusters[-1])
 
             # Progress variable of the new state (used for clustering at next step)
             progvar = self.compute_progvar(state, pressure, Yc_u)
@@ -442,11 +454,15 @@ class NNTesting():
                 # Inactive state (skip_inactive): kept unchanged
                 if self.skip_inactive and self.is_inactive(state[0], state[1:], pressure, dt):
                     T_new, Y_new = state[0], state[1:]
+                    self.failed_0D["clusters"].append(-1)
                 else:
                     self.attribute_cluster(state, dt, progvar)
+                    self.failed_0D["cluster_last"] = self.cluster
                     T_new, Y_new = self.advance_state_NN(state[0], state[1:], pressure, dt)
+                    self.failed_0D["clusters"].append(self.cluster)
 
                 state = np.append(T_new, Y_new)
+                self.failed_0D["T_ann"].append(state[0])
                 progvar = self.compute_progvar(state, pressure, Yc_u)
 
                 states_stability.append(state)
@@ -953,8 +969,9 @@ class NNTesting():
         whose conditions replace those of the series, see read_conditions_file, not used if null).
         Returns the summary: errors of each case, mean and standard deviation over the cases, and the
         simulation error aggregated per dt (E(dt)). A case that fails (e.g. the ANN diverges and Cantera cannot set
-        its state) is skipped: the series continues, and the number of failed cases (n_failed) and their parameters
-        and errors (failed_cases) are printed, logged (CASE_FAILED, SERIES_FAILURES) and written in the summary. The errors of each case are also written in
+        its state) is skipped: the series continues, and the number of failed cases (n_failed, for 0D also per cluster of the
+        network of their last ANN step: n_failed_per_cluster) and their parameters, errors (and cluster for 0D)
+        (failed_cases) are printed, logged (CASE_FAILED, SERIES_FAILURES) and written in the summary. The errors of each case are also written in
         simulation_errors_<case_type>.csv, and E(dt) in simulation_errors_<case_type>_by_dt.csv (plotted in
         simulation_errors_<case_type>_by_dt.png), with the mean contribution of each variable (plotted in
         simulation_errors_<case_type>_by_variable.png) and the mean speed-up. The errors per cluster and
@@ -987,6 +1004,9 @@ class NNTesting():
 
             print(f"\n>> {case_type}: {case}")
 
+            # Trajectory of the 0D case, set by _run_0D_case (None: no data of a previous case for a failure before it)
+            self.failed_0D = None
+
             # A failing case (e.g. diverging ANN) is recorded and skipped
             try:
                 result = self.run_case(case_type, case)
@@ -997,7 +1017,19 @@ class NNTesting():
                 message = f"{type(error).__name__}: {' '.join(lines)}"
                 print(f">> CASE FAILED: {message}")
                 self._log(f"CASE_FAILED {case_type} {case}: {message}")
-                failed.append((i_case, {"params": case, "error": message}))
+                failure = {"params": case, "error": message}
+
+                # 0D: cluster of the network of the last ANN step (None: failure before the first ANN step)
+                if case_type.startswith("0D"):
+                    failure["cluster"] = None if self.failed_0D is None else self.failed_0D["cluster_last"]
+
+                failed.append((i_case, failure))
+
+                # 0D: temperature until the failure, in the folder of the case followed by _FAILED
+                if series["plots"] and case_type.startswith("0D") and self.failed_0D is not None:
+                    plots.plot_0D_failed_temperature(self.failed_0D, self.inference.nb_clusters, message,
+                                                     self._case_folder(case_type, case) + "_FAILED")
+
                 plt.close("all")
                 continue
 
@@ -1038,7 +1070,8 @@ class NNTesting():
     def _series_summary(self, case_type, cases, entries, failed, point_errors):
         """Summary of a series (see run_series) from the results of its cases, in the order of the series: entries
         (parameters and errors of the cases that ran), failed (parameters and error message of the failed cases),
-        point_errors (errors of each step or grid point, one table per case). Writes the summary and the tables of
+        point_errors (errors of each step or grid point, one table per case). 0D: failed cases also counted per cluster
+        of the network of their last ANN step (n_failed_per_cluster, none: failure before the first ANN step). Writes the summary and the tables of
         errors in TESTING_<model>/ and returns the summary."""
 
         # Number of failed cases
@@ -1046,9 +1079,18 @@ class NNTesting():
         print(f"\n>> {msg}")
         self._log(msg)
 
+        # Number of failed cases, and for 0D their number per cluster of the last ANN step (none: failure before it)
+        failures = {"n_failed": len(failed)}
+        if case_type.startswith("0D") and len(failed) > 0:
+            clusters = [failure["cluster"] for failure in failed]
+            per_cluster = {cluster: clusters.count(cluster) for cluster in sorted(set(clusters) - {None})}
+            if None in clusters:
+                per_cluster["none"] = clusters.count(None)
+            failures["n_failed_per_cluster"] = per_cluster
+
         # All cases failed: summary of the failures only
         if len(entries) == 0:
-            summary = {"n_cases": 0, "n_failed": len(failed), "failed_cases": failed}
+            summary = {"n_cases": 0, **failures, "failed_cases": failed}
             with open(os.path.join(self.output_folder, f"summary_{case_type}.yaml"), "w") as file:
                 yaml.dump(summary, file, default_flow_style=False, sort_keys=False)
             return summary
@@ -1059,7 +1101,7 @@ class NNTesting():
             values = [entry["errors"][key] for entry in entries if entry["errors"][key] is not None]
             mean[key], std[key] = metrics.mean_std(values)
 
-        summary = {"n_cases": len(entries), "n_failed": len(failed), "mean": mean, "std": std, "cases": entries,
+        summary = {"n_cases": len(entries), **failures, "mean": mean, "std": std, "cases": entries,
                    "failed_cases": failed}
 
         # Table of the errors of each simulation (one row per case: parameters and errors)
@@ -1232,8 +1274,8 @@ class NNTesting():
         return ["E_T"] + [f"E_{spec}" for spec in self.inference.spec_list_ANN]
 
 
-    def plot_case(self, case_type, case, result, x_window=None):
-        """Plots of one case in TESTING_<model>/<case_type>_<parameters>/."""
+    def _case_folder(self, case_type, case):
+        """Folder of the plots of one case: TESTING_<model>/<case_type>_<parameters>/."""
 
         # Folder named after the parameters of the case, floats with 4 significant digits (except the pressure).
         # Numerical parameters are not in the name: they are in nn_testing.yaml and summary_<case_type>.yaml
@@ -1247,7 +1289,13 @@ class NNTesting():
                 names.append(f"{key}#{value:.4g}")
             else:
                 names.append(f"{key}#{value}")
-        folder = os.path.join(self.output_folder, case_type + "_" + "_".join(names))
+
+        return os.path.join(self.output_folder, case_type + "_" + "_".join(names))
+
+    def plot_case(self, case_type, case, result, x_window=None):
+        """Plots of one case in TESTING_<model>/<case_type>_<parameters>/."""
+
+        folder = self._case_folder(case_type, case)
 
         # 0D reactors: time evolutions
         if case_type.startswith("0D"):
