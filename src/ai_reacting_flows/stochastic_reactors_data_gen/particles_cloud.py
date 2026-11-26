@@ -21,6 +21,7 @@ from ai_reacting_flows.stochastic_reactors_data_gen.pre_processing import Inlet
 import ai_reacting_flows.stochastic_reactors_data_gen.emst_pope as emst_pope
 import ai_reacting_flows.tools.utilities as utils
 from ai_reacting_flows.tools.utilities import PRINT
+from ai_reacting_flows.tools.hfrd import hfrd_bounds, perturb_state
 from ai_reacting_flows.ann_model_generation.NN_inference import NNInference, use_cvode
 
 matplotlib.use('Agg')
@@ -1138,6 +1139,103 @@ class ParticlesCloud(object):
         dset = grp.create_dataset(which_state,data=arr)
         dset.attrs["cols"] = cols
         f.close()
+
+    def augment_data(self):
+        """Add one randomly perturbed state per state X of the database, at the end of the simulation (HFRD
+        method, see tools/hfrd.py): the reference states of the perturbation are all the states X of the database.
+
+        The perturbed state is advanced with Cantera (constant pressure reactor) over the time step dt [s] of its
+        iteration, frozen if its temperature is below T_threshold [K] (as in Particle.react). The X, Y pairs are
+        appended to X and Y of the iteration (all_states, used for post-processing, is unchanged).
+
+        Columns of X: heat release rate [W/m3] recomputed, progress variable [-] of the original state.
+        Columns of Y: progress variable and heat release rate set to -1 (not used, as in the canonical flames).
+        """
+
+        # States X of all iterations, read by rank 0 and given to all processors
+        if self.rank == 0:
+            with h5py.File(f"{self.results_folder}/{self.solution_file}", "r") as f:
+                X_list = [f[f"ITERATION_{i:05d}/X"][()] for i in range(self.iteration)]
+        else:
+            X_list = None
+        X_list = self.comm.bcast(X_list, root=0)
+
+        X = np.concatenate(X_list, axis=0)
+        iteration_of_state = np.repeat(np.arange(self.iteration), [len(x) for x in X_list])
+
+        # Ranges of the states of the database
+        i_N2 = self.gas.species_index("N2")
+        bounds = hfrd_bounds(X[:, 0], X[:, 2:2 + self.nb_species], self.A_atomic, i_N2)
+
+        # States dealt in turn to the processors; one random generator per state: results independent of the
+        # number of processors
+        local_X_new = []
+        local_Y_new = []
+        local_idx_new = []
+        for k in range(self.rank, X.shape[0], self.size):
+
+            rng = np.random.default_rng(42 + k)
+
+            T = X[k, 0]
+            P = X[k, 1]
+            Y = X[k, 2:2 + self.nb_species]
+
+            perturbed = perturb_state(T, Y, bounds, self.A_atomic, i_N2, rng)
+            if perturbed is None:
+                continue
+            T_new, Y_new = perturbed
+
+            # Heat release rate [W/m3] of the perturbed state, as in Particle.compute_heat_release_rate
+            self.gas.TPY = T_new, P, Y_new
+            h_species = self.gas.standard_enthalpies_RT * ct.gas_constant * T_new
+            hrr_new = -np.dot(self.gas.net_production_rates, h_species)
+
+            X_new = np.concatenate([[T_new, P], Y_new, [X[k, 2 + self.nb_species], hrr_new]])
+
+            # Chemistry over the time step of the iteration, frozen below T_threshold
+            if T_new > self.T_threshold:
+                sim = ct.ReactorNet([ct.IdealGasConstPressureReactor(self.gas)])
+                sim.advance(self.dt[iteration_of_state[k]])
+
+            Y_after = np.concatenate([[self.gas.T, self.gas.P], self.gas.Y, [-1.0, -1.0]])
+
+            local_X_new.append(X_new)
+            local_Y_new.append(Y_after)
+            local_idx_new.append(k)
+
+        # Perturbed states gathered on rank 0
+        all_X_new = self.comm.gather(local_X_new, root=0)
+        all_Y_new = self.comm.gather(local_Y_new, root=0)
+        all_idx_new = self.comm.gather(local_idx_new, root=0)
+
+        if self.rank != 0:
+            return
+
+        X_new = np.array([x for sub in all_X_new for x in sub])
+        Y_new = np.array([y for sub in all_Y_new for y in sub])
+        idx_new = np.array([i for sub in all_idx_new for i in sub], dtype=int)
+
+        # Order of the original states
+        order = np.argsort(idx_new)
+        X_new, Y_new, idx_new = X_new[order], Y_new[order], idx_new[order]
+
+        PRINT(f"HFRD augmentation: {len(idx_new)} perturbed states added to the {X.shape[0]} states of the database")
+
+        # Perturbed states appended to X and Y of their iteration
+        with h5py.File(f"{self.results_folder}/{self.solution_file}", "a") as f:
+            for i in range(self.iteration):
+
+                in_iteration = iteration_of_state[idx_new] == i
+                if not in_iteration.any():
+                    continue
+
+                grp = f[f"ITERATION_{i:05d}"]
+                for name, arr_new in [("X", X_new[in_iteration]), ("Y", Y_new[in_iteration])]:
+                    arr = np.concatenate([grp[name][()], arr_new], axis=0)
+                    cols = grp[name].attrs["cols"]
+                    del grp[name]
+                    dset = grp.create_dataset(name, data=arr)
+                    dset.attrs["cols"] = cols
 
 # =============================================================================
 #   PARTICLES STATISTICS COMPUTATION 

@@ -1,8 +1,8 @@
 """
 Test 19: stochastic reactors and multi-dt generation with 2 MPI ranks.
 
-Runs a small H2 stochastic reactors simulation (CURL_MODIFIED, some particles activated later)
-on 1 rank (DummyComm), then with mpiexec on 2 ranks reading the mixing pairs of the first run.
+Runs a small H2 stochastic reactors simulation (CURL_MODIFIED, some particles activated later,
+HFRD data augmentation) on 1 rank (DummyComm), then with mpiexec on 2 ranks reading the mixing pairs of the first run.
 Then re-integrates the 2-rank database with 3 random time steps (GenerateVariable_dt) on 2 ranks.
 Check:
 - solutions.h5 is the same with 1 and 2 ranks (all_states, X and Y at every iteration), up to the
@@ -50,6 +50,7 @@ data_gen_parameters["pv_species"] = ["H2O"]
 data_gen_parameters["fuel"] = ["H2"]
 data_gen_parameters["calc_mean_traj"] = False
 data_gen_parameters["ML_inference_flag"] = False
+data_gen_parameters["augment_dataset"] = True
 
 # Multi-dt parameters
 data_gen_parameters["time_step_type"] = "random"

@@ -84,7 +84,7 @@ STOCH_DTB_<suffix>/                 (FLAMELETS_DTB_<suffix>/ for canonical flame
 In `solutions.h5`, each group `ITERATION_<n>` contains:
 
 + `all_states`: state of all active particles: `Temperature` [K], `Pressure` [Pa], species mass fractions $Y_k$, `Mix_frac`, `Equiv_ratio`, `Prog_var`, `HRR` [W/m³], `Time` [s], `Particle_number`, `Inlet_number`, atomic mass fractions `Y_C`, `Y_H`, `Y_O`, `Y_N`, `Mass`, `Age` [s] (time since the particle entered the reactor, reset to 0 at renewal).
-+ `X` and `Y` (if `build_ml_dtb: true`): states before and after the chemistry step $dt$ (`Temperature`, `Pressure`, $Y_k$, `Prog_var`, `HRR`). These are the ML input/output pairs.
++ `X` and `Y` (if `build_ml_dtb: true`): states before and after the chemistry step $dt$ (`Temperature`, `Pressure`, $Y_k$, `Prog_var`, `HRR`). These are the ML input/output pairs. With `augment_dataset: true`, randomly perturbed states (HFRD) are appended after the simulated pairs (`Prog_var` and `HRR` of their `Y` set to -1).
 
 Column names are stored in the `cols` attribute of each dataset. For canonical flames, the file has a single group `ITERATION_00000` with `X` and `Y`, and the simulated cases are listed in `sim_train_*.csv` / `sim_test_*.csv`. The multi-dt file has one group per MPI rank with `X`, `Y` (one set of outputs per $dt$) and `DT` (the $dt$ values [s]).
 
@@ -237,6 +237,7 @@ Examples of all files can be found in `scripts/<CASE>/`. Units are SI.
 | `results_folder_suffix` | Results are written in `STOCH_DTB_<suffix>/` |
 | `dtb_file` | Name of the output h5 file (e.g. `solutions.h5`) |
 | `build_ml_dtb` | If `true`, store `X`/`Y` pairs for ML |
+| `augment_dataset` | If `true` (optional, default `false`, needs `build_ml_dtb: true`), at the end of the simulation, add one randomly perturbed state per state `X` of the database (HFRD method of Ding *et al.*, `tools/hfrd.py`, the same as for the [canonical flames](#dtb_params_flmtsyaml-canonical-flames)), with the ranges of all the states of the database. The perturbed state is advanced with Cantera over the $dt$ of its iteration (frozen below `T_threshold`), and the pair is appended to `X` and `Y` of the iteration. Its heat release rate is recomputed, its progress variable is the one of its original state |
 | `time_step` | Constant $dt$ [s], or dict `{t_start: dt}` to change $dt$ over time (first key must be 0). Write `1.0e-5`, not `1e-5` (read as a string by YAML) |
 | `time_max` | End time [s] |
 | `automatic_termination` | Stop when temperature variance is low (optional, default `true`; set to `false` with `renewal_start_time`, as the run could stop before renewal starts) |
@@ -285,7 +286,7 @@ Multi-dt generation (`generate_multi_dt.py`) reads the same file, with the addit
 | `zerod_pyro_params` | As `zerod_params`, without `phi_bounds`: the initial mixture is the pure fuel, only `T0_bounds` [K] is sampled. Test conditions in `sim_test_0D_pyro.csv` |
 | `oned_prem_params` | `phi_bounds`, `T0_bounds` [K], `n_samples` |
 | `oned_diff_params` | `strain_bounds` [1/s], `T0_bounds` [K] (air inlet), `n_samples`, `width` [m], `T_fuel` [K] (fuel inlet, optional, default 300) |
-| `augment_dataset` | If `true`, add randomly perturbed states (temperature and $Y_k$, with one random number per species), following Ding *et al.* The temperature and the mass fraction of N2 change by at most 1/8 of their range in the flamelet states of the same reactor type; the other mass fractions are changed by a power law, $Y_k^{1+d/10}$ with $d$ random in $[-1, 1]$, and normalised (the mechanism must include N2). A perturbed state is kept if its temperature is above 300 K and if its mass fractions of elements (C, H, O, N) are in the range of the flamelet states of the same reactor type (with a 1 % margin). Its heat release rate is recomputed, its progress variable is the one of its flamelet state |
+| `augment_dataset` | If `true`, add randomly perturbed states (temperature and $Y_k$, with one random number per species), following Ding *et al.* (`tools/hfrd.py`, shared with the stochastic reactors). The temperature and the mass fraction of N2 change by at most 1/8 of their range in the flamelet states of the same reactor type; the other mass fractions are changed by a power law, $Y_k^{1+d/10}$ with $d$ random in $[-1, 1]$, and normalised (the mechanism must include N2). A perturbed state is kept if its temperature is above 300 K and if its mass fractions of elements (C, H, O, N) are in the range of the flamelet states of the same reactor type (with a 1 % margin). Its heat release rate is recomputed, its progress variable is the one of its flamelet state |
 | `scatter_plot_variables` | `[x, y]` columns of the database plotted in `scatter_plot_<x>_<y>.png` (optional, default `[Temperature, H2O]`) |
 
 Cases are sampled in the given bounds with Latin hypercube sampling.

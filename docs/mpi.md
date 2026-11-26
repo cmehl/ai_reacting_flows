@@ -47,6 +47,8 @@ _update_vars:     each rank its share, _gather_states  identical
 statistics and termination check, on every rank
 ```
 
+**Augmentation** (`augment_dataset`, once, after the time marching): rank 0 reads `X` of all iterations and sends it to all ranks (`comm.bcast`); the states are dealt in turn, each with its own random generator (seed `42 +` index of the state), so that the result does not depend on the number of ranks; each rank perturbs and integrates its states, gathered on rank 0 (`comm.gather`), which appends them to `X` and `Y` of their iteration.
+
 The statistics and the termination check (`calc_statistics`, `check_termination`: standard deviation of the temperature) are computed by every rank on its own particles. As the particles of all ranks are identical, all ranks take the same decision and stop together; ranks with different particles could stop at different iterations, and the others would wait forever in the next exchange.
 
 ## Routines (`particles_cloud.py`, section *MPI exchanges of particle states*)
@@ -157,5 +159,5 @@ The cases are not balanced: an ignition case near equilibrium for a long time ta
 # Tests
 
 + `DummyComm.py` replaces MPI in the tests run on a single process (methods of a communicator with one rank).
-+ Test 19 runs the stochastic reactors (`CURL_MODIFIED`, with particles activated later) on 1 rank, then on 2 ranks with `mpiexec`, and compares the two `solutions.h5`. The tolerance (relative $10^{-5}$) covers the differences due to the Cantera gas object of each rank, whose history differs. The heat release rate is compared with an absolute tolerance ($10^{-5}$ times its largest value): for nearly unreacted particles, it is a sum of terms that cancel, without relative accuracy. It also runs the multi-dt generation on 2 ranks. Skipped without `mpiexec`.
++ Test 19 runs the stochastic reactors (`CURL_MODIFIED`, with particles activated later, HFRD augmentation) on 1 rank, then on 2 ranks with `mpiexec`, and compares the two `solutions.h5`. The tolerance (relative $10^{-5}$) covers the differences due to the Cantera gas object of each rank, whose history differs. The heat release rate is compared with an absolute tolerance ($10^{-5}$ times its largest value): for nearly unreacted particles, it is a sum of terms that cancel, without relative accuracy. It also runs the multi-dt generation on 2 ranks. Skipped without `mpiexec`.
 + Test 41 runs a series of 3 ignition cases on 1 process and on 2 ranks with `mpiexec`, and checks that the summary has the cases in the order of the series with the same errors (CPU times excepted), and one log file per rank. Skipped without `mpiexec`.
