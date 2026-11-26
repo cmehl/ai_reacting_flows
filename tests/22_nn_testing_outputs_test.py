@@ -249,7 +249,9 @@ def test_nn_testing_failed_cases(tmp_path):
     summary = test.run_testing()["0D_ignition"]
     assert summary["n_cases"] == 2 and summary["n_failed"] == 1
     assert [case["params"]["phi"] for case in summary["cases"]] == [0.5, 0.7]
-    assert summary["failed_cases"] == [{"params": {**summary["failed_cases"][0]["params"], "phi": 0.6}, "error": "RuntimeError: diverged"}]
+    assert summary["failed_cases"] == [{"params": {**summary["failed_cases"][0]["params"], "phi": 0.6}, "error": "RuntimeError: diverged",
+                                        "cluster": None}]
+    assert summary["n_failed_per_cluster"] == {"none": 1}   # Failure before the first ANN step
 
     log = "".join(open(name).read() for name in glob.glob("TESTING_MODEL_TEST/nn_testing_*.log"))
     assert "CASE_FAILED 0D_ignition" in log and "SERIES_FAILURES 0D_ignition: 1 failed cases of 3" in log
@@ -259,4 +261,5 @@ def test_nn_testing_failed_cases(tmp_path):
         raise RuntimeError("diverged")
     test.run_0D_ignition_case = always_failing
     summary = test.run_testing()["0D_ignition"]
-    assert summary == {"n_cases": 0, "n_failed": 3, "failed_cases": summary["failed_cases"]} and len(summary["failed_cases"]) == 3
+    assert summary == {"n_cases": 0, "n_failed": 3, "n_failed_per_cluster": {"none": 3}, "failed_cases": summary["failed_cases"]}
+    assert len(summary["failed_cases"]) == 3
