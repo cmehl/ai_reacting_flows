@@ -46,7 +46,7 @@ Each step copies its input YAML into its output folder to document the run.
 - `tools/`: `utilities.py` (phi <-> Y_k, element/atomic matrices from Cantera, adiabatic flame, 0D reactor, `PRINT`),
   `transforms.py` (log/Box-Cox transforms, scaling, network output to Y_k, k-means features: shared by
   `LearningDatabase`, `NN_manager` and `NNTesting`), `element_projection.py` (element correction `yk_renormalization: 3`,
-  numpy and torch: shared by `NNInference` and `NN_manager`), `skip_inactive.py` (inactive states, criterion `log` of OneDCombustion: shared by `LearningDatabase` and `NNTesting`), `loss_weighting.py` (increment weights of the training loss, one per point or per point and species; work in progress), `pca_tools.py`.
+  numpy and torch: shared by `NNInference` and `NN_manager`), `skip_inactive.py` (inactive states, criterion `log` of OneDCombustion: shared by `LearningDatabase` and `NNTesting`), `loss_weighting.py` (increment weights of the training loss, one per point or per point and species; work in progress), `hfrd.py` (HFRD data augmentation, `augment_dataset`: shared by `DatabaseFlamelets` and `ParticlesCloud`), `pca_tools.py`.
 
 ## Other folders
 

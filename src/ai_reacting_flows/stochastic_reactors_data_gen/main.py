@@ -37,6 +37,10 @@ def generate_stochastic_database(comm : 'MPI.Comm'):
     if data_gen_parameters["mixing_model"] not in MIXING_MODELS:
         raise ValueError(f"mixing_model must be one of {MIXING_MODELS}, got {data_gen_parameters['mixing_model']}")
 
+    # Data augmentation of the X, Y pairs of the database
+    if data_gen_parameters.get("augment_dataset", False) and not data_gen_parameters["build_ml_dtb"]:
+        raise ValueError("augment_dataset requires build_ml_dtb: true")
+
 
     #==========================================================================
     # INITIALIZING RUN
@@ -75,6 +79,12 @@ def generate_stochastic_database(comm : 'MPI.Comm'):
         # Advancing particles state by one dt
         dt = particle_cloud.dt[particle_cloud.iteration]    # to account for possible multi-dt
         particle_cloud.advance_time(dt)
+
+    # Augment dataset with HFRD method (perturbed states of the X, Y pairs of the database)
+    if data_gen_parameters.get("augment_dataset", False):
+        if rank==0:
+            PRINT(" >>> Data augmentation")
+        particle_cloud.augment_data()
 
     # End of simulation operations
     if rank==0:

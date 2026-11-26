@@ -17,6 +17,7 @@ inlets:
 results_folder_suffix: H2_POF_2023
 dtb_file: solutions.h5
 build_ml_dtb: true
+augment_dataset: false   # HFRD perturbed states added at the end of the simulation (see README)
 time_step: 5.0e-07
 time_max: 0.004
 mixing_model: CURL_MODIFIED
